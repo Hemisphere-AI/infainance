@@ -1,0 +1,60 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gray-50 font-sans;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-primary-600 hover:bg-primary-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200;
+  }
+  
+  .btn-secondary {
+    @apply bg-gray-200 hover:bg-gray-300 text-gray-800 font-medium py-2 px-4 rounded-lg transition-colors duration-200;
+  }
+}
+
+/* Custom styles for react-spreadsheet */
+.react-spreadsheet {
+  @apply border border-gray-300 rounded-lg overflow-hidden;
+}
+
+.react-spreadsheet .react-spreadsheet-cell {
+  @apply border-r border-b border-gray-200;
+}
+
+.react-spreadsheet .react-spreadsheet-cell:last-child {
+  @apply border-r-0;
+}
+
+.react-spreadsheet .react-spreadsheet-row:last-child .react-spreadsheet-cell {
+  @apply border-b-0;
+}
+
+.react-spreadsheet .react-spreadsheet-cell.selected {
+  @apply bg-blue-100 border-blue-400;
+}
+
+.react-spreadsheet .react-spreadsheet-cell.editing {
+  @apply bg-white border-blue-500 shadow-sm;
+}
+
+.react-spreadsheet .react-spreadsheet-cell input {
+  @apply w-full h-full border-0 outline-none bg-transparent text-sm;
+}
+
+.react-spreadsheet .react-spreadsheet-column-label {
+  @apply bg-gray-100 border-r border-b border-gray-300 text-xs font-medium text-gray-600 text-center;
+}
+
+.react-spreadsheet .react-spreadsheet-row-label {
+  @apply bg-gray-100 border-r border-b border-gray-300 text-xs font-medium text-gray-600 text-center;
+}
+
+.react-spreadsheet .react-spreadsheet-corner {
+  @apply bg-gray-200 border-r border-b border-gray-300;
+}
