@@ -18,13 +18,15 @@
   }
 }
 
-/* Custom styles for react-spreadsheet */
+/* Custom styles for React Spreadsheet */
 .react-spreadsheet {
   @apply border border-gray-300 rounded-lg overflow-hidden;
 }
 
 .react-spreadsheet .react-spreadsheet-cell {
   @apply border-r border-b border-gray-200;
+  min-width: 96px;
+  height: 32px;
 }
 
 .react-spreadsheet .react-spreadsheet-cell:last-child {
@@ -43,18 +45,173 @@
   @apply bg-white border-blue-500 shadow-sm;
 }
 
+.react-spreadsheet .react-spreadsheet-cell.formula-cell {
+  @apply bg-green-50;
+}
+
 .react-spreadsheet .react-spreadsheet-cell input {
-  @apply w-full h-full border-0 outline-none bg-transparent text-sm;
+  @apply w-full h-full border-0 outline-none bg-transparent text-xs px-1;
+  font-family: inherit;
 }
 
 .react-spreadsheet .react-spreadsheet-column-label {
   @apply bg-gray-100 border-r border-b border-gray-300 text-xs font-medium text-gray-600 text-center;
+  min-width: 96px;
+  height: 24px;
 }
 
 .react-spreadsheet .react-spreadsheet-row-label {
   @apply bg-gray-100 border-r border-b border-gray-300 text-xs font-medium text-gray-600 text-center;
+  width: 48px;
+  height: 32px;
 }
 
 .react-spreadsheet .react-spreadsheet-corner {
   @apply bg-gray-200 border-r border-b border-gray-300;
+  width: 48px;
+  height: 24px;
+}
+
+/* Custom styles for Excel-like grid */
+.excel-grid {
+  @apply border-collapse;
+  table-layout: fixed;
+  position: relative;
+  width: 100%;
+}
+
+/* Ensure the table container allows sticky positioning */
+.excel-grid-container {
+  position: relative;
+  overflow: auto;
+}
+
+/* Additional sticky positioning support */
+.excel-grid {
+  border-spacing: 0;
+}
+
+.excel-grid thead tr {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.excel-grid th,
+.excel-grid td {
+  @apply border border-gray-300;
+  width: 120px;
+  min-width: 60px;
+  height: 32px;
+  padding: 0;
+  margin: 0;
+  vertical-align: middle;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.excel-grid thead {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: #f3f4f6;
+  display: table-header-group;
+}
+
+.excel-grid th {
+  @apply bg-gray-100 text-center font-medium text-gray-600;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  user-select: none;
+  background: #f3f4f6 !important;
+  display: table-cell;
+}
+
+.excel-grid td {
+  @apply text-xs;
+  position: relative;
+}
+
+.excel-grid td:hover {
+  @apply bg-gray-50;
+}
+
+.excel-grid td.selected {
+  @apply bg-blue-100 border-blue-400;
+}
+
+.excel-grid td.formula-highlight {
+  @apply bg-green-50 !important;
+  background-color: #dcfce7 !important;
+}
+
+.excel-grid td.formula-show {
+  @apply bg-blue-50 !important;
+  background-color: #dbeafe !important;
+}
+
+.excel-grid td.referenced {
+  border: 3px solid;
+  /* Border color will be set inline */
+}
+
+.excel-grid input {
+  @apply w-full h-full border-0 outline-none bg-transparent text-xs px-1;
+  font-family: inherit;
+}
+
+.excel-grid .cell-content {
+  @apply px-1 py-1 h-full flex items-center;
+  min-height: 32px;
+}
+
+.excel-grid .formula-indicator {
+  @apply ml-1 text-green-600 text-xs;
+  cursor: help;
+}
+
+/* Column resize handle */
+.excel-grid th {
+  position: relative;
+}
+
+.excel-grid th::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: -2px;
+  width: 4px;
+  height: 100%;
+  background: transparent;
+  cursor: col-resize;
+  z-index: 1;
+}
+
+.excel-grid th:hover::after {
+  background: #3b82f6;
+  opacity: 0.7;
+}
+
+.excel-grid th:not(:first-child)::after {
+  display: block;
+}
+
+/* Row number column */
+.excel-grid th:first-child,
+.excel-grid td:first-child {
+  width: 60px;
+  min-width: 60px;
+  max-width: 60px;
+  @apply bg-gray-50 text-center;
+  position: sticky;
+  left: 0;
+  z-index: 5;
+}
+
+.excel-grid th:first-child {
+  z-index: 15; /* Higher than other headers */
+  background: #f9fafb !important; /* Ensure background is solid */
 }

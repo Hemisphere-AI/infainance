@@ -66,16 +66,17 @@ npm run dev
 - **Vite** - Build tool and development server
 - **Tailwind CSS** - Utility-first CSS framework
 - **XLSX** - Excel file parsing library
-- **React Spreadsheet** - Advanced spreadsheet component with formula support
+- **React Spreadsheet** - Clean and reliable spreadsheet component with formula support
 - **Lucide React** - Beautiful icons
 
 ## Project Structure
 
 ```
 src/
-├── App.jsx          # Main application component
-├── main.jsx         # Application entry point
-└── index.css        # Global styles and Tailwind imports
+├── App.jsx                    # Main application component
+├── UniverSpreadsheet.jsx      # React Spreadsheet component wrapper
+├── main.jsx                   # Application entry point
+└── index.css                  # Global styles and Tailwind imports
 ```
 
 ## Development

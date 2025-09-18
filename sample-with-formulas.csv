@@ -1,7 +1,0 @@
-Name,Age,Salary,Bonus,Total,Formula Example
-John Doe,28,75000,5000,=C2+D2,=A2&" is "&B2&" years old"
-Jane Smith,32,65000,3000,=C3+D3,=A3&" earns $"&C3
-Mike Johnson,45,85000,7000,=C4+D4,=A4&" has "&(2024-B4)&" years experience"
-Sarah Wilson,29,60000,4000,=C5+D5,=A5&" total compensation: $"&E5
-David Brown,35,70000,6000,=C6+D6,=A6&" bonus percentage: "&ROUND((D6/C6)*100,1)&"%"
-
