@@ -215,3 +215,22 @@
   z-index: 15; /* Higher than other headers */
   background: #f9fafb !important; /* Ensure background is solid */
 }
+
+/* Layout constraints to prevent overflow */
+.layout-container {
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+.chat-container {
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+/* Responsive layout adjustments */
+@media (max-width: 1024px) {
+  .chat-container {
+    width: 100% !important;
+    max-width: 100%;
+  }
+}

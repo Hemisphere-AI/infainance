@@ -1,7 +1,10 @@
-import React, { useState, useCallback, useEffect } from 'react'
+import React, { useState, useCallback, useEffect, useRef } from 'react'
 import { Upload, FileSpreadsheet, X, Download, Plus, Minus, Calendar } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import ReactSpreadsheet from './UniverSpreadsheet'
+import ChatInterface from './components/ChatInterface'
+import TestLLM from './components/TestLLM'
+import { LLMService } from './services/llmService'
 
 function App() {
   const [excelData, setExcelData] = useState(null)
@@ -11,6 +14,8 @@ function App() {
   const [spreadsheetData, setSpreadsheetData] = useState([])
   const [formulaDisplayMode, setFormulaDisplayMode] = useState(0) // 0: normal, 1: highlight formulas, 2: show all formulas
   const [selectedCells, setSelectedCells] = useState([]) // Array of selected cell coordinates
+  const [isChatLoading, setIsChatLoading] = useState(false)
+  const llmServiceRef = useRef(null)
 
   const handleFile = useCallback((file) => {
     setError('')
@@ -155,6 +160,37 @@ function App() {
   const handleSpreadsheetChange = useCallback((data) => {
     console.log('Spreadsheet data changed:', data)
     setSpreadsheetData(data)
+    
+    // Update LLM service with new data
+    if (llmServiceRef.current) {
+      llmServiceRef.current.updateSpreadsheetData(data)
+    }
+  }, [])
+
+  // Initialize LLM service when spreadsheet data is available
+  const hasSpreadsheetData = spreadsheetData.length > 0;
+  useEffect(() => {
+    if (hasSpreadsheetData) {
+      llmServiceRef.current = new LLMService(spreadsheetData, setSpreadsheetData)
+    }
+  }, [hasSpreadsheetData, spreadsheetData])
+
+  // Handle chat messages
+  const handleChatMessage = useCallback(async (message) => {
+    if (!llmServiceRef.current) {
+      return "Please upload a spreadsheet first to start chatting with the AI assistant."
+    }
+
+    setIsChatLoading(true)
+    try {
+      const response = await llmServiceRef.current.chat(message)
+      return response
+    } catch (error) {
+      console.error('Chat error:', error)
+      return `Error: ${error.message}. Please check your OpenAI API key in the .env file.`
+    } finally {
+      setIsChatLoading(false)
+    }
   }, [])
 
 
@@ -375,8 +411,10 @@ function App() {
           )}
         </div>
       ) : (
-        // Spreadsheet state - full layout
-        <div className="flex-1 flex flex-col px-4 py-4 min-h-0">
+        // Spreadsheet state - full layout with chat
+        <div className="flex-1 flex flex-col lg:flex-row px-4 py-4 min-h-0 max-w-full overflow-hidden layout-container">
+          {/* Main content area */}
+          <div className="flex-1 flex flex-col min-h-0 lg:mr-4 mb-4 lg:mb-0 min-w-0">
           {/* Header */}
           <div className="text-center mb-8">
             <h1 className="text-4xl font-bold text-gray-800 mb-2">
@@ -388,7 +426,7 @@ function App() {
           </div>
 
           {/* Excel Preview */}
-          <div className="flex-1 flex flex-col min-h-0">
+          <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
             {/* File Info and Actions */}
             <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
               <div className="flex items-center justify-between">
@@ -427,7 +465,7 @@ function App() {
             </div>
 
             {/* Spreadsheet Component */}
-            <div className="flex-1 bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden flex flex-col min-h-0">
+            <div className="flex-1 bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden flex flex-col min-h-0 max-w-full">
               <div className="p-4 border-b border-gray-200 bg-gray-50 flex-shrink-0">
                 <div className="flex items-center justify-between">
                   <h4 className="text-sm font-medium text-gray-700">
@@ -539,6 +577,16 @@ function App() {
               </div>
             )}
 
+          </div>
+          </div>
+          
+          {/* Chat Interface */}
+          <div className="w-full lg:w-80 xl:w-96 flex-shrink-0 flex flex-col space-y-4 max-h-full overflow-hidden chat-container">
+            <ChatInterface 
+              onSendMessage={handleChatMessage}
+              isLoading={isChatLoading}
+            />
+            <TestLLM />
           </div>
         </div>
       )}
