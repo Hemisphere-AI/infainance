@@ -1,9 +1,8 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react'
-import { Upload, FileSpreadsheet, X, Download, Plus, Minus, Calendar } from 'lucide-react'
+import { Upload, FileSpreadsheet, X, Download, Plus, Minus, Calendar, ArrowLeft, Star, Calculator } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import ReactSpreadsheet from './UniverSpreadsheet'
 import ChatInterface from './components/ChatInterface'
-import TestLLM from './components/TestLLM'
 import { LLMService } from './services/llmService'
 
 function App() {
@@ -15,6 +14,7 @@ function App() {
   const [formulaDisplayMode, setFormulaDisplayMode] = useState(0) // 0: normal, 1: highlight formulas, 2: show all formulas
   const [selectedCells, setSelectedCells] = useState([]) // Array of selected cell coordinates
   const [isChatLoading, setIsChatLoading] = useState(false)
+  const toolCallHandlerRef = useRef(null)
   const llmServiceRef = useRef(null)
 
   const handleFile = useCallback((file) => {
@@ -171,7 +171,7 @@ function App() {
   const hasSpreadsheetData = spreadsheetData.length > 0;
   useEffect(() => {
     if (hasSpreadsheetData) {
-      llmServiceRef.current = new LLMService(spreadsheetData, setSpreadsheetData)
+      llmServiceRef.current = new LLMService(spreadsheetData, setSpreadsheetData, toolCallHandlerRef.current)
     }
   }, [hasSpreadsheetData, spreadsheetData])
 
@@ -190,6 +190,13 @@ function App() {
       return `Error: ${error.message}. Please check your OpenAI API key in the .env file.`
     } finally {
       setIsChatLoading(false)
+    }
+  }, [])
+
+  // Handle clearing conversation history
+  const handleClearHistory = useCallback(() => {
+    if (llmServiceRef.current) {
+      llmServiceRef.current.clearHistory()
     }
   }, [])
 
@@ -349,14 +356,35 @@ function App() {
 
   return (
     <div className="h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex flex-col overflow-hidden">
+      {/* Header */}
+      <div className="bg-white border-b border-gray-200 px-6 py-4 flex-shrink-0">
+        <div className="flex items-center space-x-3">
+          <div className="w-8 h-8 bg-gradient-to-br from-yellow-400 to-orange-500 rounded-full flex items-center justify-center">
+            <div className="relative w-5 h-5">
+              {/* 4-point star with central square and triangular points */}
+              {/* Central square */}
+              <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-2 h-2 bg-white"></div>
+              {/* Top point */}
+              <div className="absolute top-0 left-1/2 transform -translate-x-1/2 w-0 h-0 border-l-[3px] border-r-[3px] border-b-[6px] border-l-transparent border-r-transparent border-b-white"></div>
+              {/* Bottom point */}
+              <div className="absolute bottom-0 left-1/2 transform -translate-x-1/2 w-0 h-0 border-l-[3px] border-r-[3px] border-t-[6px] border-l-transparent border-r-transparent border-t-white"></div>
+              {/* Left point */}
+              <div className="absolute top-1/2 left-0 transform -translate-y-1/2 w-0 h-0 border-t-[3px] border-b-[3px] border-r-[6px] border-t-transparent border-b-transparent border-r-white"></div>
+              {/* Right point */}
+              <div className="absolute top-1/2 right-0 transform -translate-y-1/2 w-0 h-0 border-t-[3px] border-b-[3px] border-l-[6px] border-t-transparent border-b-transparent border-l-white"></div>
+            </div>
+          </div>
+          <h1 className="text-xl font-bold text-gray-800">Zenith</h1>
+        </div>
+      </div>
       {!excelData ? (
         // Upload state - centered layout
         <div className="flex-1 flex flex-col items-center justify-center px-4 py-8">
-          {/* Header */}
+          {/* Upload Instructions */}
           <div className="text-center mb-8">
-            <h1 className="text-4xl font-bold text-gray-800 mb-2">
+            <h2 className="text-3xl font-bold text-gray-800 mb-2">
               Excel Preview App
-            </h1>
+            </h2>
             <p className="text-gray-600 text-lg">
               Upload and preview your Excel files with ease
             </p>
@@ -415,106 +443,68 @@ function App() {
         <div className="flex-1 flex flex-col lg:flex-row px-4 py-4 min-h-0 max-w-full overflow-hidden layout-container">
           {/* Main content area */}
           <div className="flex-1 flex flex-col min-h-0 lg:mr-4 mb-4 lg:mb-0 min-w-0">
-          {/* Header */}
-          <div className="text-center mb-8">
-            <h1 className="text-4xl font-bold text-gray-800 mb-2">
-              Excel Preview App
-            </h1>
-            <p className="text-gray-600 text-lg">
-              Upload and preview your Excel files with ease
-            </p>
-          </div>
 
           {/* Excel Preview */}
           <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-            {/* File Info and Actions */}
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-3">
-                  <FileSpreadsheet className="w-8 h-8 text-green-600" />
-                  <div>
-                    <h3 className="text-lg font-semibold text-gray-800">
-                      {fileName}
-                    </h3>
-                    <p className="text-sm text-gray-500">
-                      Sheet: {excelData.sheetName} • {spreadsheetData.length} rows • {spreadsheetData[0]?.length || 0} columns
-                    </p>
-                    <p className="text-xs text-gray-400 mt-1">
-                      Click any cell to start editing
-                    </p>
-                  </div>
-                </div>
-                
-                <div className="flex space-x-3">
-                  <button
-                    onClick={downloadAsExcel}
-                    className="btn-primary flex items-center space-x-2"
-                  >
-                    <Download className="w-4 h-4" />
-                    <span>Download Excel</span>
-                  </button>
-                  <button
-                    onClick={clearData}
-                    className="btn-secondary flex items-center space-x-2"
-                  >
-                    <X className="w-4 h-4" />
-                    <span>Clear</span>
-                  </button>
-                </div>
-              </div>
-            </div>
 
             {/* Spreadsheet Component */}
             <div className="flex-1 bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden flex flex-col min-h-0 max-w-full">
               <div className="p-4 border-b border-gray-200 bg-gray-50 flex-shrink-0">
                 <div className="flex items-center justify-between">
-                  <h4 className="text-sm font-medium text-gray-700">
-                    Excel Spreadsheet View
-                  </h4>
+                  <div className="flex items-center space-x-3">
+                    <button
+                      onClick={clearData}
+                      className="p-1 hover:bg-gray-200 rounded transition-colors"
+                      title="Go back to upload screen"
+                    >
+                      <ArrowLeft className="w-4 h-4 text-gray-600" />
+                    </button>
+                    <div className="flex items-center space-x-2">
+                      <FileSpreadsheet className="w-4 h-4 text-green-600" />
+                      <h4 className="text-sm font-medium text-gray-700">
+                        {fileName}
+                      </h4>
+                    </div>
+                  </div>
                   <div className="text-xs text-gray-500 flex items-center gap-2">
                     {/* Decimal formatting buttons */}
                     <div className="flex items-center gap-1">
                       <button
                         onClick={decreaseDecimals}
                         disabled={selectedCells.length === 0}
-                        className="px-2 py-1 text-xs rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                        className="px-1 py-1 text-xs rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
                         title={`Decrease decimal places (${selectedCells.length} cells selected)`}
                       >
-                        <Minus className="w-3 h-3" />
+                        <Minus className="w-4 h-4" />
                         <span>0.</span>
                       </button>
                       <button
                         onClick={increaseDecimals}
                         disabled={selectedCells.length === 0}
-                        className="px-2 py-1 text-xs rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                        className="px-1 py-1 text-xs rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
                         title={`Increase decimal places (${selectedCells.length} cells selected)`}
                       >
-                        <Plus className="w-3 h-3" />
-                        <span>0.00</span>
+                        <Plus className="w-4 h-4" />
+                        <span>+0.0</span>
                       </button>
                       
                       {/* Date formatting button */}
                       <button
                         onClick={formatAsDate}
                         disabled={selectedCells.length === 0}
-                        className="px-2 py-1 text-xs rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                        className="px-1 py-1 text-xs rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
                         title={`Format as date (${selectedCells.length} cells selected)`}
                       >
-                        <Calendar className="w-3 h-3" />
+                        <Calendar className="w-4 h-4" />
                         <span>Date</span>
                       </button>
                       
-                      {selectedCells.length > 0 && (
-                        <span className="text-xs text-gray-500 ml-1">
-                          {selectedCells.length} selected
-                        </span>
-                      )}
                     </div>
                     
                     {/* Formula display mode button */}
                     <button
                       onClick={() => setFormulaDisplayMode((prev) => (prev + 1) % 3)}
-                      className={`px-2 py-1 text-xs rounded border transition-colors flex items-center gap-1 ${
+                      className={`px-1 py-1 text-xs rounded border transition-colors flex items-center justify-center w-6 h-6 ${
                         formulaDisplayMode === 0
                           ? 'bg-gray-100 border-gray-300 text-gray-700 hover:bg-gray-200'
                           : formulaDisplayMode === 1
@@ -529,7 +519,16 @@ function App() {
                           : 'Click to reset to normal view'
                       }
                     >
-                      <span className="text-sm">∑</span>
+                      <Calculator className="w-5 h-5" />
+                    </button>
+                    
+                    {/* Download button */}
+                    <button
+                      onClick={downloadAsExcel}
+                      className="px-1 py-1 text-xs rounded border border-gray-300 bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors flex items-center justify-center w-6 h-6"
+                      title="Download Excel file"
+                    >
+                      <Download className="w-5 h-5" />
                     </button>
                   </div>
                 </div>
@@ -585,8 +584,9 @@ function App() {
             <ChatInterface 
               onSendMessage={handleChatMessage}
               isLoading={isChatLoading}
+              onClearHistory={handleClearHistory}
+              onToolCall={(handler) => { toolCallHandlerRef.current = handler; }}
             />
-            <TestLLM />
           </div>
         </div>
       )}
