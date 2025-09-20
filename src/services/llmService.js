@@ -229,7 +229,7 @@ export class LLMService {
   /**
    * Find a label and return both the label cell and its associated value from adjacent cells
    */
-  findLabelValue(label, strategy = "anywhere") {
+  findLabelValue(label) {
     console.log(`Searching for label-value pair: "${label}"`);
     
     const searchLabel = label.toLowerCase();
@@ -307,7 +307,7 @@ export class LLMService {
   /**
    * Find the intersection of two labels with enhanced axis disambiguation and value type validation
    */
-  findIntersection(label1, label2, strategy = "anywhere", options = {}) {
+  findIntersection(label1, label2, options = {}) {
     console.log(`Searching for intersection of "${label1}" and "${label2}" with options:`, options);
     
     const {
@@ -508,49 +508,130 @@ export class LLMService {
 
   /**
    * Find labels and create a sub-frame of their intersection area
+   * Follows systematic workflow: find variables -> find entities -> create subframe -> expand -> conclude
    */
-  findSubFrame(label1, label2, contextRange = 2, valueType = "number") {
+  findSubFrame(label1, label2) {
     // label1 = metric (e.g., "agents"), label2 = entity axis (e.g., "client")
     const trace = [];
     trace.push({ step: "find_subframe()", label1, label2 });
 
-    // Step 1: fuzzy search both labels anywhere
+    // Step 1: Find variables - fuzzy search both labels anywhere
     const metricHits = this.findLabelPositions(label1);
     const entityHits = this.findLabelPositions(label2);
-    if (metricHits.length) trace.push({ step: "find_value", message: `Metric cell found`, hits: metricHits.slice(0, 3).map(h => ({ address: h.address, value: h.value, similarity: h.similarity }))});
-    if (entityHits.length) trace.push({ step: "find_value", message: `Entity cell found`, hits: entityHits.slice(0, 3).map(h => ({ address: h.address, value: h.value, similarity: h.similarity }))});
+    
+    if (metricHits.length) {
+      trace.push({ 
+        step: "find_value", 
+        message: `Metric "${label1}" found in ${metricHits.length} location(s)`, 
+        hits: metricHits.slice(0, 3).map(h => ({ 
+          address: h.address, 
+          value: h.value, 
+          similarity: h.similarity,
+          coordinates: `row ${h.row + 1}, col ${h.col + 1}`
+        }))
+      });
+    }
+    
+    if (entityHits.length) {
+      trace.push({ 
+        step: "find_value", 
+        message: `Entity "${label2}" found in ${entityHits.length} location(s)`, 
+        hits: entityHits.slice(0, 5).map(h => ({ 
+          address: h.address, 
+          value: h.value, 
+          similarity: h.similarity,
+          coordinates: `row ${h.row + 1}, col ${h.col + 1}`
+        }))
+      });
+    }
 
-    // Heuristic seeds: prefer header row for metric, first column for entity
+    // Step 2: Analyze findings - use metric coordinates as seed, find closest entity
     const seedMetric = metricHits.find(h => h.row === 0) || metricHits[0];
     const seedEntity = entityHits.find(h => h.col === 0) || entityHits[0];
 
-    // If neither was found, try header/entity heuristics
-    let seedRow = (seedEntity?.row ?? 0);
-    let seedCol = (seedMetric?.col ?? 0);
-    if (!seedMetric) {
-      const hc = this.detectHeaderColumn(label1);
-      if (hc !== -1) { seedCol = hc; trace.push({ step: "fallback", message: `Header column detected for "${label1}" at ${rcToAddr(1, hc + 1)}` }); }
-    }
-    if (!seedEntity) {
-      const ec = this.detectRowLabelColumn(label2);
-      if (ec !== -1) { seedRow = Math.max(1, seedRow); trace.push({ step: "fallback", message: `Row label column detected for "${label2}" at ${rcToAddr(1, ec + 1)}` }); }
+    if (!seedMetric && !seedEntity) {
+      return { error: `Could not find either "${label1}" or "${label2}" labels in the spreadsheet`, trace };
     }
 
-    // Step 2: establish subframe by expansion
-    const frame = this._establishSubframeFromSeed(seedRow, seedCol);
+    // Use metric coordinates as primary seed, fallback to entity coordinates
+    let seedRow, seedCol;
+    if (seedMetric) {
+      seedRow = seedMetric.row;
+      seedCol = seedMetric.col;
+      trace.push({ 
+        step: "analyze_findings", 
+        message: `Using metric "${label1}" coordinates as seed: row ${seedRow + 1}, col ${seedCol + 1}` 
+      });
+    } else {
+      // Fallback: use entity coordinates
+      seedRow = seedEntity.row;
+      seedCol = seedEntity.col;
+      trace.push({ 
+        step: "analyze_findings", 
+        message: `Using entity "${label2}" coordinates as seed: row ${seedRow + 1}, col ${seedCol + 1}` 
+      });
+    }
+
+    // If no metric found, try header detection
+    if (!seedMetric) {
+      const hc = this.detectHeaderColumn(label1);
+      if (hc !== -1) { 
+        seedCol = hc; 
+        trace.push({ 
+          step: "fallback", 
+          message: `Header column detected for "${label1}" at ${rcToAddr(1, hc + 1)}` 
+        }); 
+      }
+    }
+
+    // If no entity found, try row label detection
+    if (!seedEntity) {
+      const ec = this.detectRowLabelColumn(label2);
+      if (ec !== -1) { 
+        seedRow = Math.max(1, seedRow); 
+        trace.push({ 
+          step: "fallback", 
+          message: `Row label column detected for "${label2}" at ${rcToAddr(1, ec + 1)}` 
+        }); 
+      }
+    }
+
+    // Step 3: Create subframe - establish subframe by expansion from seed
+    trace.push({ 
+      step: "create_subframe", 
+      message: `Creating subframe from seed coordinates: row ${seedRow + 1}, col ${seedCol + 1}` 
+    });
+    
+    const frame = this._establishSubframeFromSeed(seedRow, seedCol, { maxRows: 100 });
     if (!frame) {
       return { error: `No valid sub-frame found for labels "${label1}" and "${label2}"`, trace };
     }
-    trace.push({ step: "establish_sub_frame", range: frame.a1Range });
+    
+    trace.push({ 
+      step: "establish_sub_frame", 
+      range: frame.a1Range,
+      message: `Subframe established: ${frame.a1Range} (${frame.bottomRight.r - frame.topLeft.r + 1} rows, ${frame.bottomRight.c - frame.topLeft.c + 1} columns)`
+    });
 
-    // Step 3: extract comparison and pick winner
+    // Step 4: Extract comparison and pick winner
     const cmp = this._extractComparisonFromSubframe(frame, label1, label2);
     if (cmp.error) return { error: cmp.error, trace };
 
-    // Optional context readouts for your UI
-    trace.push({ step: "getting", message: `getting ${rcToAddr(frame.topLeft.r + 1, frame.topLeft.c + 1)}:${rcToAddr(frame.bottomRight.r + 1, frame.bottomRight.c + 1)} data` });
-    trace.push({ step: "subframe_found", subframe: frame.a1Range });
-    trace.push({ step: "winner", message: `Based on frame: ${cmp.winnerEntity} has most ${label1}`, winnerAddr: cmp.winnerAddr });
+    // Step 5: Final results
+    trace.push({ 
+      step: "getting", 
+      message: `Getting data from ${frame.a1Range}` 
+    });
+    trace.push({ 
+      step: "subframe_found", 
+      subframe: frame.a1Range,
+      message: `Subframe analysis complete: ${frame.a1Range}`
+    });
+    trace.push({ 
+      step: "winner", 
+      message: `Winner found: ${cmp.winnerEntity} has most ${label1} (${cmp.winnerValue})`, 
+      winnerAddr: cmp.winnerAddr 
+    });
 
     return {
       pattern: "expanded_subframe",
@@ -558,6 +639,7 @@ export class LLMService {
       metricHeader: cmp.metricHeader,
       entityHeader: cmp.entityHeader,
       resultEntity: cmp.winnerEntity,
+      resultValue: cmp.winnerValue,
       resultAddr: cmp.winnerAddr,
       trace
     };
@@ -1002,8 +1084,8 @@ export class LLMService {
   /**
    * Handle simple responses that don't require spreadsheet analysis
    */
-  noAnalysisNeeded(response) {
-    console.log(`No analysis needed, returning simple response: ${response}`);
+  smallTalk(response) {
+    console.log(`Small talk response: ${response}`);
     
     return {
       response: response,
@@ -1141,25 +1223,13 @@ export class LLMService {
         case "find":
           return this.findCell(args.hint, args.search_strategy);
         case "find_label_value":
-          return this.findLabelValue(args.label, args.search_strategy);
-        case "find_intersection":
-          return this.findIntersection(args.label1, args.label2, args.search_strategy, {
-            label1_role: args.label1_role,
-            label2_role: args.label2_role,
-            prefer_header_row: args.prefer_header_row,
-            prefer_first_column: args.prefer_first_column,
-            value_type: args.value_type
-          });
+          return this.findLabelValue(args.label);
         case "find_subframe":
-          return this.findSubFrame(args.label1, args.label2, args.context_range, args.value_type);
-        case "get_row_data":
-          return this.getRowData(args.row_address);
-        case "get_column_data":
-          return this.getColumnData(args.column_address);
+          return this.findSubFrame(args.label1, args.label2);
         case "conclude":
           return this.conclude(args.answer, args.confidence, args.sources);
-        case "no_analysis_needed":
-          return this.noAnalysisNeeded(args.response);
+        case "small_talk":
+          return this.smallTalk(args.response);
         case "read_cell":
           return this.readCell(args.address);
         case "update_cell":
@@ -1168,8 +1238,6 @@ export class LLMService {
           return this.recalc();
         case "read_sheet":
           return this.readSheet(args.range);
-        case "debug_sheet":
-          return this.debugSheet(args.search_term);
         default:
           return { error: `Unknown tool: ${name}` };
       }
@@ -1256,8 +1324,7 @@ export class LLMService {
           // Protocol guard: Check if conclude is being called without data read
           if (call.function.name === 'conclude') {
             const usedDataRead = () => toolOutputs.some(t => 
-              ["read_cell", "read_sheet", "get_row_data", "get_column_data", 
-               "find_intersection", "find_subframe", "find_label_value"].includes(t.tool_name)
+              ["read_cell", "read_sheet", "find_subframe", "find_label_value"].includes(t.tool_name)
             );
             
             if (!usedDataRead()) {
@@ -1324,15 +1391,8 @@ export class LLMService {
             content: JSON.stringify(result)
           });
 
-          // Right after you push toolOutputs in execTool...
-          if (call.function.name === "find_subframe" && result?.resultAddr) {
-            // Helper so the next round the model sees the latest tool results
-            messages.push({
-              role: "tool",
-              tool_call_id: call.id,
-              content: JSON.stringify({ hint: "Next step: read_cell on resultAddr", resultAddr: result.resultAddr })
-            });
-          }
+          // Note: Removed extra tool messages that were causing API errors
+          // The tool results already contain all necessary information
 
           // If conclude tool was called, return the answer immediately
           if (call.function.name === 'conclude') {
@@ -1341,9 +1401,9 @@ export class LLMService {
             return result.answer;
           }
 
-          // If no_analysis_needed tool was called, return the simple response immediately
-          if (call.function.name === 'no_analysis_needed') {
-            console.log('No analysis needed tool called, returning response:', result.response);
+          // If small_talk tool was called, return the simple response immediately
+          if (call.function.name === 'small_talk') {
+            console.log('Small talk tool called, returning response:', result.response);
             this.addToHistory("assistant", result.response);
             return result.response;
           }
@@ -1488,7 +1548,7 @@ export class LLMService {
 
   // Expand left until you hit the entity/row header column; expand up until column headers.
   // Then expand right/down while values are "value-like" (numbers/dates) and row labels persist.
-  _establishSubframeFromSeed(seedRow, seedCol, { maxBlankStreak = 2 } = {}) {
+  _establishSubframeFromSeed(seedRow, seedCol, { maxBlankStreak = 2, maxRows = 100 } = {}) {
     const rows = this.spreadsheetData.length;
     const cols = this.spreadsheetData[0]?.length ?? 0;
     if (!rows || !cols) return null;
@@ -1532,7 +1592,9 @@ export class LLMService {
     // 4) Expand down while entity labels continue and values exist in metric columns
     let bottom = seedRow;
     blankStreak = 0;
-    for (let r = seedRow; r < rows; r++) {
+    const maxBottomRow = Math.min(rows - 1, seedRow + maxRows - 1);
+    
+    for (let r = seedRow; r <= maxBottomRow; r++) {
       const entityCell = this.spreadsheetData[r]?.[entityCol];
       const looksEntity = this.isLikelyEntity(entityCell?.value);
       // Check at least one numeric/date in the row across the metric columns
@@ -1563,7 +1625,7 @@ export class LLMService {
   }
 
   // Extract values and compute argmax (client with most agents)
-  _extractComparisonFromSubframe(frame, labelHint1, labelHint2) {
+  _extractComparisonFromSubframe(frame, labelHint1) {
     const { headerRow, entityCol, bottomRight } = frame;
     // pick metric column by fuzzy matching header row to labelHint1 (e.g., "agents")
     let bestCol = -1, bestScore = -1;

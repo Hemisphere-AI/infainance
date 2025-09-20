@@ -14,7 +14,7 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
   ]);
   const [toolCalls, setToolCalls] = useState([]);
   const [expandedToolCalls, setExpandedToolCalls] = useState(new Set());
-  const [showScrollButton, setShowScrollButton] = useState(false);
+  // const [showScrollButton, setShowScrollButton] = useState(false);
   const messagesEndRef = useRef(null);
   const messagesContainerRef = useRef(null);
 
@@ -24,9 +24,9 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
 
   const handleScroll = () => {
     if (messagesContainerRef.current) {
-      const { scrollTop, scrollHeight, clientHeight } = messagesContainerRef.current;
-      const isAtBottom = scrollTop + clientHeight >= scrollHeight - 10; // 10px threshold
-      setShowScrollButton(!isAtBottom);
+      // const { scrollTop, scrollHeight, clientHeight } = messagesContainerRef.current;
+      // const isAtBottom = scrollTop + clientHeight >= scrollHeight - 10; // 10px threshold
+      // setShowScrollButton(!isAtBottom);
     }
   };
 
@@ -104,38 +104,147 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
     });
   };
 
+  const getToolDescription = (toolName, type) => {
+    const descriptions = {
+      'find': {
+        call: '🔎 Searching for label in spreadsheet',
+        result: '📍 Label found'
+      },
+      'find_label_value': {
+        call: '🏷️ Finding label and its associated value',
+        result: '💰 Label-value pair found'
+      },
+      'find_subframe': {
+        call: '🔍 Finding data subframe for comparison analysis',
+        result: '📊 Subframe analysis complete'
+      },
+      'conclude': {
+        call: '🎯 Providing final answer',
+        result: '✅ Answer concluded'
+      },
+      'small_talk': {
+        call: '💬 Handling simple conversation',
+        result: '✅ Response provided'
+      },
+      'read_cell': {
+        call: '📖 Reading cell value',
+        result: '📄 Cell value retrieved'
+      },
+      'update_cell': {
+        call: '✏️ Updating cell value',
+        result: '✅ Cell updated'
+      },
+      'recalc': {
+        call: '🔄 Recalculating formulas',
+        result: '✅ Recalculation complete'
+      },
+      'read_sheet': {
+        call: '📋 Reading spreadsheet range',
+        result: '📊 Range data loaded'
+      }
+    };
+    
+    return descriptions[toolName]?.[type] || `${type === 'call' ? '🔧' : '✅'} ${toolName}`;
+  };
+
   const formatParameters = (toolCall) => {
     if (toolCall.type === 'tool_call') {
-      if (toolCall.tool === 'update_cell') {
+      if (toolCall.tool === 'find') {
+        return [
+          `Searching for: ${toolCall.arguments?.hint || 'N/A'}`,
+          `Strategy: ${toolCall.arguments?.search_strategy || 'default'}`
+        ];
+      } else if (toolCall.tool === 'find_label_value') {
+        return [
+          `Label: ${toolCall.arguments?.label || 'N/A'}`,
+          `Strategy: ${toolCall.arguments?.search_strategy || 'default'}`
+        ];
+      } else if (toolCall.tool === 'find_subframe') {
+        return [
+          `Metric: ${toolCall.arguments?.label1 || 'N/A'}`,
+          `Entity: ${toolCall.arguments?.label2 || 'N/A'}`,
+          `Purpose: Finding which entity has the most/least of the metric`
+        ];
+      } else if (toolCall.tool === 'conclude') {
+        return [`Answer: ${toolCall.arguments?.answer || 'No answer provided'}`];
+      } else if (toolCall.tool === 'small_talk') {
+        return [`Response: ${toolCall.arguments?.response || 'No response provided'}`];
+      } else if (toolCall.tool === 'read_cell') {
+        return [
+          `Reading cell: ${toolCall.arguments?.address || 'N/A'}`,
+          `Purpose: Getting the actual value at this location`
+        ];
+      } else if (toolCall.tool === 'update_cell') {
         return [
           `Cell: ${toolCall.arguments?.address || 'N/A'}`,
           `New value: ${JSON.stringify(toolCall.arguments?.newValue || 'N/A')}`
         ];
-      } else if (toolCall.tool === 'conclude') {
-        return [`Answer: ${toolCall.arguments?.answer || 'No answer provided'}`];
-      } else if (toolCall.tool === 'find_multi_intersection') {
-        return [`Labels: ${toolCall.arguments?.labels?.join(', ') || 'No labels provided'}`];
-      } else if (toolCall.tool === 'find_time_series_analysis') {
+      } else if (toolCall.tool === 'recalc') {
+        return ['Triggering formula recalculation'];
+      } else if (toolCall.tool === 'read_sheet') {
         return [
-          `Value label: ${toolCall.arguments?.value_label || 'No value label provided'}`,
-          `Date label: ${toolCall.arguments?.date_label || 'No date label provided'}`,
-          `Criteria: ${toolCall.arguments?.criteria || 'No criteria provided'}`
+          `Reading range: ${toolCall.arguments?.range || 'N/A'}`,
+          `Purpose: Getting data from multiple cells`
         ];
       } else {
         return Object.entries(toolCall.arguments || {}).map(([key, value]) => `${key}: ${JSON.stringify(value)}`);
       }
     } else {
       if (toolCall.result?.error) {
-        return [`Error: ${toolCall.result.error}`];
+        return [`❌ Error: ${toolCall.result.error}`];
+      } else if (toolCall.tool === 'find') {
+        return [
+          `📍 Found: ${toolCall.result?.address || 'N/A'}`,
+          `💰 Value: ${toolCall.result?.value || 'N/A'}`,
+          `📍 Location: ${toolCall.result?.location || 'N/A'}`
+        ];
+      } else if (toolCall.tool === 'find_label_value') {
+        return [
+          `🏷️ Label: ${toolCall.result?.label?.value || 'N/A'}`,
+          `💰 Value: ${toolCall.result?.value?.value || 'N/A'}`,
+          `📍 Location: ${toolCall.result?.valueLocation || 'N/A'}`
+        ];
+      } else if (toolCall.tool === 'find_subframe') {
+        if (toolCall.result?.resultAddr) {
+          return [
+            `📍 Found subframe: ${toolCall.result?.range || 'N/A'}`,
+            `🏆 Winner: ${toolCall.result?.resultEntity || 'N/A'}`,
+            `📍 Location: ${toolCall.result?.resultAddr || 'N/A'}`,
+            `Next: Will read this cell to confirm the value`
+          ];
+        } else if (toolCall.result?.error) {
+          return [`❌ Error: ${toolCall.result.error}`];
+        } else {
+          return ['📊 Subframe analysis complete'];
+        }
+      } else if (toolCall.tool === 'conclude') {
+        return [`🎯 Final Answer: ${toolCall.result?.answer || 'No answer provided'}`];
+      } else if (toolCall.tool === 'small_talk') {
+        return [`💬 Response: ${toolCall.result?.response || 'No response provided'}`];
+      } else if (toolCall.tool === 'read_cell') {
+        return [
+          `📍 Cell: ${toolCall.result?.address || 'N/A'}`,
+          `💰 Value: ${toolCall.result?.value || 'N/A'}`,
+          `Next: ${toolCall.result?.value ? 'Ready to conclude with this data' : 'Need to find correct cell'}`
+        ];
       } else if (toolCall.tool === 'update_cell') {
         return [
           `Cell: ${toolCall.result?.address || 'N/A'}`,
           `New value: ${JSON.stringify(toolCall.result?.newValue || 'N/A')}`
         ];
-      } else if (toolCall.tool === 'conclude') {
-        return [`Answer: ${toolCall.result?.answer || 'No answer provided'}`];
+      } else if (toolCall.tool === 'recalc') {
+        return [
+          `Changed: ${toolCall.result?.changed || 0} cells`,
+          `Message: ${toolCall.result?.message || 'Recalculation complete'}`
+        ];
+      } else if (toolCall.tool === 'read_sheet') {
+        return [
+          `📊 Range: ${toolCall.result?.range || 'N/A'}`,
+          `📈 Data loaded: ${toolCall.result?.window ? 'Yes' : 'No'}`,
+          `Next: Analyzing the data to find the answer`
+        ];
       } else {
-        return ['Success'];
+        return ['✅ Success'];
       }
     }
   };
@@ -247,9 +356,14 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
                   </div>
                   <div className="flex-1">
                     <div className="flex items-center justify-between">
-                      <span className={`font-medium ${textColor}`}>
-                        {toolCall.tool}
-                      </span>
+                      <div className="flex flex-col">
+                        <span className={`font-medium ${textColor}`}>
+                          {toolCall.tool}
+                        </span>
+                        <span className={`text-xs ${textColor} opacity-75`}>
+                          {getToolDescription(toolCall.tool, toolCall.type)}
+                        </span>
+                      </div>
                       {hasParameters && (
                         <div className="flex items-center space-x-1">
                           {isExpanded ? (

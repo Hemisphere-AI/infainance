@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react'
-import { Upload, FileSpreadsheet, X, Download, Plus, Minus, Calendar, ArrowLeft, Star, Calculator } from 'lucide-react'
+import { Upload, FileSpreadsheet, Download, Plus, Minus, Calendar, ArrowLeft, Calculator } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import ReactSpreadsheet from './UniverSpreadsheet'
 import ChatInterface from './components/ChatInterface'

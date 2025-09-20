@@ -48,7 +48,7 @@ function jaroWinkler(a, b) {
 function normalizeForTokens(s) {
   return (s || "")
     .toLowerCase()
-    .replace(/[_\-]+/g, " ")
+    .replace(/[_-]+/g, " ")
     .replace(/[^\p{L}\p{N}\s%]/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
