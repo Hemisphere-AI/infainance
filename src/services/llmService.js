@@ -1107,7 +1107,11 @@ export class LLMService {
       value: cell.value ?? "", 
       isFormula,
       isDate: cell.isDate || false,
-      decimalPlaces: cell.decimalPlaces
+      decimalPlaces: cell.decimalPlaces,
+      // Enhanced formatting information
+      cellType: cell.cellType || 'text',
+      numberFormat: cell.numberFormat || null,
+      originalFormat: cell.originalFormat || null
     };
   }
 

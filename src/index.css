@@ -106,7 +106,7 @@
   padding: 0;
   margin: 0;
   vertical-align: middle;
-  text-align: left;
+  text-align: center; /* Default to center, will be overridden by Tailwind classes */
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -168,8 +168,28 @@
   min-height: 32px;
 }
 
+/* Ensure Tailwind text alignment classes work properly */
+.excel-grid td.text-right {
+  text-align: right !important;
+}
+
+.excel-grid td.text-left {
+  text-align: left !important;
+}
+
+.excel-grid .cell-content.text-right {
+  justify-content: flex-end !important;
+}
+
+.excel-grid .cell-content.text-left {
+  justify-content: flex-start !important;
+}
+
 .excel-grid .formula-indicator {
-  @apply ml-1 text-green-600 text-xs;
+  margin-left: 0.25rem;
+  color: #059669;
+  font-size: 0.75rem;
+  line-height: 1rem;
   cursor: help;
 }
 

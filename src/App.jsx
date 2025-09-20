@@ -46,57 +46,259 @@ function App() {
         const firstSheetName = workbook.SheetNames[0]
         const worksheet = workbook.Sheets[firstSheetName]
         
-        // Convert to JSON format with better error handling
+        // Convert to JSON format with better error handling and formatting extraction
         let jsonData
+        let formattedData
+        let cellFormats = {} // Store formatting information
+        
         try {
-          // First try to get formulas
+          // Try different approaches to get formatted data
+          console.log('Trying different XLSX reading approaches...')
+          
+          // Approach 1: Raw data
           jsonData = XLSX.utils.sheet_to_json(worksheet, { 
             header: 1, 
             defval: '',
             raw: true
           })
           
-          // Now try to preserve formulas by checking each cell
+          // Approach 2: Try to get formatted data
+          formattedData = XLSX.utils.sheet_to_json(worksheet, { 
+            header: 1, 
+            defval: '',
+            raw: false
+          })
+          
+          console.log('Raw data sample:', jsonData.slice(0, 3))
+          console.log('Formatted data sample:', formattedData.slice(0, 3))
+          
+          // Debug: Log the worksheet object to see what's available
+          console.log('Worksheet object keys:', Object.keys(worksheet))
+          console.log('Sample worksheet cells:', Object.keys(worksheet).filter(key => /^[A-Z]+[0-9]+$/.test(key)).slice(0, 5))
+          
+          // Extract formatting information from each cell
           if (worksheet['!ref']) {
             const range = XLSX.utils.decode_range(worksheet['!ref'])
+            console.log('Worksheet range:', range)
+            
             for (let row = range.s.r; row <= range.e.r; row++) {
               for (let col = range.s.c; col <= range.e.c; col++) {
                 const cellAddress = XLSX.utils.encode_cell({ r: row, c: col })
                 const cell = worksheet[cellAddress]
                 
-                if (cell && cell.f && jsonData[row] && jsonData[row][col] !== undefined) {
-                  // Replace the value with the formula
-                  jsonData[row][col] = '=' + cell.f
+                if (cell) {
+                  // Debug: Log only first few cells to see what's available
+                  if (row < 3 && col < 3) {
+                    console.log(`Cell ${cellAddress} full object:`, cell)
+                  }
+                  
+                  // Store formatting information with enhanced detection
+                  const formatInfo = {
+                    numberFormat: cell.z || null, // Number format string (e.g., "mm/dd/yyyy", "$#,##0.00")
+                    cellType: cell.t || null,    // Cell type (n=number, s=string, b=boolean, d=date, e=error)
+                    isFormula: !!cell.f,         // Whether cell contains a formula
+                    formula: cell.f || null,     // The actual formula
+                    style: cell.s || null,       // Cell style information
+                    rawValue: cell.v || null,    // Raw cell value
+                    displayValue: cell.w || null, // Display value
+                    // Enhanced formatting detection
+                    isDate: false,               // Will be set based on format analysis
+                    isCurrency: false,           // Will be set based on format analysis
+                    isPercentage: false,         // Will be set based on format analysis
+                    decimalPlaces: null,         // Will be extracted from format
+                    currencySymbol: null         // Will be extracted from format
+                  }
+                  
+                  // Enhanced format analysis
+                  if (formatInfo.numberFormat) {
+                    const format = formatInfo.numberFormat.toLowerCase()
+                    
+                    // Detect date formats
+                    if (format.includes('mm') && format.includes('dd') && format.includes('yyyy')) {
+                      formatInfo.isDate = true
+                    } else if (format.includes('h') && format.includes('mm')) {
+                      formatInfo.isDate = true
+                    }
+                    
+                    // Detect currency formats
+                    if (format.includes('$') || format.includes('€') || format.includes('£')) {
+                      formatInfo.isCurrency = true
+                      if (format.includes('$')) formatInfo.currencySymbol = '$'
+                      else if (format.includes('€')) formatInfo.currencySymbol = '€'
+                      else if (format.includes('£')) formatInfo.currencySymbol = '£'
+                    }
+                    
+                    // Detect percentage formats
+                    if (format.includes('%')) {
+                      formatInfo.isPercentage = true
+                    }
+                    
+                    // Extract decimal places from format
+                    const decimalMatch = format.match(/\.(0+)/)
+                    if (decimalMatch) {
+                      formatInfo.decimalPlaces = decimalMatch[1].length
+                    }
+                  }
+                  
+                  // Store format info by row/col for easy lookup
+                  if (!cellFormats[row]) cellFormats[row] = {}
+                  cellFormats[row][col] = formatInfo
+                  
+                  // Replace the value with the formula if it exists
+                  if (cell.f && jsonData[row] && jsonData[row][col] !== undefined) {
+                    console.log(`Found formula in cell ${cellAddress}: ${cell.f}`)
+                    jsonData[row][col] = '=' + cell.f
+                  }
                 }
               }
             }
           }
         } catch (error) {
           console.warn('Error processing formulas, falling back to basic conversion:', error)
-          // Fallback to basic conversion
+          // Fallback to basic conversion - but still try to preserve formulas
           jsonData = XLSX.utils.sheet_to_json(worksheet, { 
+            header: 1, 
+            defval: '',
+            raw: true // Keep raw: true to preserve formulas
+          })
+          formattedData = XLSX.utils.sheet_to_json(worksheet, { 
             header: 1, 
             defval: '',
             raw: false
           })
+          
+          // Try to extract formulas in fallback mode
+          if (worksheet['!ref']) {
+            const range = XLSX.utils.decode_range(worksheet['!ref'])
+            for (let row = range.s.r; row <= range.e.r; row++) {
+              for (let col = range.s.c; col <= range.e.c; col++) {
+                const cellAddress = XLSX.utils.encode_cell({ r: row, c: col })
+                const cell = worksheet[cellAddress]
+                if (cell && cell.f && jsonData[row] && jsonData[row][col] !== undefined) {
+                  console.log(`Fallback: Found formula in cell ${cellAddress}: ${cell.f}`)
+                  jsonData[row][col] = '=' + cell.f
+                }
+              }
+            }
+          }
         }
         
-        // Convert to react-spreadsheet format
-        const spreadsheetFormat = jsonData.map(row => 
-          row.map(cell => ({
-            value: cell || '',
-            className: ''
-          }))
+        // Convert to react-spreadsheet format with formatting information
+        const spreadsheetFormat = jsonData.map((row, rowIndex) => 
+          row.map((cell, colIndex) => {
+            const formatInfo = cellFormats[rowIndex]?.[colIndex] || {}
+            
+            // Determine cell type and formatting using enhanced detection
+            let cellType = 'text'
+            let isDate = formatInfo.isDate || false
+            let numberFormat = formatInfo.numberFormat
+            let decimalPlaces = formatInfo.decimalPlaces
+            let isCurrency = formatInfo.isCurrency || false
+            let isPercentage = formatInfo.isPercentage || false
+            let currencySymbol = formatInfo.currencySymbol
+            
+            // Use enhanced format analysis results
+            if (formatInfo.isDate) {
+              cellType = 'date'
+            } else if (formatInfo.isCurrency || formatInfo.isPercentage || 
+                      (formatInfo.numberFormat && (formatInfo.numberFormat.includes('#') || formatInfo.numberFormat.includes('0')))) {
+              cellType = 'number'
+            }
+            
+            // Override with cell type if available
+            if (formatInfo.cellType) {
+              switch (formatInfo.cellType) {
+                case 'd': cellType = 'date'; isDate = true; break
+                case 'n': 
+                  cellType = 'number'; 
+                  // If it's a number and looks like a date (Excel serial date), mark as date
+                  if (typeof cell === 'number' && cell > 25569 && cell < 2958465) {
+                    isDate = true
+                    cellType = 'date'
+                  }
+                  break
+                case 's': cellType = 'text'; break
+                case 'b': cellType = 'boolean'; break
+              }
+            }
+            
+            // Additional date detection for Excel serial dates
+            if (typeof cell === 'number' && cell > 25569 && cell < 2958465 && !isDate) {
+              // This looks like an Excel serial date
+              isDate = true
+              cellType = 'date'
+              if (!numberFormat) {
+                numberFormat = 'mm/dd/yyyy' // Default date format
+              }
+            }
+            
+            const cellInfo = {
+              numberFormat: numberFormat,
+              cellType: cellType,
+              isDate: isDate,
+              decimalPlaces: decimalPlaces,
+              isCurrency: isCurrency,
+              isPercentage: isPercentage,
+              currencySymbol: currencySymbol,
+              isFormula: formatInfo.isFormula || false,
+              formula: formatInfo.formula || null,
+              originalFormat: formatInfo
+            }
+            
+            // Use formatted data if available, otherwise use raw
+            const formattedValue = formattedData && formattedData[rowIndex] ? formattedData[rowIndex][colIndex] : cell || ''
+            const rawValue = cell || ''
+            
+            // For formulas, we need to store the formula string but also preserve the calculated result
+            let cellValue
+            if (formatInfo.isFormula) {
+              // Store the formula string (with = prefix)
+              cellValue = cell
+            } else {
+              // Use formatted value for non-formulas
+              cellValue = formattedValue
+            }
+            
+            return {
+              value: cellValue, // Formula string for formulas, formatted value for others
+              rawValue: rawValue, // Keep raw value for reference
+              className: '',
+              // Enhanced formatting properties
+              ...cellInfo
+            }
+          })
         )
         
         console.log('Original data:', jsonData.slice(0, 5)) // Debug first 5 rows
         console.log('Spreadsheet format:', spreadsheetFormat.slice(0, 5)) // Debug first 5 rows
+        console.log('Cell formats extracted:', Object.keys(cellFormats).length, 'rows with formatting')
+        
+        // Log some formatting examples (reduced logging)
+        const formatExamples = []
+        for (let row = 0; row < Math.min(2, Object.keys(cellFormats).length); row++) {
+          if (cellFormats[row]) {
+            for (let col = 0; col < Math.min(2, Object.keys(cellFormats[row]).length); col++) {
+              if (cellFormats[row][col]?.numberFormat) {
+                formatExamples.push({
+                  position: `R${row + 1}C${col + 1}`,
+                  format: cellFormats[row][col].numberFormat,
+                  type: cellFormats[row][col].cellType,
+                  value: jsonData[row]?.[col]
+                })
+              }
+            }
+          }
+        }
+        if (formatExamples.length > 0) {
+          console.log('Formatting examples (first 4 cells):', formatExamples)
+        }
         
         setExcelData({
           sheetName: firstSheetName,
           data: jsonData,
           allSheets: workbook.SheetNames,
-          worksheet: worksheet
+          worksheet: worksheet,
+          cellFormats: cellFormats // Include formatting information
         })
         
         setSpreadsheetData(spreadsheetFormat)
@@ -141,6 +343,101 @@ function App() {
     setSpreadsheetData([])
   }, [])
 
+  // Helper function to format cell values according to Excel formatting
+  const formatCellValue = useCallback((value, cellInfo) => {
+    if (!value && value !== 0) return ''
+    
+    // If it's a formula, return as-is
+    if (cellInfo?.isFormula) {
+      return value
+    }
+    
+    // Format based on cell type and number format
+    if (cellInfo?.isDate && cellInfo?.numberFormat) {
+      try {
+        // Convert Excel serial date to JavaScript Date
+        if (typeof value === 'number' && value > 25569) { // Excel epoch starts at 1900-01-01
+          const excelEpoch = new Date(1900, 0, 1)
+          const jsDate = new Date(excelEpoch.getTime() + (value - 2) * 24 * 60 * 60 * 1000)
+          
+          // Apply basic date formatting based on the format string
+          if (cellInfo.numberFormat.includes('mm/dd/yyyy') || cellInfo.numberFormat.includes('m/d/yyyy')) {
+            return jsDate.toLocaleDateString('en-US')
+          } else if (cellInfo.numberFormat.includes('dd/mm/yyyy') || cellInfo.numberFormat.includes('d/m/yyyy')) {
+            return jsDate.toLocaleDateString('en-GB')
+          } else if (cellInfo.numberFormat.includes('yyyy-mm-dd')) {
+            return jsDate.toISOString().split('T')[0]
+          } else if (cellInfo.numberFormat.includes('h:mm') || cellInfo.numberFormat.includes('hh:mm')) {
+            return jsDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+          } else {
+            return jsDate.toLocaleDateString()
+          }
+        }
+      } catch (error) {
+        console.warn('Error formatting date:', error)
+      }
+    }
+    
+    // Format numbers with currency, percentage, etc.
+    if (cellInfo?.cellType === 'number' && cellInfo?.numberFormat) {
+      try {
+        const numValue = parseFloat(value)
+        if (!isNaN(numValue)) {
+          // Use enhanced formatting properties
+          if (cellInfo.isCurrency && cellInfo.currencySymbol) {
+            const currency = cellInfo.currencySymbol === '$' ? 'USD' : 
+                           cellInfo.currencySymbol === '€' ? 'EUR' : 
+                           cellInfo.currencySymbol === '£' ? 'GBP' : 'USD'
+            return new Intl.NumberFormat('en-US', { 
+              style: 'currency', 
+              currency: currency,
+              minimumFractionDigits: cellInfo.decimalPlaces || 0,
+              maximumFractionDigits: cellInfo.decimalPlaces || 2
+            }).format(numValue)
+          } else if (cellInfo.isPercentage) {
+            return new Intl.NumberFormat('en-US', { 
+              style: 'percent',
+              minimumFractionDigits: cellInfo.decimalPlaces || 0,
+              maximumFractionDigits: cellInfo.decimalPlaces || 2
+            }).format(numValue / 100)
+          } else if (cellInfo.decimalPlaces !== null && cellInfo.decimalPlaces !== undefined) {
+            return numValue.toFixed(cellInfo.decimalPlaces)
+          }
+        }
+      } catch (error) {
+        console.warn('Error formatting number:', error)
+      }
+    }
+    
+    return value
+  }, [])
+
+  // Debug function to test formatting - call from browser console
+  window.debugFormatting = () => {
+    console.log('=== FORMATTING DEBUG ===')
+    console.log('Excel Data:', excelData)
+    console.log('Spreadsheet Data (first 3 rows):', spreadsheetData.slice(0, 3))
+    
+    if (excelData?.cellFormats) {
+      console.log('Cell Formats:', excelData.cellFormats)
+      
+      // Show first few cells with formatting
+      Object.keys(excelData.cellFormats).slice(0, 3).forEach(row => {
+        Object.keys(excelData.cellFormats[row]).slice(0, 3).forEach(col => {
+          const format = excelData.cellFormats[row][col]
+          if (format.numberFormat || format.cellType) {
+            console.log(`Cell R${parseInt(row)+1}C${parseInt(col)+1}:`, format)
+          }
+        })
+      })
+    }
+    
+    // Test a specific cell
+    if (spreadsheetData.length > 0 && spreadsheetData[0].length > 0) {
+      const testCell = spreadsheetData[0][0]
+      console.log('Test Cell (A1):', testCell)
+    }
+  }
 
   const downloadAsExcel = useCallback(() => {
     if (!spreadsheetData.length) return
@@ -346,11 +643,10 @@ function App() {
 
 
 
-  // Debug effect to log spreadsheet data changes
+  // Debug effect to log spreadsheet data changes (reduced logging)
   useEffect(() => {
-    console.log('Spreadsheet data updated:', spreadsheetData.length, 'rows')
     if (spreadsheetData.length > 0) {
-      console.log('First row:', spreadsheetData[0])
+      console.log('Spreadsheet data updated:', spreadsheetData.length, 'rows')
     }
   }, [spreadsheetData])
 

@@ -468,6 +468,33 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
     try {
       const expression = stringFormula.slice(1)
       
+      // Enhanced number parsing that handles currency and formatted values
+      const parseNumericValue = (value) => {
+        if (typeof value === 'number') {
+          return value
+        }
+        
+        const stringVal = String(value)
+        
+        // Handle currency values (€1,234.56, $1,234.56, £1,234.56)
+        const currencyMatch = stringVal.match(/^[€$£]\s*([\d,]+\.?\d*)$/)
+        if (currencyMatch) {
+          return parseFloat(currencyMatch[1].replace(/,/g, ''))
+        }
+        
+        // Handle percentage values (15.5%)
+        const percentageMatch = stringVal.match(/^([\d,]+\.?\d*)%$/)
+        if (percentageMatch) {
+          return parseFloat(percentageMatch[1].replace(/,/g, '')) / 100
+        }
+        
+        // Handle numbers with thousands separators (1,234.56)
+        const numberWithCommas = stringVal.replace(/,/g, '')
+        const parsed = parseFloat(numberWithCommas)
+        
+        return isNaN(parsed) ? 0 : parsed
+      }
+
       // Helper function to get cell value (recursively evaluates formulas)
       const getCellValue = (cellRef, visitedCells = new Set()) => {
         // Remove $ symbols from absolute references (e.g., $E$7 -> E7)
@@ -489,6 +516,17 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
         const cell = data[rowIndex]?.[colIndex]
         const cellValue = cell?.value || 0
         const stringValue = String(cellValue)
+        
+        // Debug cell value lookup for first few cells
+        if (rowIndex < 3 && colIndex < 3) {
+          console.log(`Getting cell value for ${cellRef} (R${rowIndex + 1}C${colIndex + 1}):`, {
+            cellExists: !!cell,
+            cell: cell,
+            cellValue: cellValue,
+            stringValue: stringValue,
+            isFormula: stringValue.startsWith('=')
+          })
+        }
         
         // If the cell contains a formula, evaluate it recursively
         if (stringValue.startsWith('=')) {
@@ -514,7 +552,7 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
           }
         }
         
-        return isNaN(parseFloat(cellValue)) ? 0 : parseFloat(cellValue)
+        return parseNumericValue(cellValue)
       }
       
       // Helper function to parse range (e.g., A1:A10 or $A$1:$A$10)
@@ -555,8 +593,9 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
                 }
               }
             } else {
-              const numValue = parseFloat(cellValue)
-              if (!isNaN(numValue)) {
+              // Use the enhanced number parsing for range values
+              const numValue = parseNumericValue(cellValue)
+              if (numValue !== 0 || cellValue === '0' || cellValue === 0) {
                 values.push(numValue)
               }
             }
@@ -1179,36 +1218,167 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
       } else {
         const result = evaluateFormula(cellValue, rowIndex, colIndex)
         
-        // Check if result is a date/datetime object
-        const formattedResult = formatDateValue(result)
-        if (formattedResult !== result) {
-          return formattedResult
+        // Debug formula evaluation for first few cells
+        if (rowIndex < 3 && colIndex < 3) {
+          console.log(`Formula evaluation for R${rowIndex + 1}C${colIndex + 1}:`, {
+            formula: cellValue,
+            result: result,
+            resultType: typeof result
+          })
         }
         
-        // Apply decimal formatting if specified
-        const num = parseFloat(result)
-        if (!isNaN(num) && cell?.decimalPlaces !== undefined) {
-          return num.toFixed(cell.decimalPlaces)
+        // Apply enhanced formatting based on cell properties
+        const formattedResult = formatCellValueWithProperties(result, cell)
+        
+        // Debug formatting for first few cells
+        if (rowIndex < 3 && colIndex < 3) {
+          console.log(`Formatting result for R${rowIndex + 1}C${colIndex + 1}:`, {
+            originalResult: result,
+            formattedResult: formattedResult,
+            cellProperties: {
+              isDate: cell?.isDate,
+              isCurrency: cell?.isCurrency,
+              isPercentage: cell?.isPercentage,
+              numberFormat: cell?.numberFormat
+            }
+          })
         }
-        return result
+        
+        return formattedResult
       }
     } else {
-      // For non-formula cells, check if it's a date first
-      if (cell?.isDate) {
-        const date = new Date(cellValue)
-        if (!isNaN(date.getTime())) {
-          return date.toLocaleDateString()
+      // For non-formula cells, use the enhanced formatting
+      return formatCellValueWithProperties(cellValue, cell)
+    }
+  }, [editingCell, evaluateFormula, formulaDisplayMode])
+
+  // Enhanced cell value formatting function
+  const formatCellValueWithProperties = useCallback((value, cell) => {
+    if (!value && value !== 0) return ''
+    
+    // If it's a formula result, return as-is
+    if (typeof value === 'string' && value.startsWith('=')) {
+      return value
+    }
+    
+    // Use raw value if available for more accurate formatting
+    const rawValue = cell?.rawValue !== undefined ? cell.rawValue : value
+    
+    // Debug logging removed to prevent console spam during CSV uploads
+    
+    // Format based on cell type and number format
+    if (cell?.isDate && cell?.numberFormat) {
+      try {
+        // Convert Excel serial date to JavaScript Date
+        if (typeof rawValue === 'number' && rawValue > 25569) { // Excel epoch starts at 1900-01-01
+          const excelEpoch = new Date(1900, 0, 1)
+          const jsDate = new Date(excelEpoch.getTime() + (rawValue - 2) * 24 * 60 * 60 * 1000)
+          
+          // Apply basic date formatting based on the format string
+          if (cell.numberFormat.includes('mm/dd/yyyy') || cell.numberFormat.includes('m/d/yyyy')) {
+            return jsDate.toLocaleDateString('en-US')
+          } else if (cell.numberFormat.includes('dd/mm/yyyy') || cell.numberFormat.includes('d/m/yyyy')) {
+            return jsDate.toLocaleDateString('en-GB')
+          } else if (cell.numberFormat.includes('yyyy-mm-dd')) {
+            return jsDate.toISOString().split('T')[0]
+          } else if (cell.numberFormat.includes('h:mm') || cell.numberFormat.includes('hh:mm')) {
+            return jsDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+          } else {
+            return jsDate.toLocaleDateString()
+          }
         }
+        // If it's already a date string, try to parse and format it
+        else if (typeof rawValue === 'string') {
+          const date = new Date(rawValue)
+          if (!isNaN(date.getTime())) {
+            if (cell.numberFormat.includes('mm/dd/yyyy') || cell.numberFormat.includes('m/d/yyyy')) {
+              return date.toLocaleDateString('en-US')
+            } else if (cell.numberFormat.includes('dd/mm/yyyy') || cell.numberFormat.includes('d/m/yyyy')) {
+              return date.toLocaleDateString('en-GB')
+            } else if (cell.numberFormat.includes('yyyy-mm-dd')) {
+              return date.toISOString().split('T')[0]
+            } else if (cell.numberFormat.includes('h:mm') || cell.numberFormat.includes('hh:mm')) {
+              return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+            } else {
+              return date.toLocaleDateString()
+            }
+          }
+        }
+      } catch (error) {
+        console.warn('Error formatting date:', error)
       }
-      
-      // Apply decimal formatting if specified
-      const num = parseFloat(cellValue)
-      if (!isNaN(num) && cell?.decimalPlaces !== undefined) {
+    }
+    
+    // Format numbers with currency, percentage, etc.
+    if (cell?.cellType === 'number' && cell?.numberFormat) {
+      try {
+        const numValue = parseFloat(rawValue)
+        if (!isNaN(numValue)) {
+          // Use enhanced formatting properties
+          if (cell.isCurrency && cell.currencySymbol) {
+            const currency = cell.currencySymbol === '$' ? 'USD' : 
+                           cell.currencySymbol === '€' ? 'EUR' : 
+                           cell.currencySymbol === '£' ? 'GBP' : 'USD'
+            return new Intl.NumberFormat('en-US', { 
+              style: 'currency', 
+              currency: currency,
+              minimumFractionDigits: cell.decimalPlaces || 0,
+              maximumFractionDigits: cell.decimalPlaces || 2
+            }).format(numValue)
+          } else if (cell.isPercentage) {
+            return new Intl.NumberFormat('en-US', { 
+              style: 'percent',
+              minimumFractionDigits: cell.decimalPlaces || 0,
+              maximumFractionDigits: cell.decimalPlaces || 2
+            }).format(numValue / 100)
+          } else if (cell.decimalPlaces !== null && cell.decimalPlaces !== undefined) {
+            return numValue.toFixed(cell.decimalPlaces)
+          }
+        }
+      } catch (error) {
+        console.warn('Error formatting number:', error)
+      }
+    }
+    
+    // Also try to format based on numberFormat even if cellType is not 'number'
+    if (cell?.numberFormat && !cell?.isDate) {
+      try {
+        const numValue = parseFloat(rawValue)
+        if (!isNaN(numValue)) {
+          // Use enhanced formatting properties for fallback
+          if (cell.isCurrency && cell.currencySymbol) {
+            const currency = cell.currencySymbol === '$' ? 'USD' : 
+                           cell.currencySymbol === '€' ? 'EUR' : 
+                           cell.currencySymbol === '£' ? 'GBP' : 'USD'
+            return new Intl.NumberFormat('en-US', { 
+              style: 'currency', 
+              currency: currency,
+              minimumFractionDigits: cell.decimalPlaces || 0,
+              maximumFractionDigits: cell.decimalPlaces || 2
+            }).format(numValue)
+          } else if (cell.isPercentage) {
+            return new Intl.NumberFormat('en-US', { 
+              style: 'percent',
+              minimumFractionDigits: cell.decimalPlaces || 0,
+              maximumFractionDigits: cell.decimalPlaces || 2
+            }).format(numValue / 100)
+          }
+        }
+      } catch (error) {
+        console.warn('Error formatting number by format:', error)
+      }
+    }
+    
+    // Fallback to basic decimal formatting if specified
+    if (cell?.decimalPlaces !== null && cell?.decimalPlaces !== undefined) {
+      const num = parseFloat(rawValue)
+      if (!isNaN(num)) {
         return num.toFixed(cell.decimalPlaces)
       }
-      return cellValue
     }
-  }, [editingCell, evaluateFormula, formulaDisplayMode, formatDateValue])
+    
+    return value
+  }, [])
 
   // Handle key press in cell
   const handleCellKeyPress = useCallback((e, rowIndex, colIndex) => {
@@ -1440,8 +1610,16 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
                     actualColIndex >= Math.min(dragStart.col, dragEnd.col) &&
                     actualColIndex <= Math.max(dragStart.col, dragEnd.col)
                   
-                  // Determine if this is a number for left alignment
-                  const isNumber = !isFormula && !isNaN(parseFloat(displayValue)) && displayValue !== ''
+                  // Determine if this is a numeric value for right alignment
+                  const isNumeric = !isFormula && (
+                    (!isNaN(parseFloat(displayValue)) && displayValue !== '') ||
+                    cell?.isDate ||
+                    cell?.isCurrency ||
+                    cell?.isPercentage ||
+                    cell?.cellType === 'number'
+                  )
+                  
+                  // Debug alignment logging removed to prevent console spam
                   
                   
                   return (
@@ -1459,7 +1637,7 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
                           : isInDragArea
                           ? 'bg-blue-50 border-blue-300'
                           : 'hover:bg-gray-50'
-                      } ${shouldHighlightFormula ? 'bg-green-50 border-green-300' : ''} ${shouldShowFormula ? 'bg-blue-50 border-blue-300' : ''} ${isFormulaEditing ? 'ring-2 ring-yellow-400' : ''} ${isNumber ? 'text-left' : 'text-center'}`}
+                      } ${shouldHighlightFormula ? 'bg-green-50 border-green-300' : ''} ${shouldShowFormula ? 'bg-blue-50 border-blue-300' : ''} ${isFormulaEditing ? 'ring-2 ring-yellow-400' : ''} ${isNumeric ? 'text-right' : 'text-center'}`}
                       onMouseDown={(e) => handleMouseDown(actualRowIndex, actualColIndex, e)}
                     >
                       {isEditing ? (
@@ -1505,7 +1683,7 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
                           )}
                         </div>
                         ) : (
-                          <div className="cell-content">
+                          <div className={`cell-content ${isNumeric ? 'text-right' : 'text-center'}`}>
                             <span className="truncate">
                               {shouldShowFormula ? cellValue : displayValue}
                             </span>
