@@ -32,7 +32,13 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
   const generateDataHash = useCallback((data) => {
     if (!data || data.length === 0) return ''
     return JSON.stringify(data.map(row => 
-      row.map(cell => cell?.value || '')
+      row.map(cell => ({
+        value: cell?.value || '',
+        decimalPlaces: cell?.decimalPlaces,
+        isCurrency: cell?.isCurrency,
+        isPercentage: cell?.isPercentage,
+        currencySymbol: cell?.currencySymbol
+      }))
     ))
   }, [])
 
@@ -468,31 +474,67 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
     try {
       const expression = stringFormula.slice(1)
       
-      // Enhanced number parsing that handles currency and formatted values
+      // Enhanced number parsing that handles currency/locale formatted values robustly
       const parseNumericValue = (value) => {
-        if (typeof value === 'number') {
-          return value
+        if (value === null || value === undefined) return 0
+        if (typeof value === 'number') return value
+        let stringVal = String(value).trim()
+
+        // Use cell rawValue when available for better numeric fidelity
+        // This helper is only used with getCellValue/parseRange which have access to data[][]
+
+        // Normalize NBSP and spaces
+        stringVal = stringVal.replace(/\u00A0/g, ' ').replace(/\s+/g, ' ').trim()
+
+        // Handle accounting negatives with parentheses: ($1,234.56) or (1.234,56 €)
+        let isNegative = false
+        if (/^\(.*\)$/.test(stringVal)) {
+          isNegative = true
+          stringVal = stringVal.slice(1, -1)
         }
-        
-        const stringVal = String(value)
-        
-        // Handle currency values (€1,234.56, $1,234.56, £1,234.56)
-        const currencyMatch = stringVal.match(/^[€$£]\s*([\d,]+\.?\d*)$/)
-        if (currencyMatch) {
-          return parseFloat(currencyMatch[1].replace(/,/g, ''))
+
+        // Strip common currency symbols and ISO codes around value
+        // Accept symbols $, €, £ and codes USD, EUR, GBP placed before/after with spaces
+        stringVal = stringVal.replace(/(^[€$£]\s*|\s*[€$£]$)/g, '')
+        stringVal = stringVal.replace(/\b(USD|EUR|GBP)\b/gi, '').trim()
+
+        // Remove thousands separators and normalize decimal
+        // Support both 1,234.56 and 1.234,56; decide by last separator
+        const hasComma = stringVal.includes(',')
+        const hasDot = stringVal.includes('.')
+        if (hasComma && hasDot) {
+          // Determine decimal separator by last occurrence
+          const lastComma = stringVal.lastIndexOf(',')
+          const lastDot = stringVal.lastIndexOf('.')
+          if (lastComma > lastDot) {
+            // comma is decimal; remove dots (thousands), replace comma with dot
+            stringVal = stringVal.replace(/\./g, '').replace(/,/g, '.')
+          } else {
+            // dot is decimal; remove commas (thousands)
+            stringVal = stringVal.replace(/,/g, '')
+          }
+        } else if (hasComma && !hasDot) {
+          // Likely European decimal comma; replace comma with dot
+          stringVal = stringVal.replace(/\./g, '') // just in case stray dots
+          stringVal = stringVal.replace(/,/g, '.')
+        } else {
+          // Remove any commas as thousands
+          stringVal = stringVal.replace(/,/g, '')
         }
-        
-        // Handle percentage values (15.5%)
-        const percentageMatch = stringVal.match(/^([\d,]+\.?\d*)%$/)
-        if (percentageMatch) {
-          return parseFloat(percentageMatch[1].replace(/,/g, '')) / 100
+
+        // Handle trailing percentage
+        let isPercent = false
+        if (/\%$/.test(stringVal)) {
+          isPercent = true
+          stringVal = stringVal.replace(/%$/, '')
         }
-        
-        // Handle numbers with thousands separators (1,234.56)
-        const numberWithCommas = stringVal.replace(/,/g, '')
-        const parsed = parseFloat(numberWithCommas)
-        
-        return isNaN(parsed) ? 0 : parsed
+
+        const parsed = parseFloat(stringVal)
+        if (isNaN(parsed)) return 0
+        let result = parsed
+        if (isNegative) result = -result
+        if (isPercent) result = result / 100
+        return result
       }
 
       // Helper function to get cell value (recursively evaluates formulas)
@@ -514,7 +556,9 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
         }
         
         const cell = data[rowIndex]?.[colIndex]
-        const cellValue = cell?.value || 0
+        // Prefer rawValue if present to avoid formatted strings (e.g., $1,234.00)
+        const rawOrValue = cell?.rawValue !== undefined ? cell.rawValue : cell?.value
+        const cellValue = rawOrValue ?? 0
         const stringValue = String(cellValue)
         
         // Debug cell value lookup for first few cells
@@ -577,7 +621,8 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
         const values = []
         for (let r = startRowIndex; r <= endRowIndex; r++) {
           for (let c = startColIndex; c <= endColIndex; c++) {
-            const cellValue = data[r]?.[c]?.value || 0
+            const rawOrValue = data[r]?.[c]?.rawValue !== undefined ? data[r][c].rawValue : data[r]?.[c]?.value
+            const cellValue = rawOrValue ?? 0
             const stringValue = String(cellValue)
             
             // If the cell contains a formula, evaluate it recursively
@@ -1261,8 +1306,11 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
       return value
     }
     
-    // Use raw value if available for more accurate formatting
-    const rawValue = cell?.rawValue !== undefined ? cell.rawValue : value
+    // Debug: Log formatting properties for formula cells
+    
+    // Use computed result for formulas, rawValue for others
+    const rawValue = cell?.isFormula ? value
+      : (cell?.rawValue !== undefined ? cell.rawValue : value)
     
     // Debug logging removed to prevent console spam during CSV uploads
     
@@ -1310,26 +1358,35 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
     }
     
     // Format numbers with currency, percentage, etc.
-    if (cell?.cellType === 'number' && cell?.numberFormat) {
+    // Check for currency/percentage formatting regardless of cellType (important for formula cells)
+    if (cell?.isCurrency || cell?.isPercentage || (cell?.cellType === 'number' && cell?.numberFormat)) {
       try {
-        const numValue = parseFloat(rawValue)
+        // Use computed result for formulas, parse rawValue for others
+        const sourceForNumber = cell?.isFormula ? value : rawValue
+        const numValue = typeof sourceForNumber === 'number'
+          ? sourceForNumber
+          : parseFloat(String(sourceForNumber).replace(/\u00A0/g, ' ').replace(/[^\d.,\-]/g, '')
+              .replace(/(?<=\d)[,](?=\d{3}\b)/g, '') // drop thousands commas
+              .replace(/,(?=\d{1,2}\b)/, '.'))       // EU decimal comma -> dot
+        
         if (!isNaN(numValue)) {
           // Use enhanced formatting properties
           if (cell.isCurrency && cell.currencySymbol) {
             const currency = cell.currencySymbol === '$' ? 'USD' : 
                            cell.currencySymbol === '€' ? 'EUR' : 
                            cell.currencySymbol === '£' ? 'GBP' : 'USD'
+            const dp = Number.isInteger(cell.decimalPlaces) ? cell.decimalPlaces : 2
             return new Intl.NumberFormat('en-US', { 
               style: 'currency', 
               currency: currency,
-              minimumFractionDigits: cell.decimalPlaces || 0,
-              maximumFractionDigits: cell.decimalPlaces || 2
+              minimumFractionDigits: dp,
+              maximumFractionDigits: dp
             }).format(numValue)
           } else if (cell.isPercentage) {
             return new Intl.NumberFormat('en-US', { 
               style: 'percent',
-              minimumFractionDigits: cell.decimalPlaces || 0,
-              maximumFractionDigits: cell.decimalPlaces || 2
+              minimumFractionDigits: Number.isInteger(cell.decimalPlaces) ? cell.decimalPlaces : 2,
+              maximumFractionDigits: Number.isInteger(cell.decimalPlaces) ? cell.decimalPlaces : 2
             }).format(numValue / 100)
           } else if (cell.decimalPlaces !== null && cell.decimalPlaces !== undefined) {
             return numValue.toFixed(cell.decimalPlaces)
@@ -1350,17 +1407,18 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
             const currency = cell.currencySymbol === '$' ? 'USD' : 
                            cell.currencySymbol === '€' ? 'EUR' : 
                            cell.currencySymbol === '£' ? 'GBP' : 'USD'
+            const dp = Number.isInteger(cell.decimalPlaces) ? cell.decimalPlaces : 2
             return new Intl.NumberFormat('en-US', { 
               style: 'currency', 
               currency: currency,
-              minimumFractionDigits: cell.decimalPlaces || 0,
-              maximumFractionDigits: cell.decimalPlaces || 2
+              minimumFractionDigits: dp,
+              maximumFractionDigits: dp
             }).format(numValue)
           } else if (cell.isPercentage) {
             return new Intl.NumberFormat('en-US', { 
               style: 'percent',
-              minimumFractionDigits: cell.decimalPlaces || 0,
-              maximumFractionDigits: cell.decimalPlaces || 2
+              minimumFractionDigits: Number.isInteger(cell.decimalPlaces) ? cell.decimalPlaces : 2,
+              maximumFractionDigits: Number.isInteger(cell.decimalPlaces) ? cell.decimalPlaces : 2
             }).format(numValue / 100)
           }
         }
@@ -1611,7 +1669,8 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
                     actualColIndex <= Math.max(dragStart.col, dragEnd.col)
                   
                   // Determine if this is a numeric value for right alignment
-                  const isNumeric = !isFormula && (
+                  // Right-align when the shown content is numeric (including formula results)
+                  const isNumeric = (!shouldShowFormula) && (
                     (!isNaN(parseFloat(displayValue)) && displayValue !== '') ||
                     cell?.isDate ||
                     cell?.isCurrency ||

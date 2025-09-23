@@ -109,6 +109,20 @@ function App() {
                     currencySymbol: null         // Will be extracted from format
                   }
                   
+                  // Check if cell value contains € symbol and treat as currency
+                  if (cell.v && typeof cell.v === 'string' && cell.v.includes('€')) {
+                    console.log(`€ symbol found in cell ${cellAddress} value:`, cell.v)
+                    formatInfo.isCurrency = true
+                    formatInfo.currencySymbol = '€'
+                  }
+                  
+                  // ALSO check the raw cell value for € symbols (for formula results)
+                  if (cell && typeof cell === 'string' && cell.includes('€')) {
+                    console.log(`€ symbol found in raw cell ${cellAddress} value:`, cell)
+                    formatInfo.isCurrency = true
+                    formatInfo.currencySymbol = '€'
+                  }
+                  
                   // Enhanced format analysis
                   if (formatInfo.numberFormat) {
                     const format = formatInfo.numberFormat.toLowerCase()
@@ -121,11 +135,24 @@ function App() {
                     }
                     
                     // Detect currency formats
-                    if (format.includes('$') || format.includes('€') || format.includes('£')) {
+                    if (format.includes('$') || format.includes('€') || format.includes('£') || 
+                        format.includes('currency') || format.includes('eur') || format.includes('usd') ||
+                        format.includes('gbp') || format.includes('euro') || format.includes('dollar')) {
                       formatInfo.isCurrency = true
-                      if (format.includes('$')) formatInfo.currencySymbol = '$'
-                      else if (format.includes('€')) formatInfo.currencySymbol = '€'
-                      else if (format.includes('£')) formatInfo.currencySymbol = '£'
+                      if (format.includes('$') || format.includes('usd') || format.includes('dollar')) {
+                        formatInfo.currencySymbol = '$'
+                      } else if (format.includes('€') || format.includes('eur') || format.includes('euro')) {
+                        formatInfo.currencySymbol = '€'
+                      } else if (format.includes('£') || format.includes('gbp')) {
+                        formatInfo.currencySymbol = '£'
+                      } else {
+                        formatInfo.currencySymbol = '$' // default
+                      }
+                      
+                      // Log only € currency detection
+                      if (formatInfo.currencySymbol === '€') {
+                        console.log(`€ currency formatting detected in cell ${cellAddress}`)
+                      }
                     }
                     
                     // Detect percentage formats
@@ -146,7 +173,6 @@ function App() {
                   
                   // Replace the value with the formula if it exists
                   if (cell.f && jsonData[row] && jsonData[row][col] !== undefined) {
-                    console.log(`Found formula in cell ${cellAddress}: ${cell.f}`)
                     jsonData[row][col] = '=' + cell.f
                   }
                 }
@@ -183,6 +209,25 @@ function App() {
           }
         }
         
+        // First pass: detect currency columns by looking for € symbols in column values
+        const currencyColumns = new Set()
+        jsonData.forEach((row, rowIndex) => {
+          row.forEach((cell, colIndex) => {
+            if (cell && typeof cell === 'string' && cell.includes('€')) {
+              currencyColumns.add(colIndex)
+            }
+            // Also check numberFormat for currency patterns
+            const fmt = cellFormats[rowIndex]?.[colIndex]?.numberFormat || ''
+            if (/[€$£]|(eur|usd|gbp|currency|accounting)/i.test(fmt)) {
+              currencyColumns.add(colIndex)
+            }
+          })
+        })
+        
+        if (currencyColumns.size > 0) {
+          console.log('Currency columns detected:', Array.from(currencyColumns).map(col => String.fromCharCode(65 + col)))
+        }
+        
         // Convert to react-spreadsheet format with formatting information
         const spreadsheetFormat = jsonData.map((row, rowIndex) => 
           row.map((cell, colIndex) => {
@@ -196,6 +241,37 @@ function App() {
             let isCurrency = formatInfo.isCurrency || false
             let isPercentage = formatInfo.isPercentage || false
             let currencySymbol = formatInfo.currencySymbol
+            
+            // If this column contains currency values, treat formula cells as currency too
+            if (currencyColumns.has(colIndex) && formatInfo.isFormula) {
+              isCurrency = true
+              currencySymbol = '€'
+              cellType = 'number'
+            }
+            
+            // Extra fallback: infer from numberFormat even if raw text has "=..."
+            if (formatInfo.isFormula && !isCurrency) {
+              const nf = (formatInfo.numberFormat || '').toLowerCase()
+              if (nf.includes('€') || nf.includes('eur') || nf.includes('euro')) {
+                isCurrency = true
+                currencySymbol = '€'
+              } else if (nf.includes('$') || nf.includes('usd') || nf.includes('dollar')) {
+                isCurrency = true
+                currencySymbol = '$'
+              } else if (nf.includes('£') || nf.includes('gbp')) {
+                isCurrency = true
+                currencySymbol = '£'
+              }
+              if (isCurrency) cellType = 'number'
+            }
+            
+            // ALSO check if the actual cell value contains € symbol
+            if (cell && typeof cell === 'string' && cell.includes('€')) {
+              // console: detected € in value
+              isCurrency = true
+              currencySymbol = '€'
+              cellType = 'number'
+            }
             
             // Use enhanced format analysis results
             if (formatInfo.isDate) {
@@ -245,6 +321,7 @@ function App() {
               originalFormat: formatInfo
             }
             
+            
             // Use formatted data if available, otherwise use raw
             const formattedValue = formattedData && formattedData[rowIndex] ? formattedData[rowIndex][colIndex] : cell || ''
             const rawValue = cell || ''
@@ -254,6 +331,38 @@ function App() {
             if (formatInfo.isFormula) {
               // Store the formula string (with = prefix)
               cellValue = cell
+              // For formula cells, we need to ensure they get the proper cellType for formatting
+              // If the original cell had a numeric type, preserve it for formula formatting
+              if (formatInfo.cellType === 'n' || formatInfo.cellType === 'number') {
+                cellType = 'number'
+              }
+              
+              // CRITICAL: For formula cells, preserve ALL formatting properties from the original cell
+              // This ensures currency formatting is maintained for formula cells
+              if (formatInfo.isCurrency) {
+                isCurrency = formatInfo.isCurrency
+                currencySymbol = formatInfo.currencySymbol
+              }
+              if (formatInfo.isPercentage) {
+                isPercentage = formatInfo.isPercentage
+              }
+              if (formatInfo.decimalPlaces !== null) {
+                decimalPlaces = formatInfo.decimalPlaces
+              }
+              if (formatInfo.numberFormat) {
+                numberFormat = formatInfo.numberFormat
+              }
+              
+              // Debug: Log formula cell formatting properties
+              if (rowIndex < 3 && colIndex < 3) {
+                console.log(`Formula cell R${rowIndex + 1}C${colIndex + 1}:`, {
+                  formula: cell,
+                  formatInfo: formatInfo,
+                  isCurrency: isCurrency,
+                  currencySymbol: currencySymbol,
+                  cellType: cellType
+                })
+              }
             } else {
               // Use formatted value for non-formulas
               cellValue = formattedValue
@@ -269,9 +378,6 @@ function App() {
           })
         )
         
-        console.log('Original data:', jsonData.slice(0, 5)) // Debug first 5 rows
-        console.log('Spreadsheet format:', spreadsheetFormat.slice(0, 5)) // Debug first 5 rows
-        console.log('Cell formats extracted:', Object.keys(cellFormats).length, 'rows with formatting')
         
         // Log some formatting examples (reduced logging)
         const formatExamples = []
@@ -388,17 +494,18 @@ function App() {
             const currency = cellInfo.currencySymbol === '$' ? 'USD' : 
                            cellInfo.currencySymbol === '€' ? 'EUR' : 
                            cellInfo.currencySymbol === '£' ? 'GBP' : 'USD'
+            const dp = Number.isInteger(cellInfo.decimalPlaces) ? cellInfo.decimalPlaces : 2
             return new Intl.NumberFormat('en-US', { 
               style: 'currency', 
               currency: currency,
-              minimumFractionDigits: cellInfo.decimalPlaces || 0,
-              maximumFractionDigits: cellInfo.decimalPlaces || 2
+              minimumFractionDigits: dp,
+              maximumFractionDigits: dp
             }).format(numValue)
           } else if (cellInfo.isPercentage) {
             return new Intl.NumberFormat('en-US', { 
               style: 'percent',
-              minimumFractionDigits: cellInfo.decimalPlaces || 0,
-              maximumFractionDigits: cellInfo.decimalPlaces || 2
+              minimumFractionDigits: Number.isInteger(cellInfo.decimalPlaces) ? cellInfo.decimalPlaces : 2,
+              maximumFractionDigits: Number.isInteger(cellInfo.decimalPlaces) ? cellInfo.decimalPlaces : 2
             }).format(numValue / 100)
           } else if (cellInfo.decimalPlaces !== null && cellInfo.decimalPlaces !== undefined) {
             return numValue.toFixed(cellInfo.decimalPlaces)
@@ -437,6 +544,72 @@ function App() {
       const testCell = spreadsheetData[0][0]
       console.log('Test Cell (A1):', testCell)
     }
+  }
+
+  // Debug function specifically for formula cells with currency formatting
+  window.debugFormulaCurrency = () => {
+    console.log('=== FORMULA CURRENCY DEBUG ===')
+    if (!spreadsheetData.length) {
+      console.log('No spreadsheet data available')
+      return
+    }
+    
+    let foundCurrencyFormulas = false
+    spreadsheetData.forEach((row, rowIndex) => {
+      row.forEach((cell, colIndex) => {
+        if (cell?.isFormula && cell?.isCurrency) {
+          foundCurrencyFormulas = true
+          console.log(`Currency formula R${rowIndex + 1}C${colIndex + 1}:`, {
+            value: cell.value,
+            isCurrency: cell.isCurrency,
+            currencySymbol: cell.currencySymbol,
+            decimalPlaces: cell.decimalPlaces,
+            cellType: cell.cellType,
+            numberFormat: cell.numberFormat
+          })
+        }
+      })
+    })
+    
+    if (!foundCurrencyFormulas) {
+      console.log('No currency formula cells found')
+    }
+  }
+
+  // Debug function to show all number formats found in the file
+  window.debugNumberFormats = () => {
+    console.log('=== NUMBER FORMATS DEBUG ===')
+    if (!excelData?.cellFormats) {
+      console.log('No cell formats available')
+      return
+    }
+    
+    const formats = new Set()
+    Object.keys(excelData.cellFormats).forEach(row => {
+      Object.keys(excelData.cellFormats[row]).forEach(col => {
+        const format = excelData.cellFormats[row][col]
+        if (format.numberFormat) {
+          formats.add(format.numberFormat)
+        }
+      })
+    })
+    
+    console.log('All number formats found:', Array.from(formats))
+    
+    // Show cells with currency-like formats
+    Object.keys(excelData.cellFormats).forEach(row => {
+      Object.keys(excelData.cellFormats[row]).forEach(col => {
+        const format = excelData.cellFormats[row][col]
+        if (format.numberFormat && (format.numberFormat.includes('$') || format.numberFormat.includes('€') || format.numberFormat.includes('£'))) {
+          console.log(`Currency format in R${parseInt(row)+1}C${parseInt(col)+1}:`, {
+            numberFormat: format.numberFormat,
+            isFormula: format.isFormula,
+            isCurrency: format.isCurrency,
+            currencySymbol: format.currencySymbol
+          })
+        }
+      })
+    })
   }
 
   const downloadAsExcel = useCallback(() => {
