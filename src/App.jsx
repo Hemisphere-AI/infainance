@@ -4,8 +4,32 @@ import * as XLSX from 'xlsx'
 import ReactSpreadsheet from './UniverSpreadsheet'
 import ChatInterface from './components/ChatInterface'
 import { LLMService } from './services/llmService'
+import { AuthProvider, useAuth } from './contexts/AuthContext'
+import LoginPage from './components/LoginPage'
+import UserProfile from './components/UserProfile'
 
-function App() {
+function MainApp() {
+  const { user, loading } = useAuth()
+
+  if (loading) {
+    return (
+      <div className="h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading...</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (!user) {
+    return <LoginPage />
+  }
+
+  return <ExcelApp />
+}
+
+function ExcelApp() {
   const [excelData, setExcelData] = useState(null)
   const [fileName, setFileName] = useState('')
   const [isDragOver, setIsDragOver] = useState(false)
@@ -827,23 +851,26 @@ function App() {
     <div className="h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex flex-col overflow-hidden">
       {/* Header */}
       <div className="bg-white border-b border-gray-200 px-6 py-4 flex-shrink-0">
-        <div className="flex items-center space-x-3">
-          <div className="w-8 h-8 bg-gradient-to-br from-yellow-400 to-orange-500 rounded-full flex items-center justify-center">
-            <div className="relative w-5 h-5">
-              {/* 4-point star with central square and triangular points */}
-              {/* Central square */}
-              <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-2 h-2 bg-white"></div>
-              {/* Top point */}
-              <div className="absolute top-0 left-1/2 transform -translate-x-1/2 w-0 h-0 border-l-[3px] border-r-[3px] border-b-[6px] border-l-transparent border-r-transparent border-b-white"></div>
-              {/* Bottom point */}
-              <div className="absolute bottom-0 left-1/2 transform -translate-x-1/2 w-0 h-0 border-l-[3px] border-r-[3px] border-t-[6px] border-l-transparent border-r-transparent border-t-white"></div>
-              {/* Left point */}
-              <div className="absolute top-1/2 left-0 transform -translate-y-1/2 w-0 h-0 border-t-[3px] border-b-[3px] border-r-[6px] border-t-transparent border-b-transparent border-r-white"></div>
-              {/* Right point */}
-              <div className="absolute top-1/2 right-0 transform -translate-y-1/2 w-0 h-0 border-t-[3px] border-b-[3px] border-l-[6px] border-t-transparent border-b-transparent border-l-white"></div>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-3">
+            <div className="w-8 h-8 bg-gradient-to-br from-yellow-400 to-orange-500 rounded-full flex items-center justify-center">
+              <div className="relative w-5 h-5">
+                {/* 4-point star with central square and triangular points */}
+                {/* Central square */}
+                <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-2 h-2 bg-white"></div>
+                {/* Top point */}
+                <div className="absolute top-0 left-1/2 transform -translate-x-1/2 w-0 h-0 border-l-[3px] border-r-[3px] border-b-[6px] border-l-transparent border-r-transparent border-b-white"></div>
+                {/* Bottom point */}
+                <div className="absolute bottom-0 left-1/2 transform -translate-x-1/2 w-0 h-0 border-l-[3px] border-r-[3px] border-t-[6px] border-l-transparent border-r-transparent border-t-white"></div>
+                {/* Left point */}
+                <div className="absolute top-1/2 left-0 transform -translate-y-1/2 w-0 h-0 border-t-[3px] border-b-[3px] border-r-[6px] border-t-transparent border-b-transparent border-r-white"></div>
+                {/* Right point */}
+                <div className="absolute top-1/2 right-0 transform -translate-y-1/2 w-0 h-0 border-t-[3px] border-b-[3px] border-l-[6px] border-t-transparent border-b-transparent border-l-white"></div>
+              </div>
             </div>
+            <h1 className="text-xl font-bold text-gray-800">Zenith</h1>
           </div>
-          <h1 className="text-xl font-bold text-gray-800">Zenith</h1>
+          <UserProfile />
         </div>
       </div>
       {!excelData ? (
@@ -852,10 +879,10 @@ function App() {
           {/* Upload Instructions */}
           <div className="text-center mb-8">
             <h2 className="text-3xl font-bold text-gray-800 mb-2">
-              Excel Preview App
+              Welcome to Zenith
             </h2>
             <p className="text-gray-600 text-lg">
-              Upload and preview your Excel files with ease
+              Upload and analyze your data with AI
             </p>
           </div>
 
@@ -1060,6 +1087,14 @@ function App() {
         </div>
       )}
     </div>
+  )
+}
+
+function App() {
+  return (
+    <AuthProvider>
+      <MainApp />
+    </AuthProvider>
   )
 }
 

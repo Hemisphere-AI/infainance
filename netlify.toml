@@ -1,0 +1,15 @@
+[build]
+  publish = "dist"
+  command = "npm run build"
+
+[build.environment]
+  NODE_VERSION = "18"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# Environment variables needed for the app:
+# VITE_OPENAI_KEY - Your OpenAI API key
+# VITE_GOOGLE_CLIENT_ID - Your Google OAuth client ID
