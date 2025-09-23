@@ -38,6 +38,7 @@ function ExcelApp() {
   const [formulaDisplayMode, setFormulaDisplayMode] = useState(0) // 0: normal, 1: highlight formulas, 2: show all formulas
   const [selectedCells, setSelectedCells] = useState([]) // Array of selected cell coordinates
   const [isChatLoading, setIsChatLoading] = useState(false)
+  const [customApiKey, setCustomApiKey] = useState('')
   const toolCallHandlerRef = useRef(null)
   const llmServiceRef = useRef(null)
 
@@ -665,9 +666,9 @@ function ExcelApp() {
   const hasSpreadsheetData = spreadsheetData.length > 0;
   useEffect(() => {
     if (hasSpreadsheetData) {
-      llmServiceRef.current = new LLMService(spreadsheetData, setSpreadsheetData, toolCallHandlerRef.current)
+      llmServiceRef.current = new LLMService(spreadsheetData, setSpreadsheetData, toolCallHandlerRef.current, customApiKey)
     }
-  }, [hasSpreadsheetData, spreadsheetData])
+  }, [hasSpreadsheetData, spreadsheetData, customApiKey])
 
   // Handle chat messages
   const handleChatMessage = useCallback(async (message) => {
@@ -692,6 +693,11 @@ function ExcelApp() {
     if (llmServiceRef.current) {
       llmServiceRef.current.clearHistory()
     }
+  }, [])
+
+  // Handle API key changes
+  const handleApiKeyChange = useCallback((apiKey) => {
+    setCustomApiKey(apiKey)
   }, [])
 
 
@@ -876,15 +882,6 @@ function ExcelApp() {
       {!excelData ? (
         // Upload state - centered layout
         <div className="flex-1 flex flex-col items-center justify-center px-4 py-8">
-          {/* Upload Instructions */}
-          <div className="text-center mb-8">
-            <h2 className="text-3xl font-bold text-gray-800 mb-2">
-              Welcome to Zenith
-            </h2>
-            <p className="text-gray-600 text-lg">
-              Upload and analyze your data with AI
-            </p>
-          </div>
 
           {/* Upload Area */}
           <div className="max-w-2xl mx-auto">
@@ -1082,6 +1079,7 @@ function ExcelApp() {
               isLoading={isChatLoading}
               onClearHistory={handleClearHistory}
               onToolCall={(handler) => { toolCallHandlerRef.current = handler; }}
+              onApiKeyChange={handleApiKeyChange}
             />
           </div>
         </div>

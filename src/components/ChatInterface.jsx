@@ -1,9 +1,15 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import PropTypes from 'prop-types';
-import { Send, Bot, User, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
+import { Send, Bot, User, Loader2, ChevronDown, ChevronUp, Key, Eye, EyeOff } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
 
-const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToolCall = null }) => {
+const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToolCall = null, onApiKeyChange = null }) => {
+  const { user } = useAuth();
   const [message, setMessage] = useState('');
+  const [openaiKey, setOpenaiKey] = useState('');
+  const [showKey, setShowKey] = useState(false);
+  const [keyError, setKeyError] = useState('');
+  const [isKeySectionCollapsed, setIsKeySectionCollapsed] = useState(true);
   const [messages, setMessages] = useState([
     {
       id: 1,
@@ -50,9 +56,55 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
     }
   }, [onToolCall, handleToolCall]);
 
+  // Auto-collapse when valid key is detected
+  useEffect(() => {
+    if (hasValidKey()) {
+      setIsKeySectionCollapsed(true);
+    }
+  }, [openaiKey, user]);
+
+
+  const handleKeyChange = (e) => {
+    setOpenaiKey(e.target.value);
+    setKeyError('');
+    
+    // Notify parent component about API key change
+    if (onApiKeyChange) {
+      onApiKeyChange(e.target.value);
+    }
+  };
+
+  // Check if we have a valid key to determine if section should be collapsed
+  const hasValidKey = () => {
+    if (!user) return false;
+    
+    // If user is the demo user, they can use the environment key
+    if (user.email === import.meta.env.VITE_DEMO_USER) {
+      return true;
+    }
+    
+    // If user entered the demo key from environment, they can use the environment key
+    if (openaiKey.trim() === import.meta.env.VITE_DEMO_KEY) {
+      return true;
+    }
+    
+    // If user entered a valid-looking OpenAI key
+    if (openaiKey.trim().startsWith('sk-') && openaiKey.trim().length > 20) {
+      return true;
+    }
+    
+    return false;
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!message.trim() || isLoading) return;
+
+    // Check if user has valid key access
+    if (!hasValidKey()) {
+      setKeyError('Please enter a valid OpenAI API key');
+      return;
+    }
 
     const userMessage = {
       id: Date.now(),
@@ -282,6 +334,92 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
         </p>
       </div>
 
+      {/* OpenAI Key Input */}
+      <div className="border-b border-gray-200 bg-gray-50">
+        {/* Collapsible Header */}
+        <button
+          onClick={() => setIsKeySectionCollapsed(!isKeySectionCollapsed)}
+          className="w-full p-4 flex items-center justify-between hover:bg-gray-100 transition-colors"
+        >
+          <div className="flex items-center space-x-2">
+            <Key className="w-4 h-4 text-gray-500" />
+            <span className="text-sm font-medium text-gray-700">OpenAI API Key</span>
+            {hasValidKey() && (
+              <span className="text-xs text-green-600 bg-green-100 px-2 py-1 rounded-full">
+                ✓ Configured
+              </span>
+            )}
+          </div>
+          <div className="flex items-center space-x-2">
+            {hasValidKey() && (
+              <span className="text-xs text-gray-500">
+                {user?.email === import.meta.env.VITE_DEMO_USER
+                  ? 'Environment key' 
+                  : openaiKey.trim() === import.meta.env.VITE_DEMO_KEY
+                    ? 'Demo key' 
+                    : 'Custom key'
+                }
+              </span>
+            )}
+            {isKeySectionCollapsed ? (
+              <ChevronDown className="w-4 h-4 text-gray-400" />
+            ) : (
+              <ChevronUp className="w-4 h-4 text-gray-400" />
+            )}
+          </div>
+        </button>
+
+        {/* Collapsible Content */}
+        {!isKeySectionCollapsed && (
+          <div className="px-4 pb-4 space-y-2">
+            <div className="flex space-x-2">
+              <div className="flex-1 relative">
+                <input
+                  type={showKey ? "text" : "password"}
+                  value={openaiKey}
+                  onChange={handleKeyChange}
+                  placeholder={
+                    user?.email === import.meta.env.VITE_DEMO_USER
+                      ? "Using environment key (demo user)" 
+                      : "Enter your OpenAI API key"
+                  }
+                  className={`w-full px-3 py-2 pr-10 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                    keyError ? 'border-red-300' : 'border-gray-300'
+                  }`}
+                  disabled={user?.email === import.meta.env.VITE_DEMO_USER}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowKey(!showKey)}
+                  className="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  disabled={user?.email === import.meta.env.VITE_DEMO_USER}
+                >
+                  {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+            {keyError && (
+              <p className="text-sm text-red-600">{keyError}</p>
+            )}
+            {user?.email === import.meta.env.VITE_DEMO_USER && (
+              <p className="text-xs text-green-600">
+                ✓ Using environment key for demo user
+              </p>
+            )}
+            {openaiKey.trim() === import.meta.env.VITE_DEMO_KEY && user?.email !== import.meta.env.VITE_DEMO_USER && (
+              <p className="text-xs text-blue-600">
+                ✓ Using demo key
+              </p>
+            )}
+            {openaiKey.trim().startsWith('sk-') && openaiKey.trim().length > 20 && (
+              <p className="text-xs text-green-600">
+                ✓ Using your OpenAI API key
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* Messages */}
       <div 
         ref={messagesContainerRef}
@@ -461,7 +599,8 @@ ChatInterface.propTypes = {
   onSendMessage: PropTypes.func.isRequired,
   isLoading: PropTypes.bool,
   onClearHistory: PropTypes.func,
-  onToolCall: PropTypes.func
+  onToolCall: PropTypes.func,
+  onApiKeyChange: PropTypes.func
 };
 
 export default ChatInterface;

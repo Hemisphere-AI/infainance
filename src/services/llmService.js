@@ -18,11 +18,12 @@ const openai = new OpenAI({
  * LLM Service for spreadsheet interaction
  */
 export class LLMService {
-  constructor(spreadsheetData, onDataChange, onToolCall = null) {
+  constructor(spreadsheetData, onDataChange, onToolCall = null, customApiKey = null) {
     this.spreadsheetData = spreadsheetData;
     this.onDataChange = onDataChange;
     this.onToolCall = onToolCall; // Callback for tool call visibility
     this.conversationHistory = [];
+    this.customApiKey = customApiKey;
   }
 
   /**
@@ -1273,10 +1274,26 @@ export class LLMService {
    */
   async chat(userText) {
     try {
+      // Determine which API key to use
+      let apiKeyToUse;
+      if (this.customApiKey && this.customApiKey !== import.meta.env.VITE_DEMO_KEY) {
+        // Use custom API key if provided and not the demo key
+        apiKeyToUse = this.customApiKey;
+      } else {
+        // Use environment key for demo user or demo key
+        apiKeyToUse = import.meta.env.VITE_OPENAI_KEY;
+      }
+
       // Check if API key is properly configured
-      if (!import.meta.env.VITE_OPENAI_KEY || import.meta.env.VITE_OPENAI_KEY === 'your_openai_api_key_here') {
+      if (!apiKeyToUse || apiKeyToUse === 'your_openai_api_key_here') {
         throw new Error('OpenAI API key not configured.');
       }
+
+      // Create OpenAI client with the appropriate API key
+      const openaiClient = new OpenAI({
+        apiKey: apiKeyToUse,
+        dangerouslyAllowBrowser: true
+      });
 
       // Add user message to history
       this.addToHistory("user", userText);
@@ -1294,7 +1311,7 @@ export class LLMService {
       ];
 
       // 1) Ask model with tools
-      let response = await openai.chat.completions.create({
+      let response = await openaiClient.chat.completions.create({
         model: "gpt-4o",
         messages: messages,
         tools: tools,
@@ -1414,7 +1431,7 @@ export class LLMService {
         }
 
         // Get next response from the model
-        response = await openai.chat.completions.create({
+        response = await openaiClient.chat.completions.create({
           model: "gpt-4o",
           messages: messages,
           tools: tools,
