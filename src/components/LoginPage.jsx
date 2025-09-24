@@ -1,9 +1,9 @@
 import React, { useEffect, useRef } from 'react'
-import { useAuth } from '../contexts/AuthContext'
-import { Lock, Shield, Users, Check } from 'lucide-react'
+import { useAuth } from '../hooks/useAuth'
+import { Shield, Check } from 'lucide-react'
 
 const LoginPage = () => {
-  const { signIn, loading, error } = useAuth()
+  const { error } = useAuth()
   const googleButtonRef = useRef(null)
 
   useEffect(() => {

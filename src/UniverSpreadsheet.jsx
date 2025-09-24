@@ -524,7 +524,7 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
 
         // Handle trailing percentage
         let isPercent = false
-        if (/\%$/.test(stringVal)) {
+        if (/%$/.test(stringVal)) {
           isPercent = true
           stringVal = stringVal.replace(/%$/, '')
         }
@@ -1240,16 +1240,16 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
 
 
   // Helper function to format date values
-  const formatDateValue = useCallback((result) => {
-    if (result && typeof result === 'object' && result.type) {
-      if (result.type === 'date') {
-        return result.value.toLocaleDateString()
-      } else if (result.type === 'datetime') {
-        return result.value.toLocaleString()
-      }
-    }
-    return result
-  }, [])
+  // const formatDateValue = useCallback((result) => {
+  //   if (result && typeof result === 'object' && result.type) {
+  //     if (result.type === 'date') {
+  //       return result.value.toLocaleDateString()
+  //     } else if (result.type === 'datetime') {
+  //       return result.value.toLocaleString()
+  //     }
+  //   }
+  //   return result
+  // }, [])
 
   // Get display value for a cell with memoization
   const getCellDisplayValue = useCallback((cell, rowIndex, colIndex) => {
@@ -1304,6 +1304,11 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
     // If it's a formula result, return as-is
     if (typeof value === 'string' && value.startsWith('=')) {
       return value
+    }
+    
+    // Debug: Log all currency cells
+    if (cell?.isCurrency) {
+      // Debug logging for currency cells
     }
     
     // Debug: Log formatting properties for formula cells
@@ -1365,9 +1370,10 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
         const sourceForNumber = cell?.isFormula ? value : rawValue
         const numValue = typeof sourceForNumber === 'number'
           ? sourceForNumber
-          : parseFloat(String(sourceForNumber).replace(/\u00A0/g, ' ').replace(/[^\d.,\-]/g, '')
+          : parseFloat(String(sourceForNumber).replace(/\u00A0/g, ' ').replace(/[^\d.,-]/g, '')
               .replace(/(?<=\d)[,](?=\d{3}\b)/g, '') // drop thousands commas
               .replace(/,(?=\d{1,2}\b)/, '.'))       // EU decimal comma -> dot
+        
         
         if (!isNaN(numValue)) {
           // Use enhanced formatting properties
@@ -1376,18 +1382,29 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
                            cell.currencySymbol === '€' ? 'EUR' : 
                            cell.currencySymbol === '£' ? 'GBP' : 'USD'
             const dp = Number.isInteger(cell.decimalPlaces) ? cell.decimalPlaces : 2
-            return new Intl.NumberFormat('en-US', { 
+            
+            
+            
+            const formatted = new Intl.NumberFormat('en-US', { 
               style: 'currency', 
               currency: currency,
               minimumFractionDigits: dp,
               maximumFractionDigits: dp
             }).format(numValue)
+            
+            
+            return formatted
           } else if (cell.isPercentage) {
+            // Check if the value is already a percentage (between 0 and 1) or a whole percentage (like 40)
+            const isAlreadyPercentage = numValue >= 0 && numValue <= 1
+            const percentageValue = isAlreadyPercentage ? numValue : numValue / 100
+            
+            
             return new Intl.NumberFormat('en-US', { 
               style: 'percent',
               minimumFractionDigits: Number.isInteger(cell.decimalPlaces) ? cell.decimalPlaces : 2,
               maximumFractionDigits: Number.isInteger(cell.decimalPlaces) ? cell.decimalPlaces : 2
-            }).format(numValue / 100)
+            }).format(percentageValue)
           } else if (cell.decimalPlaces !== null && cell.decimalPlaces !== undefined) {
             return numValue.toFixed(cell.decimalPlaces)
           }
@@ -1408,18 +1425,27 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
                            cell.currencySymbol === '€' ? 'EUR' : 
                            cell.currencySymbol === '£' ? 'GBP' : 'USD'
             const dp = Number.isInteger(cell.decimalPlaces) ? cell.decimalPlaces : 2
-            return new Intl.NumberFormat('en-US', { 
+            
+            
+            const formatted = new Intl.NumberFormat('en-US', { 
               style: 'currency', 
               currency: currency,
               minimumFractionDigits: dp,
               maximumFractionDigits: dp
             }).format(numValue)
+            
+            
+            return formatted
           } else if (cell.isPercentage) {
+            // Check if the value is already a percentage (between 0 and 1) or a whole percentage (like 40)
+            const isAlreadyPercentage = numValue >= 0 && numValue <= 1
+            const percentageValue = isAlreadyPercentage ? numValue : numValue / 100
+            
             return new Intl.NumberFormat('en-US', { 
               style: 'percent',
               minimumFractionDigits: Number.isInteger(cell.decimalPlaces) ? cell.decimalPlaces : 2,
               maximumFractionDigits: Number.isInteger(cell.decimalPlaces) ? cell.decimalPlaces : 2
-            }).format(numValue / 100)
+            }).format(percentageValue)
           }
         }
       } catch (error) {
@@ -1775,6 +1801,7 @@ export default memo(ReactSpreadsheet, (prevProps, nextProps) => {
 ReactSpreadsheet.propTypes = {
   data: PropTypes.arrayOf(PropTypes.arrayOf(PropTypes.shape({
     value: PropTypes.oneOfType([PropTypes.string, PropTypes.number]),
+    rawValue: PropTypes.oneOfType([PropTypes.string, PropTypes.number]),
     className: PropTypes.string,
     decimalPlaces: PropTypes.number,
     isDate: PropTypes.bool

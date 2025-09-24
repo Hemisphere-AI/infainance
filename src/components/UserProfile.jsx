@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
-import { useAuth } from '../contexts/AuthContext'
-import { LogOut, User, Mail, ChevronDown, ChevronUp } from 'lucide-react'
+import { useAuth } from '../hooks/useAuth'
+import { LogOut, ChevronDown, ChevronUp } from 'lucide-react'
 
 const UserProfile = () => {
   const { user, signOut } = useAuth()

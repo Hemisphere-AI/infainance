@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import PropTypes from 'prop-types';
 import { Send, Bot, User, Loader2, ChevronDown, ChevronUp, Key, Eye, EyeOff } from 'lucide-react';
-import { useAuth } from '../contexts/AuthContext';
+import { useAuth } from '../hooks/useAuth';
 
 const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToolCall = null, onApiKeyChange = null }) => {
   const { user } = useAuth();
@@ -56,26 +56,8 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
     }
   }, [onToolCall, handleToolCall]);
 
-  // Auto-collapse when valid key is detected
-  useEffect(() => {
-    if (hasValidKey()) {
-      setIsKeySectionCollapsed(true);
-    }
-  }, [openaiKey, user]);
-
-
-  const handleKeyChange = (e) => {
-    setOpenaiKey(e.target.value);
-    setKeyError('');
-    
-    // Notify parent component about API key change
-    if (onApiKeyChange) {
-      onApiKeyChange(e.target.value);
-    }
-  };
-
   // Check if we have a valid key to determine if section should be collapsed
-  const hasValidKey = () => {
+  const hasValidKey = useCallback(() => {
     if (!user) return false;
     
     // If user is the demo user, they can use the environment key
@@ -94,7 +76,14 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
     }
     
     return false;
-  };
+  }, [user, openaiKey]);
+
+  // Auto-collapse when valid key is detected
+  useEffect(() => {
+    if (hasValidKey()) {
+      setIsKeySectionCollapsed(true);
+    }
+  }, [openaiKey, user, hasValidKey]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();

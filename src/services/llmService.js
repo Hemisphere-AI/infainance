@@ -9,10 +9,10 @@ if (!apiKey || apiKey === 'your_openai_api_key_here') {
   console.warn('OpenAI API key not set. Please set VITE_OPENAI_KEY in your .env file.');
 }
 
-const openai = new OpenAI({
-  apiKey: apiKey,
-  dangerouslyAllowBrowser: true // Note: In production, this should be handled by a backend
-});
+  // const openai = new OpenAI({
+  //   apiKey: apiKey,
+  //   dangerouslyAllowBrowser: true // Note: In production, this should be handled by a backend
+  // });
 
 /**
  * LLM Service for spreadsheet interaction

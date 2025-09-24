@@ -4,7 +4,8 @@ import * as XLSX from 'xlsx'
 import ReactSpreadsheet from './UniverSpreadsheet'
 import ChatInterface from './components/ChatInterface'
 import { LLMService } from './services/llmService'
-import { AuthProvider, useAuth } from './contexts/AuthContext'
+import { AuthProvider } from './contexts/AuthContext.jsx'
+import { useAuth } from './hooks/useAuth'
 import LoginPage from './components/LoginPage'
 import UserProfile from './components/UserProfile'
 
@@ -65,7 +66,12 @@ function ExcelApp() {
     reader.onload = (e) => {
       try {
         const data = new Uint8Array(e.target.result)
-        const workbook = XLSX.read(data, { type: 'array' })
+        const workbook = XLSX.read(data, { 
+          type: 'array',
+          cellStyles: true,  // Enable cell styles
+          cellNF: true,     // Enable number formats
+          cellHTML: false   // Disable HTML conversion
+        })
         
         // Get the first sheet
         const firstSheetName = workbook.SheetNames[0]
@@ -98,13 +104,11 @@ function ExcelApp() {
           console.log('Formatted data sample:', formattedData.slice(0, 3))
           
           // Debug: Log the worksheet object to see what's available
-          console.log('Worksheet object keys:', Object.keys(worksheet))
-          console.log('Sample worksheet cells:', Object.keys(worksheet).filter(key => /^[A-Z]+[0-9]+$/.test(key)).slice(0, 5))
+          
           
           // Extract formatting information from each cell
           if (worksheet['!ref']) {
             const range = XLSX.utils.decode_range(worksheet['!ref'])
-            console.log('Worksheet range:', range)
             
             for (let row = range.s.r; row <= range.e.r; row++) {
               for (let col = range.s.c; col <= range.e.c; col++) {
@@ -112,10 +116,6 @@ function ExcelApp() {
                 const cell = worksheet[cellAddress]
                 
                 if (cell) {
-                  // Debug: Log only first few cells to see what's available
-                  if (row < 3 && col < 3) {
-                    console.log(`Cell ${cellAddress} full object:`, cell)
-                  }
                   
                   // Store formatting information with enhanced detection
                   const formatInfo = {
@@ -134,18 +134,33 @@ function ExcelApp() {
                     currencySymbol: null         // Will be extracted from format
                   }
                   
-                  // Check if cell value contains € symbol and treat as currency
-                  if (cell.v && typeof cell.v === 'string' && cell.v.includes('€')) {
-                    console.log(`€ symbol found in cell ${cellAddress} value:`, cell.v)
-                    formatInfo.isCurrency = true
-                    formatInfo.currencySymbol = '€'
+                  // Check if cell value contains currency symbols and treat as currency
+                  if (cell.v && typeof cell.v === 'string') {
+                    if (cell.v.includes('€')) {
+                      formatInfo.isCurrency = true
+                      formatInfo.currencySymbol = '€'
+                    } else if (cell.v.includes('$')) {
+                      formatInfo.isCurrency = true
+                      formatInfo.currencySymbol = '$'
+                    } else if (cell.v.includes('£')) {
+                      formatInfo.isCurrency = true
+                      formatInfo.currencySymbol = '£'
+                    }
                   }
                   
-                  // ALSO check the raw cell value for € symbols (for formula results)
-                  if (cell && typeof cell === 'string' && cell.includes('€')) {
-                    console.log(`€ symbol found in raw cell ${cellAddress} value:`, cell)
-                    formatInfo.isCurrency = true
-                    formatInfo.currencySymbol = '€'
+                  // ALSO check the raw cell value for currency symbols (for formula results)
+                  // BUT NOT for formula cells - they should use numberFormat instead
+                  if (cell && typeof cell === 'string' && !cell.f) {
+                    if (cell.includes('€')) {
+                      formatInfo.isCurrency = true
+                      formatInfo.currencySymbol = '€'
+                    } else if (cell.includes('$')) {
+                      formatInfo.isCurrency = true
+                      formatInfo.currencySymbol = '$'
+                    } else if (cell.includes('£')) {
+                      formatInfo.isCurrency = true
+                      formatInfo.currencySymbol = '£'
+                    }
                   }
                   
                   // Enhanced format analysis
@@ -159,25 +174,24 @@ function ExcelApp() {
                       formatInfo.isDate = true
                     }
                     
-                    // Detect currency formats
+                    // Detect currency formats - improved detection with Euro priority
                     if (format.includes('$') || format.includes('€') || format.includes('£') || 
                         format.includes('currency') || format.includes('eur') || format.includes('usd') ||
-                        format.includes('gbp') || format.includes('euro') || format.includes('dollar')) {
+                        format.includes('gbp') || format.includes('euro') || format.includes('dollar') ||
+                        format.includes('accounting') || format.includes('money')) {
                       formatInfo.isCurrency = true
-                      if (format.includes('$') || format.includes('usd') || format.includes('dollar')) {
-                        formatInfo.currencySymbol = '$'
-                      } else if (format.includes('€') || format.includes('eur') || format.includes('euro')) {
+                      
+                      // PRIORITY: Check for Euro first (to handle [$€] format correctly)
+                      if (format.includes('€') || format.includes('eur') || format.includes('euro')) {
                         formatInfo.currencySymbol = '€'
                       } else if (format.includes('£') || format.includes('gbp')) {
                         formatInfo.currencySymbol = '£'
+                      } else if (format.includes('$') || format.includes('usd') || format.includes('dollar')) {
+                        formatInfo.currencySymbol = '$'
                       } else {
-                        formatInfo.currencySymbol = '$' // default
+                        formatInfo.currencySymbol = '€' // default to euro instead of dollar
                       }
                       
-                      // Log only € currency detection
-                      if (formatInfo.currencySymbol === '€') {
-                        console.log(`€ currency formatting detected in cell ${cellAddress}`)
-                      }
                     }
                     
                     // Detect percentage formats
@@ -234,23 +248,44 @@ function ExcelApp() {
           }
         }
         
-        // First pass: detect currency columns by looking for € symbols in column values
+        // First pass: detect currency columns by looking for currency symbols in column values
         const currencyColumns = new Set()
+        const currencySymbols = new Map() // Track which symbol is used in each column
+        
         jsonData.forEach((row, rowIndex) => {
           row.forEach((cell, colIndex) => {
-            if (cell && typeof cell === 'string' && cell.includes('€')) {
-              currencyColumns.add(colIndex)
+            if (cell && typeof cell === 'string') {
+              if (cell.includes('€')) {
+                currencyColumns.add(colIndex)
+                currencySymbols.set(colIndex, '€')
+              } else if (cell.includes('$')) {
+                currencyColumns.add(colIndex)
+                currencySymbols.set(colIndex, '$')
+              } else if (cell.includes('£')) {
+                currencyColumns.add(colIndex)
+                currencySymbols.set(colIndex, '£')
+              }
             }
             // Also check numberFormat for currency patterns
             const fmt = cellFormats[rowIndex]?.[colIndex]?.numberFormat || ''
             if (/[€$£]|(eur|usd|gbp|currency|accounting)/i.test(fmt)) {
               currencyColumns.add(colIndex)
+              // Extract currency symbol from format - PRIORITY: Euro first
+              if (fmt.includes('€') || fmt.includes('eur')) {
+                currencySymbols.set(colIndex, '€')
+              } else if (fmt.includes('£') || fmt.includes('gbp')) {
+                currencySymbols.set(colIndex, '£')
+              } else if (fmt.includes('$') || fmt.includes('usd')) {
+                currencySymbols.set(colIndex, '$')
+              } else {
+                currencySymbols.set(colIndex, '€') // default to euro
+              }
             }
           })
         })
         
         if (currencyColumns.size > 0) {
-          console.log('Currency columns detected:', Array.from(currencyColumns).map(col => String.fromCharCode(65 + col)))
+          // Currency columns detected and processed
         }
         
         // Convert to react-spreadsheet format with formatting information
@@ -267,35 +302,76 @@ function ExcelApp() {
             let isPercentage = formatInfo.isPercentage || false
             let currencySymbol = formatInfo.currencySymbol
             
-            // If this column contains currency values, treat formula cells as currency too
-            if (currencyColumns.has(colIndex) && formatInfo.isFormula) {
-              isCurrency = true
-              currencySymbol = '€'
-              cellType = 'number'
+            // CRITICAL FIX: For formula cells, check the original cell's numberFormat first
+            if (formatInfo.isFormula) {
+              
+              // Use the formatting information from the original cell
+              if (formatInfo.isCurrency) {
+                isCurrency = formatInfo.isCurrency
+                currencySymbol = formatInfo.currencySymbol
+                cellType = 'number'
+              }
+              
+              // If not already detected as currency, check numberFormat
+              if (!isCurrency && formatInfo.numberFormat) {
+                const nf = formatInfo.numberFormat.toLowerCase()
+                if (nf.includes('€') || nf.includes('eur') || nf.includes('euro')) {
+                  isCurrency = true
+                  currencySymbol = '€'
+                  cellType = 'number'
+                } else if (nf.includes('$') || nf.includes('usd') || nf.includes('dollar')) {
+                  isCurrency = true
+                  currencySymbol = '$'
+                  cellType = 'number'
+                } else if (nf.includes('£') || nf.includes('gbp')) {
+                  isCurrency = true
+                  currencySymbol = '£'
+                  cellType = 'number'
+                }
+              }
             }
             
-            // Extra fallback: infer from numberFormat even if raw text has "=..."
-            if (formatInfo.isFormula && !isCurrency) {
-              const nf = (formatInfo.numberFormat || '').toLowerCase()
-              if (nf.includes('€') || nf.includes('eur') || nf.includes('euro')) {
+            // PRIORITY: Check if the actual cell value contains currency symbols FIRST
+            // BUT NOT for formula cells - they should use numberFormat instead
+            if (cell && typeof cell === 'string' && !formatInfo.isFormula) {
+              if (cell.includes('€')) {
                 isCurrency = true
                 currencySymbol = '€'
-              } else if (nf.includes('$') || nf.includes('usd') || nf.includes('dollar')) {
+                cellType = 'number'
+              } else if (cell.includes('$')) {
                 isCurrency = true
                 currencySymbol = '$'
-              } else if (nf.includes('£') || nf.includes('gbp')) {
+                cellType = 'number'
+              } else if (cell.includes('£')) {
                 isCurrency = true
                 currencySymbol = '£'
+                cellType = 'number'
               }
-              if (isCurrency) cellType = 'number'
             }
             
-            // ALSO check if the actual cell value contains € symbol
-            if (cell && typeof cell === 'string' && cell.includes('€')) {
-              // console: detected € in value
+            // FALLBACK: If this column contains currency values, treat formula cells as currency too
+            if (currencyColumns.has(colIndex) && formatInfo.isFormula && !isCurrency) {
               isCurrency = true
-              currencySymbol = '€'
+              currencySymbol = currencySymbols.get(colIndex) || '€' // Use the detected symbol for this column
               cellType = 'number'
+            }
+            
+            // CRITICAL: Ensure currency symbols are preserved and not overridden
+            if (isCurrency && !currencySymbol) {
+              // If we detected currency but no symbol, try to get it from the cell value
+              if (cell && typeof cell === 'string') {
+                if (cell.includes('€')) {
+                  currencySymbol = '€'
+                } else if (cell.includes('$')) {
+                  currencySymbol = '$'
+                } else if (cell.includes('£')) {
+                  currencySymbol = '£'
+                } else {
+                  currencySymbol = '€' // Default to euro
+                }
+              } else {
+                currencySymbol = '€' // Default to euro
+              }
             }
             
             // Use enhanced format analysis results
@@ -313,7 +389,8 @@ function ExcelApp() {
                 case 'n': 
                   cellType = 'number'; 
                   // If it's a number and looks like a date (Excel serial date), mark as date
-                  if (typeof cell === 'number' && cell > 25569 && cell < 2958465) {
+                  // BUT NOT if it's already detected as currency
+                  if (typeof cell === 'number' && cell > 25569 && cell < 2958465 && !isCurrency) {
                     isDate = true
                     cellType = 'date'
                   }
@@ -324,7 +401,8 @@ function ExcelApp() {
             }
             
             // Additional date detection for Excel serial dates
-            if (typeof cell === 'number' && cell > 25569 && cell < 2958465 && !isDate) {
+            // BUT NOT if it's already detected as currency
+            if (typeof cell === 'number' && cell > 25569 && cell < 2958465 && !isDate && !isCurrency) {
               // This looks like an Excel serial date
               isDate = true
               cellType = 'date'
@@ -380,26 +458,27 @@ function ExcelApp() {
               
               // Debug: Log formula cell formatting properties
               if (rowIndex < 3 && colIndex < 3) {
-                console.log(`Formula cell R${rowIndex + 1}C${colIndex + 1}:`, {
-                  formula: cell,
-                  formatInfo: formatInfo,
-                  isCurrency: isCurrency,
-                  currencySymbol: currencySymbol,
-                  cellType: cellType
-                })
+                // Debug logging for first few cells
               }
             } else {
               // Use formatted value for non-formulas
               cellValue = formattedValue
             }
             
-            return {
+            const finalCell = {
               value: cellValue, // Formula string for formulas, formatted value for others
               rawValue: rawValue, // Keep raw value for reference
               className: '',
               // Enhanced formatting properties
               ...cellInfo
             }
+            
+            // Debug: Log final cell properties for currency cells
+            if (finalCell.isCurrency && rowIndex < 3 && colIndex < 3) {
+              // Debug logging for currency cells
+            }
+            
+            return finalCell
           })
         )
         
@@ -431,6 +510,7 @@ function ExcelApp() {
           worksheet: worksheet,
           cellFormats: cellFormats // Include formatting information
         })
+        
         
         setSpreadsheetData(spreadsheetFormat)
       } catch (err) {
@@ -474,75 +554,6 @@ function ExcelApp() {
     setSpreadsheetData([])
   }, [])
 
-  // Helper function to format cell values according to Excel formatting
-  const formatCellValue = useCallback((value, cellInfo) => {
-    if (!value && value !== 0) return ''
-    
-    // If it's a formula, return as-is
-    if (cellInfo?.isFormula) {
-      return value
-    }
-    
-    // Format based on cell type and number format
-    if (cellInfo?.isDate && cellInfo?.numberFormat) {
-      try {
-        // Convert Excel serial date to JavaScript Date
-        if (typeof value === 'number' && value > 25569) { // Excel epoch starts at 1900-01-01
-          const excelEpoch = new Date(1900, 0, 1)
-          const jsDate = new Date(excelEpoch.getTime() + (value - 2) * 24 * 60 * 60 * 1000)
-          
-          // Apply basic date formatting based on the format string
-          if (cellInfo.numberFormat.includes('mm/dd/yyyy') || cellInfo.numberFormat.includes('m/d/yyyy')) {
-            return jsDate.toLocaleDateString('en-US')
-          } else if (cellInfo.numberFormat.includes('dd/mm/yyyy') || cellInfo.numberFormat.includes('d/m/yyyy')) {
-            return jsDate.toLocaleDateString('en-GB')
-          } else if (cellInfo.numberFormat.includes('yyyy-mm-dd')) {
-            return jsDate.toISOString().split('T')[0]
-          } else if (cellInfo.numberFormat.includes('h:mm') || cellInfo.numberFormat.includes('hh:mm')) {
-            return jsDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-          } else {
-            return jsDate.toLocaleDateString()
-          }
-        }
-      } catch (error) {
-        console.warn('Error formatting date:', error)
-      }
-    }
-    
-    // Format numbers with currency, percentage, etc.
-    if (cellInfo?.cellType === 'number' && cellInfo?.numberFormat) {
-      try {
-        const numValue = parseFloat(value)
-        if (!isNaN(numValue)) {
-          // Use enhanced formatting properties
-          if (cellInfo.isCurrency && cellInfo.currencySymbol) {
-            const currency = cellInfo.currencySymbol === '$' ? 'USD' : 
-                           cellInfo.currencySymbol === '€' ? 'EUR' : 
-                           cellInfo.currencySymbol === '£' ? 'GBP' : 'USD'
-            const dp = Number.isInteger(cellInfo.decimalPlaces) ? cellInfo.decimalPlaces : 2
-            return new Intl.NumberFormat('en-US', { 
-              style: 'currency', 
-              currency: currency,
-              minimumFractionDigits: dp,
-              maximumFractionDigits: dp
-            }).format(numValue)
-          } else if (cellInfo.isPercentage) {
-            return new Intl.NumberFormat('en-US', { 
-              style: 'percent',
-              minimumFractionDigits: Number.isInteger(cellInfo.decimalPlaces) ? cellInfo.decimalPlaces : 2,
-              maximumFractionDigits: Number.isInteger(cellInfo.decimalPlaces) ? cellInfo.decimalPlaces : 2
-            }).format(numValue / 100)
-          } else if (cellInfo.decimalPlaces !== null && cellInfo.decimalPlaces !== undefined) {
-            return numValue.toFixed(cellInfo.decimalPlaces)
-          }
-        }
-      } catch (error) {
-        console.warn('Error formatting number:', error)
-      }
-    }
-    
-    return value
-  }, [])
 
   // Debug function to test formatting - call from browser console
   window.debugFormatting = () => {
@@ -707,18 +718,30 @@ function ExcelApp() {
     
     setSpreadsheetData(prevData => {
       const newData = [...prevData]
+      
+      // Calculate average decimal places from selected cells
+      let totalDecimals = 0
+      let cellCount = 0
+      selectedCells.forEach(({ row, col }) => {
+        if (newData[row] && newData[row][col]) {
+          const cell = newData[row][col]
+          const currentDecimals = cell.decimalPlaces || 0
+          totalDecimals += currentDecimals
+          cellCount++
+        }
+      })
+      
+      const averageDecimals = cellCount > 0 ? Math.round(totalDecimals / cellCount) : 0
+      const targetDecimals = Math.min(averageDecimals + 1, 10) // Add 1 decimal place, max 10
+      
       selectedCells.forEach(({ row, col }) => {
         if (newData[row] && newData[row][col]) {
           const cell = newData[row][col]
           
-          // Get current decimal places setting (default to 0 if not set)
-          const currentDecimals = cell.decimalPlaces || 0
-          const newDecimals = Math.min(currentDecimals + 1, 10) // Max 10 decimals
-          
           // Update the cell with new decimal places setting
           newData[row][col] = {
             ...cell,
-            decimalPlaces: newDecimals
+            decimalPlaces: targetDecimals
           }
         }
       })
@@ -732,18 +755,30 @@ function ExcelApp() {
     
     setSpreadsheetData(prevData => {
       const newData = [...prevData]
+      
+      // Calculate average decimal places from selected cells
+      let totalDecimals = 0
+      let cellCount = 0
+      selectedCells.forEach(({ row, col }) => {
+        if (newData[row] && newData[row][col]) {
+          const cell = newData[row][col]
+          const currentDecimals = cell.decimalPlaces || 0
+          totalDecimals += currentDecimals
+          cellCount++
+        }
+      })
+      
+      const averageDecimals = cellCount > 0 ? Math.round(totalDecimals / cellCount) : 0
+      const targetDecimals = Math.max(averageDecimals - 1, 0) // Remove 1 decimal place, min 0
+      
       selectedCells.forEach(({ row, col }) => {
         if (newData[row] && newData[row][col]) {
           const cell = newData[row][col]
           
-          // Get current decimal places setting (default to 0 if not set)
-          const currentDecimals = cell.decimalPlaces || 0
-          const newDecimals = Math.max(currentDecimals - 1, 0) // Min 0 decimals
-          
           // Update the cell with new decimal places setting
           newData[row][col] = {
             ...cell,
-            decimalPlaces: newDecimals
+            decimalPlaces: targetDecimals
           }
         }
       })
