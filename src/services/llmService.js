@@ -646,291 +646,6 @@ export class LLMService {
     };
   }
 
-  generateSubFramePatterns(pos1, pos2) {
-    const patterns = [];
-    
-    // Pattern 1: pos1 as column header, pos2 as row header (relaxed)
-    if (pos2.col === 0) {
-      patterns.push({
-        type: 'column_row_headers',
-        columnHeader: pos1,
-        rowHeader: pos2,
-        dataStartRow: Math.min(pos1.row, pos2.row) + 1,
-        dataStartCol: pos1.col + 1
-      });
-    }
-    
-    // Pattern 2: pos2 as column header, pos1 as row header (relaxed)
-    if (pos1.col === 0) {
-      patterns.push({
-        type: 'column_row_headers',
-        columnHeader: pos2,
-        rowHeader: pos1,
-        dataStartRow: Math.min(pos1.row, pos2.row) + 1,
-        dataStartCol: pos2.col + 1
-      });
-    }
-    
-    // Pattern 3: dual column headers (shared header row)
-    if (pos1.row === pos2.row && pos1.row === 0) {
-      patterns.push({
-        type: 'dual_column_headers',
-        header1: pos1,
-        header2: pos2,
-        headerRow: pos1.row,
-        dataStartRow: pos1.row + 1
-      });
-    }
-    
-    // Pattern 4: dual row headers (shared header column)
-    if (pos1.col === pos2.col && pos1.col === 0) {
-      patterns.push({
-        type: 'dual_row_headers',
-        header1: pos1,
-        header2: pos2,
-        headerCol: pos1.col,
-        dataStartCol: pos1.col + 1
-      });
-    }
-    
-    return patterns;
-  }
-
-  createSubFrame(pattern, contextRange, valueType) {
-    try {
-      let subFrameData = [];
-      let context = {};
-      
-      switch (pattern.type) {
-        case 'column_row_headers':
-          subFrameData = this.extractColumnRowSubFrame(pattern, valueType);
-          context = this.extractContext(pattern.dataStartRow - contextRange, pattern.dataStartCol - contextRange, contextRange);
-          break;
-          
-        case 'dual_column_headers':
-          subFrameData = this.extractDualColumnSubFrame(pattern, valueType);
-          context = this.extractContext(pattern.dataStartRow - contextRange, 0, contextRange);
-          break;
-          
-        case 'dual_row_headers':
-          subFrameData = this.extractDualRowSubFrame(pattern, valueType);
-          context = this.extractContext(0, pattern.dataStartCol - contextRange, contextRange);
-          break;
-          
-        default:
-          return null;
-      }
-      
-      if (subFrameData.length === 0) {
-        return null;
-      }
-      
-      return {
-        pattern: pattern,
-        subFrameData: subFrameData,
-        context: context,
-        totalEntries: subFrameData.length,
-        maxValue: Math.max(...subFrameData.map(d => d.value)),
-        minValue: Math.min(...subFrameData.map(d => d.value))
-      };
-      
-    } catch (error) {
-      console.error('Error creating sub-frame:', error);
-      return null;
-    }
-  }
-
-  extractColumnRowSubFrame(pattern, valueType) {
-    const data = [];
-    const { dataStartRow, dataStartCol } = pattern;
-    
-    // Determine robust startRow
-    let startRow = 1;
-    for (let r = 1; r < this.spreadsheetData.length; r++) {
-      const rowLabelCellProbe = this.spreadsheetData[r]?.[pattern.rowHeader.col];
-      const valueCellProbe = this.spreadsheetData[r]?.[dataStartCol - 1];
-      if ((rowLabelCellProbe && String(rowLabelCellProbe.value ?? '').trim() !== '') || (valueCellProbe && String(valueCellProbe.value ?? '').trim() !== '')) {
-        startRow = r; break;
-      }
-    }
-    
-    for (let row = Math.max(startRow, dataStartRow); row < this.spreadsheetData.length; row++) {
-      const cell = this.spreadsheetData[row]?.[dataStartCol - 1];
-      const rowLabelCell = this.spreadsheetData[row]?.[pattern.rowHeader.col];
-      if (cell && rowLabelCell) {
-        const cellValue = cell.value;
-        const rowLabel = rowLabelCell.value;
-        if (this.validateValueType(cellValue, valueType) && rowLabel) {
-          const numericValue = this.parseNumericValue(cellValue);
-          if (numericValue !== undefined) {
-            data.push({
-              row: row + 1,
-              column: dataStartCol,
-              address: rcToAddr(row + 1, dataStartCol),
-              value: numericValue,
-              rowLabel: rowLabel,
-              rowLabelAddress: rcToAddr(row + 1, pattern.rowHeader.col + 1)
-            });
-          }
-        }
-      }
-    }
-    return data;
-  }
-
-  extractDualColumnSubFrame(pattern, valueType) {
-    const data = [];
-    const { dataStartRow, header1, header2 } = pattern;
-    
-    // Scan down both columns
-    for (let row = dataStartRow; row < this.spreadsheetData.length; row++) {
-      const cell1 = this.spreadsheetData[row]?.[header1.col];
-      const cell2 = this.spreadsheetData[row]?.[header2.col];
-      
-      if (cell1 && cell2) {
-        const value1 = this.parseNumericValue(cell1.value);
-        const value2 = this.parseNumericValue(cell2.value);
-        
-        if (value1 !== undefined && this.validateValueType(cell1.value, valueType)) {
-          data.push({
-            row: row + 1,
-            column: header1.col + 1,
-            address: rcToAddr(row + 1, header1.col + 1),
-            value: value1,
-            label: header1.value,
-            labelAddress: rcToAddr(1, header1.col + 1)
-          });
-        }
-        
-        if (value2 !== undefined && this.validateValueType(cell2.value, valueType)) {
-          data.push({
-            row: row + 1,
-            column: header2.col + 1,
-            address: rcToAddr(row + 1, header2.col + 1),
-            value: value2,
-            label: header2.value,
-            labelAddress: rcToAddr(1, header2.col + 1)
-          });
-        }
-      }
-    }
-    
-    return data;
-  }
-
-  extractDualRowSubFrame(pattern, valueType) {
-    const data = [];
-    const { dataStartCol, header1, header2 } = pattern;
-    
-    // Scan across both rows
-    for (let col = dataStartCol; col < (this.spreadsheetData[0]?.length || 0); col++) {
-      const cell1 = this.spreadsheetData[header1.row]?.[col];
-      const cell2 = this.spreadsheetData[header2.row]?.[col];
-      
-      if (cell1 && cell2) {
-        const value1 = this.parseNumericValue(cell1.value);
-        const value2 = this.parseNumericValue(cell2.value);
-        
-        if (value1 !== undefined && this.validateValueType(cell1.value, valueType)) {
-          data.push({
-            row: header1.row + 1,
-            column: col + 1,
-            address: rcToAddr(header1.row + 1, col + 1),
-            value: value1,
-            label: header1.value,
-            labelAddress: rcToAddr(header1.row + 1, 1)
-          });
-        }
-        
-        if (value2 !== undefined && this.validateValueType(cell2.value, valueType)) {
-          data.push({
-            row: header2.row + 1,
-            column: col + 1,
-            address: rcToAddr(header2.row + 1, col + 1),
-            value: value2,
-            label: header2.value,
-            labelAddress: rcToAddr(header2.row + 1, 1)
-          });
-        }
-      }
-    }
-    
-    return data;
-  }
-
-  extractContext(startRow, startCol, range) {
-    const context = {
-      topLeft: null,
-      top: null,
-      left: null,
-      title: null
-    };
-    
-    if (startRow >= 0 && startCol >= 0) {
-      const titleCell = this.spreadsheetData[startRow]?.[startCol];
-      if (titleCell && titleCell.value) {
-        context.title = {
-          value: titleCell.value,
-          address: rcToAddr(startRow + 1, startCol + 1)
-        };
-      }
-    }
-    
-    for (let r = Math.max(0, startRow); r < Math.min(this.spreadsheetData.length, startRow + range); r++) {
-      for (let c = Math.max(0, startCol); c < Math.min((this.spreadsheetData[r]?.length || 0), startCol + range); c++) {
-        const cell = this.spreadsheetData[r]?.[c];
-        if (cell && cell.value) {
-          const address = rcToAddr(r + 1, c + 1);
-          if (r === startRow && c === startCol) {
-            context.topLeft = { value: cell.value, address };
-          } else if (r === startRow) {
-            context.top = { value: cell.value, address };
-          } else if (c === startCol) {
-            context.left = { value: cell.value, address };
-          }
-        }
-      }
-    }
-    return context;
-  }
-
-  analyzeMultipleSubFrames(subFrames, label1, label2) {
-    console.log(`Analyzing ${subFrames.length} sub-frames for labels "${label1}" and "${label2}"`);
-    
-    // Check if all sub-frames have the same values
-    const allValues = subFrames.flatMap(sf => sf.subFrameData.map(d => d.value));
-    const uniqueValues = [...new Set(allValues)];
-    
-    if (uniqueValues.length === 1) {
-      // All values are the same, return the first sub-frame
-      return {
-        ...subFrames[0],
-        multipleSubFrames: true,
-        allValuesSame: true,
-        value: uniqueValues[0],
-        message: `Multiple sub-frames found, but all have the same value: ${uniqueValues[0]}`
-      };
-    }
-    
-    // Values are different, need to analyze context
-    const analysis = subFrames.map((sf, index) => ({
-      index,
-      pattern: sf.pattern.type,
-      context: sf.context,
-      maxValue: sf.maxValue,
-      minValue: sf.minValue,
-      totalEntries: sf.totalEntries,
-      subFrameData: sf.subFrameData
-    }));
-    
-    return {
-      multipleSubFrames: true,
-      allValuesSame: false,
-      subFrames: analysis,
-      message: `Multiple sub-frames found with different values. Examine context to determine which sub-frame to use.`,
-      recommendation: "Use the sub-frame with the most relevant context based on the question asked."
-    };
-  }
 
   /**
    * Get all data from a specific row
@@ -1212,6 +927,350 @@ export class LLMService {
   }
 
   /**
+   * Index a spreadsheet frame and return analysis
+   */
+  indexSpreadsheet(frameRange, frameIndex, totalFrames, sections) {
+    try {
+      // Read the frame data
+      const frameData = sliceRange(this.spreadsheetData, frameRange);
+      
+      // Analyze the frame content
+      const analysis = this.analyzeFrame(frameData, frameRange, sections);
+      
+      // Create updated sections list
+      let updatedSections = [...sections];
+      
+      // If this frame should merge with existing section
+      if (analysis.should_merge && analysis.merge_with !== null && analysis.merge_with >= 0) {
+        const targetIndex = analysis.merge_with;
+        if (updatedSections[targetIndex]) {
+          // Update existing section to include this frame
+          updatedSections[targetIndex] = {
+            ...updatedSections[targetIndex],
+            range: `${updatedSections[targetIndex].range.split(':')[0]}:${frameRange.split(':')[1]}`,
+            description: `${updatedSections[targetIndex].description} (extended)`
+          };
+        }
+      } else {
+        // Add new section for this frame
+        updatedSections.push({
+          description: analysis.description,
+          range: frameRange,
+          type: analysis.type
+        });
+      }
+      
+      return {
+        frame_range: frameRange,
+        frame_index: frameIndex,
+        total_frames: totalFrames,
+        analysis: analysis,
+        sections: updatedSections,
+        progress: `${frameIndex + 1}/${totalFrames}`,
+        summary: `Processed frame ${frameIndex + 1}/${totalFrames} (${frameRange}): ${analysis.description}`,
+        is_complete: frameIndex >= totalFrames - 1
+      };
+      
+    } catch (error) {
+      return { error: `Error indexing frame ${frameRange}: ${error.message}` };
+    }
+  }
+
+  /**
+   * Get all frames for indexing
+   */
+  getAllFrames() {
+    return this.createFrames();
+  }
+
+  /**
+   * Analyze a frame and determine its content
+   */
+  analyzeFrame(frameData, frameRange, existingSections) {
+    if (!frameData || frameData.length === 0) {
+      return {
+        type: 'empty',
+        description: 'Empty frame',
+        range: frameRange,
+        should_merge: false
+      };
+    }
+
+    // Simple content analysis
+    const hasHeaders = this.detectHeaders(frameData);
+    const hasNumbers = this.detectNumbers(frameData);
+    const hasFormulas = this.detectFormulas(frameData);
+    const hasCurrency = this.detectCurrency(frameData);
+    
+    // Generate simple, descriptive analysis
+    let frameType = 'data';
+    let description = '';
+    
+    if (hasHeaders && !hasNumbers) {
+      frameType = 'headers';
+      description = this.getSimpleHeaderDescription(frameData);
+    } else if (hasFormulas) {
+      frameType = 'calculations';
+      description = this.getSimpleCalculationDescription(frameData);
+    } else if (hasNumbers || hasCurrency) {
+      frameType = 'data';
+      description = this.getSimpleDataDescription(frameData);
+    } else {
+      frameType = 'text';
+      description = this.getSimpleTextDescription(frameData);
+    }
+    
+    // Check if this should merge with existing sections
+    const shouldMerge = this.shouldMergeWithExisting(frameType, description, existingSections);
+    
+    return {
+      type: frameType,
+      description: description,
+      range: frameRange,
+      should_merge: shouldMerge,
+      merge_with: shouldMerge ? this.findBestMergeTarget(frameType, existingSections) : null,
+      content_summary: this.getContentSummary(frameData)
+    };
+  }
+
+
+  /**
+   * Detect if block contains headers
+   */
+  detectHeaders(blockData) {
+    if (blockData.length === 0) return false;
+    
+    const firstRow = blockData[0];
+    const textCount = firstRow.filter(cell => 
+      cell && typeof cell.value === 'string' && cell.value.trim() !== ''
+    ).length;
+    
+    return textCount > 1;
+  }
+
+  /**
+   * Detect if block contains numbers
+   */
+  detectNumbers(blockData) {
+    let numberCount = 0;
+    let totalCells = 0;
+    
+    blockData.forEach(row => {
+      row.forEach(cell => {
+        if (cell && cell.value !== '') {
+          totalCells++;
+          if (typeof cell.value === 'number' || 
+              (typeof cell.value === 'string' && !isNaN(parseFloat(cell.value)))) {
+            numberCount++;
+          }
+        }
+      });
+    });
+    
+    return totalCells > 0 && (numberCount / totalCells) > 0.5;
+  }
+
+  /**
+   * Detect if block contains formulas
+   */
+  detectFormulas(blockData) {
+    return blockData.some(row => 
+      row.some(cell => 
+        cell && typeof cell.value === 'string' && cell.value.startsWith('=')
+      )
+    );
+  }
+
+  /**
+   * Detect if block contains currency values
+   */
+  detectCurrency(blockData) {
+    return blockData.some(row => 
+      row.some(cell => 
+        cell && cell.isCurrency
+      )
+    );
+  }
+
+  /**
+   * Check if block should merge with existing sections
+   */
+  shouldMergeWithExisting(blockType, description, existingSections) {
+    if (existingSections.length === 0) return false;
+    
+    // Headers should merge with data
+    if (blockType === 'headers') {
+      return existingSections.some(section => 
+        section.description.toLowerCase().includes('data') ||
+        section.description.toLowerCase().includes('values')
+      );
+    }
+    
+    // Data should merge with headers
+    if (blockType === 'data') {
+      return existingSections.some(section => 
+        section.description.toLowerCase().includes('header') ||
+        section.description.toLowerCase().includes('title')
+      );
+    }
+    
+    return false;
+  }
+
+  /**
+   * Find best merge target
+   */
+  findBestMergeTarget(blockType, existingSections) {
+    if (blockType === 'headers') {
+      return existingSections.findIndex(section => 
+        section.description.toLowerCase().includes('data')
+      );
+    }
+    
+    if (blockType === 'data') {
+      return existingSections.findIndex(section => 
+        section.description.toLowerCase().includes('header')
+      );
+    }
+    
+    return -1;
+  }
+
+  /**
+   * Get content summary
+   */
+  getContentSummary(blockData) {
+    const summary = {
+      rows: blockData.length,
+      cols: blockData[0]?.length || 0,
+      sample_values: []
+    };
+    
+    // Get sample values from first few cells
+    for (let row = 0; row < Math.min(2, blockData.length); row++) {
+      for (let col = 0; col < Math.min(3, blockData[row]?.length || 0); col++) {
+        const cell = blockData[row][col];
+        if (cell && cell.value !== '') {
+          summary.sample_values.push(String(cell.value).substring(0, 20));
+        }
+      }
+    }
+    
+    return summary;
+  }
+
+  /**
+   * Get simple header description
+   */
+  getSimpleHeaderDescription(frameData) {
+    const headerTexts = frameData[0]?.map(cell => String(cell?.value || '').trim()).filter(text => text) || [];
+    const headerCount = headerTexts.length;
+    const sampleHeaders = headerTexts.slice(0, 3).join(', ');
+    
+    return `Headers (${headerCount} columns): ${sampleHeaders}`;
+  }
+
+  /**
+   * Get simple calculation description
+   */
+  getSimpleCalculationDescription(frameData) {
+    const formulaCount = frameData.reduce((count, row) => 
+      count + row.filter(cell => String(cell?.value || '').startsWith('=')).length, 0
+    );
+    
+    return `Calculations (${formulaCount} formulas)`;
+  }
+
+  /**
+   * Get simple data description
+   */
+  getSimpleDataDescription(frameData) {
+    const dataRows = frameData.filter(row => 
+      row.some(cell => cell && cell.value !== '' && cell.value !== null)
+    ).length;
+    
+    const hasCurrency = frameData.some(row => 
+      row.some(cell => cell && (cell.isCurrency || String(cell.value).includes('$')))
+    );
+    
+    const hasPercentages = frameData.some(row => 
+      row.some(cell => cell && String(cell.value).includes('%'))
+    );
+    
+    let type = 'Data';
+    if (hasCurrency) type = 'Financial data';
+    else if (hasPercentages) type = 'Percentage data';
+    
+    return `${type} (${dataRows} rows)`;
+  }
+
+  /**
+   * Get simple text description
+   */
+  getSimpleTextDescription(frameData) {
+    const textCells = frameData.reduce((count, row) => 
+      count + row.filter(cell => cell && typeof cell.value === 'string' && cell.value.trim() !== '').length, 0
+    );
+    
+    return `Text content (${textCells} entries)`;
+  }
+
+
+  /**
+   * Create frames based on whitespace gaps in the spreadsheet
+   */
+  createFrames() {
+    if (!this.spreadsheetData || this.spreadsheetData.length === 0) {
+      return [];
+    }
+
+    const frames = [];
+    const data = this.spreadsheetData;
+    let currentFrame = null;
+    
+    for (let row = 0; row < data.length; row++) {
+      const hasContent = data[row] && data[row].some(cell => 
+        cell && cell.value !== '' && cell.value !== null && cell.value !== undefined
+      );
+      
+      if (hasContent) {
+        if (!currentFrame) {
+          // Start new frame
+          currentFrame = {
+            startRow: row,
+            endRow: row,
+            startCol: 0,
+            endCol: (data[row]?.length || 1) - 1
+          };
+        } else {
+          // Extend current frame
+          currentFrame.endRow = row;
+        }
+      } else {
+        // Empty row - end current frame if exists
+        if (currentFrame) {
+          frames.push(currentFrame);
+          currentFrame = null;
+        }
+      }
+    }
+    
+    // Add final frame if exists
+    if (currentFrame) {
+      frames.push(currentFrame);
+    }
+    
+    // Convert to A1 ranges
+    return frames.map(frame => ({
+      startRow: frame.startRow,
+      endRow: frame.endRow,
+      startCol: frame.startCol,
+      endCol: frame.endCol,
+      range: `${rcToAddr(frame.startRow + 1, frame.startCol + 1)}:${rcToAddr(frame.endRow + 1, frame.endCol + 1)}`
+    }));
+  }
+
+  /**
    * Debug tool to inspect spreadsheet data
    */
   debugSheet(searchTerm = null) {
@@ -1278,6 +1337,8 @@ export class LLMService {
           return this.recalc();
         case "read_sheet":
           return this.readSheet(args.range);
+        case "index_spreadsheet":
+          return this.indexSpreadsheet(args.frame_range, args.frame_index, args.total_frames, args.sections);
         default:
           return { error: `Unknown tool: ${name}` };
       }
@@ -1302,6 +1363,24 @@ export class LLMService {
    */
   clearHistory() {
     this.conversationHistory = [];
+  }
+
+  /**
+   * Check if indexing is incomplete
+   */
+  isIndexingIncomplete(toolOutputs) {
+    const indexCalls = toolOutputs.filter(t => t.tool_name === 'index_spreadsheet');
+    if (indexCalls.length === 0) return false;
+    
+    // Get the last index call to check if it's complete
+    const lastIndexCall = indexCalls[indexCalls.length - 1];
+    if (lastIndexCall.result && lastIndexCall.result.frame_index !== undefined) {
+      const currentFrame = lastIndexCall.result.frame_index;
+      const totalFrames = lastIndexCall.result.total_frames;
+      return currentFrame < totalFrames - 1;
+    }
+    
+    return false;
   }
 
   /**
@@ -1357,7 +1436,7 @@ export class LLMService {
       // 2) Handle tool calls in a loop
       let finalResponse = response;
       let iterationCount = 0;
-      const maxIterations = 5; // Prevent infinite loops
+      const maxIterations = 20; // Allow more iterations for complex operations like indexing
       let toolOutputs = []; // Track tool outputs for protocol validation
 
       while (response.choices[0]?.message?.tool_calls?.length > 0 && iterationCount < maxIterations) {
@@ -1408,6 +1487,44 @@ export class LLMService {
               
               continue; // Skip this tool call
             }
+          }
+
+          // Protocol guard: Check if indexing is incomplete
+          if (call.function.name === 'conclude' && this.isIndexingIncomplete(toolOutputs)) {
+            console.log('Protocol guard: Blocking conclude - indexing incomplete');
+            const lastIndexCall = toolOutputs.filter(t => t.tool_name === 'index_spreadsheet').pop();
+            const currentFrame = lastIndexCall?.result?.frame_index || 0;
+            const totalFrames = lastIndexCall?.result?.total_frames || 0;
+            const remainingFrames = totalFrames - currentFrame - 1;
+            
+            const errorResult = {
+              error: `ProtocolError: Indexing incomplete. You have only processed ${currentFrame + 1} of ${totalFrames} frames. You must process the remaining ${remainingFrames} frames (${currentFrame + 1}, ${currentFrame + 2}, ${currentFrame + 3}...) before concluding. Continue with index_spreadsheet tool calls.`
+            };
+            
+            // Add error result to conversation
+            messages.push({
+              role: "tool",
+              tool_call_id: call.id,
+              content: JSON.stringify(errorResult)
+            });
+            
+            // Add a system message to force continuation
+            messages.push({
+              role: "system",
+              content: `You MUST continue processing frames. You have only processed ${currentFrame + 1} of ${totalFrames} frames. Call index_spreadsheet for frame ${currentFrame + 1} immediately. Do not try to conclude again until all frames are processed.`
+            });
+            
+            // Show error in chat if callback is provided
+            if (this.onToolCall) {
+              this.onToolCall({
+                type: 'tool_result',
+                tool: call.function.name,
+                result: errorResult,
+                iteration: iterationCount
+              });
+            }
+            
+            continue; // Skip this tool call
           }
           
           // Show tool call in chat if callback is provided

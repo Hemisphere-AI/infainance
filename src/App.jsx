@@ -38,6 +38,7 @@ function ExcelApp() {
   const [spreadsheetData, setSpreadsheetData] = useState([])
   const [formulaDisplayMode, setFormulaDisplayMode] = useState(0) // 0: normal, 1: highlight formulas, 2: show all formulas
   const [selectedCells, setSelectedCells] = useState([]) // Array of selected cell coordinates
+  const [highlightedBlock, setHighlightedBlock] = useState(null)
   const [isChatLoading, setIsChatLoading] = useState(false)
   const [decimalButtonClicked, setDecimalButtonClicked] = useState(false)
   const [averageDecimals, setAverageDecimals] = useState(0)
@@ -678,12 +679,21 @@ function ExcelApp() {
 
   // Initialize LLM service when spreadsheet data is available
   const hasSpreadsheetData = spreadsheetData.length > 0;
+  
+  // Create LLM service immediately when we have data
+  if (hasSpreadsheetData && !llmServiceRef.current) {
+    console.log('Creating new LLM service with data:', spreadsheetData.length, 'rows');
+    llmServiceRef.current = new LLMService(spreadsheetData, setSpreadsheetData, toolCallHandlerRef.current, customApiKey)
+    console.log('LLM service created:', llmServiceRef.current);
+  }
+  
+  // Update LLM service when API key changes
   useEffect(() => {
-    if (hasSpreadsheetData) {
-      console.log('Creating new LLM service with data:', spreadsheetData.length, 'rows');
+    if (hasSpreadsheetData && llmServiceRef.current) {
+      console.log('Updating LLM service with new API key');
       llmServiceRef.current = new LLMService(spreadsheetData, setSpreadsheetData, toolCallHandlerRef.current, customApiKey)
     }
-  }, [hasSpreadsheetData, customApiKey]) // Removed spreadsheetData from dependencies to prevent recreation
+  }, [customApiKey])
 
   // Handle chat messages
   const handleChatMessage = useCallback(async (message) => {
@@ -713,6 +723,11 @@ function ExcelApp() {
   // Handle API key changes
   const handleApiKeyChange = useCallback((apiKey) => {
     setCustomApiKey(apiKey)
+  }, [])
+
+  // Handle block highlighting for indexing
+  const handleHighlightBlock = useCallback((blockRange) => {
+    setHighlightedBlock(blockRange)
   }, [])
 
   // Reset decimal button state when selection changes
@@ -1116,6 +1131,7 @@ function ExcelApp() {
                     formulaDisplayMode={formulaDisplayMode}
                     selectedCells={selectedCells}
                     onSelectedCellsChange={setSelectedCells}
+                    highlightedBlock={highlightedBlock}
                   />
                 ) : (
                   <div className="p-8 text-center text-gray-500">
@@ -1161,6 +1177,9 @@ function ExcelApp() {
               onClearHistory={handleClearHistory}
               onToolCall={(handler) => { toolCallHandlerRef.current = handler; }}
               onApiKeyChange={handleApiKeyChange}
+              spreadsheetData={spreadsheetData}
+              llmService={llmServiceRef.current}
+              onHighlightBlock={handleHighlightBlock}
             />
           </div>
         </div>

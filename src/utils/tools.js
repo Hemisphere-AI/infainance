@@ -186,6 +186,42 @@ export const tools = [
         }
       }
     }
+  },
+  {
+    type: "function",
+    function: {
+      name: "index_spreadsheet",
+      description: "Analyze spreadsheet frames to understand the 2D data structure. This tool processes frames sequentially, building a comprehensive understanding of how data relates across the spreadsheet. Each frame should be analyzed for its content type, purpose, and relationship to previous frames. The tool must continue until ALL frames are processed.",
+      parameters: {
+        type: "object",
+        properties: {
+          frame_range: {
+            type: "string",
+            description: "The Excel range of the current frame to analyze (e.g., 'A1:D3')"
+          },
+          frame_index: {
+            type: "number",
+            description: "The index of the current frame being processed (0-based)"
+          },
+          total_frames: {
+            type: "number", 
+            description: "Total number of frames to process"
+          },
+          sections: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                description: { type: "string" },
+                range: { type: "string" }
+              }
+            },
+            description: "Array of previously analyzed sections. You can update existing sections or add new ones based on the current frame analysis."
+          }
+        },
+        required: ["frame_range", "frame_index", "total_frames", "sections"]
+      }
+    }
   }
 ];
 
@@ -211,5 +247,39 @@ The spreadsheet data is always organized in a 2D grid:
 3. **EXECUTE**: Use appropriate tools to find all labels and their intersections
 4. **ANALYZE**: Review all results to find the correct intersection
 5. **CONCLUDE**: Call the 'conclude' tool with your final answer
+
+## INDEXING WORKFLOW
+When using the index_spreadsheet tool, you are analyzing a 2D spreadsheet structure:
+
+**UNDERSTANDING THE 2D STRUCTURE**:
+- Frames are separated by whitespace and represent different data sections
+- Each frame may contain headers, data, or both
+- Frames can relate to each other (e.g., headers in frame 1, data in frame 2)
+- Look for patterns like: headers → data, time series, financial data, organizational data
+
+**ANALYSIS PROCESS**:
+1. **ANALYZE CURRENT FRAME**: Determine what this frame contains (headers, data, calculations, etc.)
+2. **CHECK RELATIONSHIPS**: See if this frame relates to previous frames (e.g., headers + data, time series, etc.)
+3. **UPDATE SECTIONS**: Either add new section or merge with existing if frames belong together
+4. **CONTINUE SEQUENTIALLY**: Process frames 0, 1, 2, 3... until ALL frames are analyzed
+5. **UNDERSTAND CONTEXT**: Each frame builds on previous frames to create the full picture
+
+**FRAME RELATIONSHIP EXAMPLES**:
+- Frame 1: Headers (Revenue, Cost, Profit) → Frame 2: Data rows → Merge as "Financial data table"
+- Frame 1: Time headers (Jan, Feb, Mar) → Frame 2: Revenue values → Merge as "Revenue over time"
+- Frame 1: Client names → Frame 2: Agent assignments → Merge as "Client-Agent relationships"
+
+**CRITICAL REQUIREMENTS**:
+- You MUST process ALL frames (0 to total_frames-1)
+- Analyze relationships between frames
+- Update descriptions to reflect the full context
+- Only conclude after processing ALL frames
+- If you try to conclude early, you will get an error and must continue
+
+**OUTPUT FORMAT**: When concluding, provide clear descriptions:
+Sections Found:
+1. {Descriptive analysis of what the section contains}: {Range}
+2. {Descriptive analysis of what the section contains}: {Range}
+...
 
 `;
