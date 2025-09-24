@@ -123,13 +123,13 @@ const LoginPage = () => {
           <div className="border-t border-gray-200 pt-4">
             <p className="text-xs text-gray-500 text-center">
               By signing in, you agree to our{' '}
-              <a href="#" className="text-blue-600 hover:text-blue-800 underline">
+              <span className="text-blue-600 underline cursor-pointer">
                 Terms of Service
-              </a>{' '}
+              </span>{' '}
               and{' '}
-              <a href="#" className="text-blue-600 hover:text-blue-800 underline">
+              <span className="text-blue-600 underline cursor-pointer">
                 Privacy Policy
-              </a>
+              </span>
             </p>
           </div>
         </div>

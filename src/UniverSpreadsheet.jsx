@@ -24,7 +24,9 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
   // Formula cache to store calculated results
   const formulaCacheRef = useRef(new Map())
   const formulaDependenciesRef = useRef(new Map()) // Maps cell to its dependencies
+  const cellDependentsRef = useRef(new Map()) // Maps cell to cells that depend on it
   const lastDataHashRef = useRef('')
+  const recalculationQueueRef = useRef(new Set()) // Cells that need recalculation
 
   // Removed console.log to prevent excessive re-renders during scrolling
 
@@ -46,6 +48,152 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
   const clearFormulaCache = useCallback(() => {
     formulaCacheRef.current.clear()
     formulaDependenciesRef.current.clear()
+    cellDependentsRef.current.clear()
+    recalculationQueueRef.current.clear()
+  }, [])
+
+  // Track dependencies for a cell
+  const trackDependencies = useCallback((cellKey, dependencies) => {
+    // Clear old dependencies for this cell
+    const oldDependencies = formulaDependenciesRef.current.get(cellKey) || []
+    oldDependencies.forEach(dep => {
+      const dependents = cellDependentsRef.current.get(dep) || new Set()
+      dependents.delete(cellKey)
+      if (dependents.size === 0) {
+        cellDependentsRef.current.delete(dep)
+      } else {
+        cellDependentsRef.current.set(dep, dependents)
+      }
+    })
+
+    // Set new dependencies
+    formulaDependenciesRef.current.set(cellKey, dependencies)
+    
+    // Update dependents for each dependency
+    dependencies.forEach(dep => {
+      if (!cellDependentsRef.current.has(dep)) {
+        cellDependentsRef.current.set(dep, new Set())
+      }
+      cellDependentsRef.current.get(dep).add(cellKey)
+    })
+  }, [])
+
+  // Get all cells that depend on a given cell (recursive)
+  const getDependentCells = useCallback((cellKey) => {
+    const visited = new Set()
+    const dependents = new Set()
+    
+    const collectDependents = (key) => {
+      if (visited.has(key)) return
+      visited.add(key)
+      
+      const directDependents = cellDependentsRef.current.get(key) || new Set()
+      directDependents.forEach(dep => {
+        dependents.add(dep)
+        collectDependents(dep)
+      })
+    }
+    
+    collectDependents(cellKey)
+    return Array.from(dependents)
+  }, [])
+
+  // Trigger recalculation for a cell and its dependents
+  const triggerRecalculation = useCallback((changedCellKey) => {
+    // Add the changed cell and all its dependents to recalculation queue
+    const cellsToRecalc = [changedCellKey, ...getDependentCells(changedCellKey)]
+    
+    console.log(`📊 Dependencies for ${changedCellKey}:`, formulaDependenciesRef.current.get(changedCellKey) || [])
+    console.log(`📊 Dependents for ${changedCellKey}:`, Array.from(cellDependentsRef.current.get(changedCellKey) || new Set()))
+    console.log(`🔄 Cells to recalculate:`, cellsToRecalc)
+    
+    cellsToRecalc.forEach(cellKey => {
+      recalculationQueueRef.current.add(cellKey)
+    })
+    
+    // Clear cache for cells that need recalculation
+    cellsToRecalc.forEach(cellKey => {
+      // Clear all cache entries for this cell
+      for (const [cacheKey, value] of formulaCacheRef.current.entries()) {
+        if (cacheKey.startsWith(cellKey + '-')) {
+          formulaCacheRef.current.delete(cacheKey)
+        }
+      }
+    })
+  }, [getDependentCells])
+
+  // Process recalculation queue
+  const processRecalculationQueue = useCallback(() => {
+    if (recalculationQueueRef.current.size === 0) return
+    
+    const cellsToProcess = Array.from(recalculationQueueRef.current)
+    console.log(`⚡ Processing recalculation queue:`, cellsToProcess)
+    
+    // Force multiple re-renders to ensure the component updates
+    setRecalcTrigger(prev => prev + 1)
+    setForceUpdate(prev => prev + 1)
+    
+    // Force a data change to trigger parent re-render
+    if (onDataChange) {
+      const newData = [...data]
+      onDataChange(newData)
+    }
+    
+    // Clear the queue after triggering re-renders
+    setTimeout(() => {
+      recalculationQueueRef.current.clear()
+      setRecalcTrigger(prev => prev + 1)
+      setForceUpdate(prev => prev + 1)
+    }, 50) // Give time for formulas to be evaluated
+  }, [data, onDataChange])
+
+  // Add a state to force re-renders for recalculation
+  const [recalcTrigger, setRecalcTrigger] = useState(0)
+  const [forceUpdate, setForceUpdate] = useState(0)
+
+  // Extract cell references from formula - moved up to avoid hoisting issues
+  const extractCellReferences = useCallback((formula) => {
+    const stringFormula = String(formula || '')
+    if (!stringFormula.startsWith('=')) return []
+    
+    const expression = stringFormula.slice(1)
+    const references = []
+    
+    // First, handle ranges (e.g., A1:B3, $A$1:$B$3)
+    const rangeRegex = /\$?([A-Z]+)\$?(\d+):\$?([A-Z]+)\$?(\d+)/g
+    let rangeMatch
+    while ((rangeMatch = rangeRegex.exec(expression)) !== null) {
+      const [, startCol, startRow, endCol, endRow] = rangeMatch
+      const startColIndex = startCol.split('').reduce((acc, char) => acc * 26 + (char.charCodeAt(0) - 64), 0) - 1
+      const endColIndex = endCol.split('').reduce((acc, char) => acc * 26 + (char.charCodeAt(0) - 64), 0) - 1
+      const startRowIndex = parseInt(startRow) - 1
+      const endRowIndex = parseInt(endRow) - 1
+      
+      // Add all cells in the range
+      for (let row = startRowIndex; row <= endRowIndex; row++) {
+        for (let col = startColIndex; col <= endColIndex; col++) {
+          references.push({ row, col })
+        }
+      }
+    }
+    
+    // Then, handle individual cell references (e.g., A1, $A$1)
+    // But exclude those that are already part of ranges
+    const cellRefRegex = /\$?([A-Z]+)\$?(\d+)/g
+    let match
+    while ((match = cellRefRegex.exec(expression)) !== null) {
+      const [, col, row] = match
+      const colIndex = col.split('').reduce((acc, char) => acc * 26 + (char.charCodeAt(0) - 64), 0) - 1
+      const rowIndex = parseInt(row) - 1
+      
+      // Check if this cell is already included in a range
+      const isInRange = references.some(ref => ref.row === rowIndex && ref.col === colIndex)
+      if (!isInRange) {
+        references.push({ row: rowIndex, col: colIndex })
+      }
+    }
+    
+    return references
   }, [])
 
   // Check if data has changed and clear cache if needed
@@ -54,8 +202,21 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
     if (currentHash !== lastDataHashRef.current) {
       clearFormulaCache()
       lastDataHashRef.current = currentHash
+      
+      // Establish dependencies for all formulas in the data
+      data.forEach((row, rowIndex) => {
+        row.forEach((cell, colIndex) => {
+          if (cell?.value && String(cell.value).startsWith('=')) {
+            // Establish dependencies for this formula cell
+            const cellKey = `${rowIndex}-${colIndex}`
+            const references = extractCellReferences(cell.value)
+            const dependencyKeys = references.map(ref => `${ref.row}-${ref.col}`)
+            trackDependencies(cellKey, dependencyKeys)
+          }
+        })
+      })
     }
-  }, [data, generateDataHash, clearFormulaCache])
+  }, [data, generateDataHash, clearFormulaCache, extractCellReferences, trackDependencies])
 
   // Available formulas for autocomplete
   const availableFormulas = useMemo(() => [
@@ -107,7 +268,7 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
         const input = document.querySelector('.editing-input')
         if (input) {
           input.focus()
-          // Don't auto-select text, just position cursor at end
+          // Always position cursor at end when starting to edit
           const length = input.value.length
           input.setSelectionRange(length, length)
         }
@@ -217,25 +378,57 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
     return colors[Math.floor(Math.random() * colors.length)]
   }, [])
 
-  // Extract cell references from formula
-  const extractCellReferences = useCallback((formula) => {
-    const stringFormula = String(formula || '')
-    if (!stringFormula.startsWith('=')) return []
+  // Helper function to get range border info for a cell
+  const getRangeBorderInfo = useCallback((cellRef, referencedCells) => {
+    if (referencedCells.length === 0) return null
     
-    const expression = stringFormula.slice(1)
-    const cellRefRegex = /\$?([A-Z]+)\$?(\d+)/g
-    const references = []
-    let match
+    // Find the range bounds
+    const minRow = Math.min(...referencedCells.map(c => c.row))
+    const maxRow = Math.max(...referencedCells.map(c => c.row))
+    const minCol = Math.min(...referencedCells.map(c => c.col))
+    const maxCol = Math.max(...referencedCells.map(c => c.col))
     
-    while ((match = cellRefRegex.exec(expression)) !== null) {
-      const [, col, row] = match
-      const colIndex = col.split('').reduce((acc, char) => acc * 26 + (char.charCodeAt(0) - 64), 0) - 1
-      const rowIndex = parseInt(row) - 1
-      references.push({ row: rowIndex, col: colIndex })
+    return {
+      minRow,
+      maxRow,
+      minCol,
+      maxCol,
+      cellRef
+    }
+  }, [])
+
+  // Helper function to get border style for a cell in a range
+  const getRangeBorderStyle = useCallback((rangeInfo, color) => {
+    if (!rangeInfo) return ''
+    
+    const { minRow, maxRow, minCol, maxCol, cellRef } = rangeInfo
+    const { row, col } = cellRef
+    
+    let borderStyle = ''
+    
+    // Top border for first row
+    if (row === minRow) {
+      borderStyle += `border-top: 3px solid ${color}; `
     }
     
-    return references
+    // Bottom border for last row
+    if (row === maxRow) {
+      borderStyle += `border-bottom: 3px solid ${color}; `
+    }
+    
+    // Left border for first column
+    if (col === minCol) {
+      borderStyle += `border-left: 3px solid ${color}; `
+    }
+    
+    // Right border for last column
+    if (col === maxCol) {
+      borderStyle += `border-right: 3px solid ${color}; `
+    }
+    
+    return borderStyle
   }, [])
+
 
   // Handle autocomplete
   const handleAutocomplete = useCallback((value) => {
@@ -257,43 +450,73 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
     }
   }, [availableFormulas])
 
-  // Handle cell value change
-  const handleCellChange = useCallback((rowIndex, colIndex, value) => {
+  // Handle cell value change (without triggering recalculation during typing)
+  const handleCellChange = useCallback((rowIndex, colIndex, value, shouldRecalculate = false) => {
     if (onDataChange) {
+      const cellKey = `${rowIndex}-${colIndex}`
+      const oldValue = data[rowIndex]?.[colIndex]?.value
+      const newValue = value
+      
+      // Check if the value actually changed
+      const valueChanged = oldValue !== newValue
+      
       const newData = [...data]
       if (!newData[rowIndex]) newData[rowIndex] = []
       if (!newData[rowIndex][colIndex]) newData[rowIndex][colIndex] = { value: '', className: '' }
-      newData[rowIndex][colIndex] = { ...newData[rowIndex][colIndex], value }
+      
+      // Determine if this is a formula
+      const stringValue = String(value || '')
+      const isFormula = stringValue.startsWith('=')
+      
+      // Update cell with proper type and rawValue
+      newData[rowIndex][colIndex] = { 
+        ...newData[rowIndex][colIndex], 
+        value,
+        cellType: isFormula ? 'formula' : 'text',
+        rawValue: isFormula ? value : undefined // For formulas, rawValue should be the formula string
+      }
       onDataChange(newData)
 
       // Check if we're editing a formula
-      const stringValue = String(value || '')
       setIsFormulaEditing(stringValue.startsWith('='))
 
-      // Update referenced cells for highlighting
+      // Update referenced cells for highlighting (only during typing, not for recalculation)
       if (stringValue.startsWith('=')) {
         const references = extractCellReferences(stringValue)
         setReferencedCells(references)
         
-      // Assign random colors to referenced cells - ensure immediate update
-      const newColors = {}
-      references.forEach(ref => {
-        const key = `${ref.row}-${ref.col}`
-        if (!referencedCellColors[key]) {
-          newColors[key] = generateRandomColor()
-        }
-      })
-      // Always update colors to ensure immediate visual feedback
-      setReferencedCellColors(prev => ({ ...prev, ...newColors }))
+        // Track dependencies for this formula cell
+        const dependencyKeys = references.map(ref => `${ref.row}-${ref.col}`)
+        trackDependencies(cellKey, dependencyKeys)
+        
+        // Assign the same color to all referenced cells in this formula
+        const newColors = {}
+        const rangeColor = generateRandomColor()
+        references.forEach(ref => {
+          const key = `${ref.row}-${ref.col}`
+          newColors[key] = rangeColor
+        })
+        setReferencedCellColors(prev => ({ ...prev, ...newColors }))
       } else {
         setReferencedCells([])
         setReferencedCellColors({})
+        
+        // Clear dependencies for non-formula cells
+        trackDependencies(cellKey, [])
+      }
+
+      // Only trigger recalculation if explicitly requested (e.g., on Enter key)
+      if (shouldRecalculate && valueChanged) {
+        console.log(`🔄 Cell ${cellKey} changed from "${oldValue}" to "${newValue}" - triggering recalculation`)
+        triggerRecalculation(cellKey)
+        // Process recalculation queue immediately
+        processRecalculationQueue()
       }
 
       // Trigger autocomplete
       handleAutocomplete(value)
     }
-  }, [data, onDataChange, handleAutocomplete, extractCellReferences, generateRandomColor, referencedCellColors])
+  }, [data, onDataChange, handleAutocomplete, extractCellReferences, generateRandomColor, referencedCellColors, trackDependencies, triggerRecalculation, processRecalculationQueue])
 
   // Handle mouse down for drag selection
   const handleMouseDown = useCallback((rowIndex, colIndex, event) => {
@@ -306,7 +529,7 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
       const newValue = currentValue + cellRef
 
       // Update the formula with the cell reference
-      handleCellChange(editingCell.row, editingCell.col, newValue)
+      handleCellChange(editingCell.row, editingCell.col, newValue, false) // false = don't recalculate during formula editing
 
       // Keep the same cell in editing mode
       setSelectedCell({ row: editingCell.row, col: editingCell.col })
@@ -337,8 +560,27 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
       setSelectedCell({ row: rowIndex, col: colIndex })
       setEditingCell({ row: rowIndex, col: colIndex })
       onSelectedCellsChange?.([{ row: rowIndex, col: colIndex }])
+      
+      // Check if the cell contains a formula and highlight referenced cells
+      const cellValue = String(data[rowIndex]?.[colIndex]?.value || '')
+      if (cellValue.startsWith('=')) {
+        const references = extractCellReferences(cellValue)
+        setReferencedCells(references)
+        
+        // Assign the same color to all referenced cells in this formula
+        const newColors = {}
+        const rangeColor = generateRandomColor()
+        references.forEach(ref => {
+          const key = `${ref.row}-${ref.col}`
+          newColors[key] = rangeColor
+        })
+        setReferencedCellColors(prev => ({ ...prev, ...newColors }))
+      } else {
+        setReferencedCells([])
+        setReferencedCellColors({})
+      }
     }
-  }, [isFormulaEditing, editingCell, data, getColumnLetter, handleCellChange, selectedCells, onSelectedCellsChange])
+  }, [isFormulaEditing, editingCell, data, getColumnLetter, handleCellChange, selectedCells, onSelectedCellsChange, extractCellReferences, generateRandomColor, referencedCellColors])
 
   // Handle mouse move for drag selection
   const handleMouseMove = useCallback((event) => {
@@ -465,14 +707,24 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
     const stringFormula = String(formula || '')
     if (!stringFormula.startsWith('=')) return stringFormula
     
-    // Check cache first
+    const cellKey = `${rowIndex}-${colIndex}`
+    
+    // Check if this cell is in the recalculation queue
+    const shouldRecalculate = recalculationQueueRef.current.has(cellKey)
+    
+    // Check cache first, but skip cache if cell needs recalculation
     const cacheKey = `${rowIndex}-${colIndex}-${stringFormula}`
-    if (formulaCacheRef.current.has(cacheKey)) {
+    if (!shouldRecalculate && formulaCacheRef.current.has(cacheKey)) {
       return formulaCacheRef.current.get(cacheKey)
     }
     
     try {
       const expression = stringFormula.slice(1)
+      
+      // Debug: Log when we're evaluating a formula
+      if (shouldRecalculate) {
+        console.log(`🧮 Evaluating formula: ${stringFormula} at ${cellKey}`)
+      }
       
       // Enhanced number parsing that handles currency/locale formatted values robustly
       const parseNumericValue = (value) => {
@@ -514,9 +766,17 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
             stringVal = stringVal.replace(/,/g, '')
           }
         } else if (hasComma && !hasDot) {
-          // Likely European decimal comma; replace comma with dot
-          stringVal = stringVal.replace(/\./g, '') // just in case stray dots
-          stringVal = stringVal.replace(/,/g, '.')
+          // Check if it's likely a thousands separator (more than 3 digits after comma)
+          const commaIndex = stringVal.lastIndexOf(',')
+          const afterComma = stringVal.substring(commaIndex + 1)
+          if (afterComma.length > 3) {
+            // Likely thousands separator, remove comma
+            stringVal = stringVal.replace(/,/g, '')
+          } else {
+            // Likely European decimal comma; replace comma with dot
+            stringVal = stringVal.replace(/\./g, '') // just in case stray dots
+            stringVal = stringVal.replace(/,/g, '.')
+          }
         } else {
           // Remove any commas as thousands
           stringVal = stringVal.replace(/,/g, '')
@@ -529,11 +789,14 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
           stringVal = stringVal.replace(/%$/, '')
         }
 
+        console.log(`🔢 parseNumericValue: input="${value}", stringVal="${stringVal}", hasComma=${hasComma}, hasDot=${hasDot}`)
         const parsed = parseFloat(stringVal)
+        console.log(`🔢 parseNumericValue: parsed=${parsed}, isNaN=${isNaN(parsed)}`)
         if (isNaN(parsed)) return 0
         let result = parsed
         if (isNegative) result = -result
         if (isPercent) result = result / 100
+        console.log(`🔢 parseNumericValue result: ${result}`)
         return result
       }
 
@@ -550,33 +813,44 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
         const rowIndex = parseInt(row) - 1
         
         // Prevent circular references
-        const cellKey = `${rowIndex}-${colIndex}`
-        if (visitedCells.has(cellKey)) {
+        const referencedCellKey = `${rowIndex}-${colIndex}`
+        if (visitedCells.has(referencedCellKey)) {
           return 0 // Return 0 for circular references
         }
         
+        // Track this dependency
+        if (!visitedCells.has(referencedCellKey)) {
+          // Add to current cell's dependencies
+          const currentDependencies = formulaDependenciesRef.current.get(cellKey) || []
+          if (!currentDependencies.includes(referencedCellKey)) {
+            currentDependencies.push(referencedCellKey)
+            formulaDependenciesRef.current.set(cellKey, currentDependencies)
+            
+            // Update dependents for the referenced cell
+            if (!cellDependentsRef.current.has(referencedCellKey)) {
+              cellDependentsRef.current.set(referencedCellKey, new Set())
+            }
+            cellDependentsRef.current.get(referencedCellKey).add(cellKey)
+          }
+        }
+        
         const cell = data[rowIndex]?.[colIndex]
-        // Prefer rawValue if present to avoid formatted strings (e.g., $1,234.00)
-        const rawOrValue = cell?.rawValue !== undefined ? cell.rawValue : cell?.value
-        const cellValue = rawOrValue ?? 0
+        // Use rawValue if available (contains the actual numeric value), otherwise use value
+        const cellValue = cell?.rawValue !== undefined ? cell.rawValue : cell?.value ?? 0
         const stringValue = String(cellValue)
         
-        // Debug cell value lookup for first few cells
-        if (rowIndex < 3 && colIndex < 3) {
-          console.log(`Getting cell value for ${cellRef} (R${rowIndex + 1}C${colIndex + 1}):`, {
-            cellExists: !!cell,
-            cell: cell,
-            cellValue: cellValue,
-            stringValue: stringValue,
-            isFormula: stringValue.startsWith('=')
-          })
-        }
+        // Debug: Log what we're getting from the cell
+        console.log(`🔍 getCellValue for ${cellRef}: cell=${JSON.stringify(cell)}, cellValue=${cellValue}, stringValue="${stringValue}"`)
+        console.log(`🔍 Cell properties: isCurrency=${cell?.isCurrency}, currencySymbol=${cell?.currencySymbol}, numberFormat=${cell?.numberFormat}`)
         
         // If the cell contains a formula, evaluate it recursively
         if (stringValue.startsWith('=')) {
-          visitedCells.add(cellKey)
+          console.log(`🔍 Evaluating formula: ${stringValue}`)
+          visitedCells.add(referencedCellKey)
           const result = evaluateFormula(stringValue, rowIndex, colIndex, visitedCells)
-          visitedCells.delete(cellKey)
+          visitedCells.delete(referencedCellKey)
+          
+          console.log(`🔍 Formula result: ${result}`)
           
           // If the result is a date object, return it as-is for date functions
           if (result && typeof result === 'object' && result.type === 'date') {
@@ -596,7 +870,10 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
           }
         }
         
-        return parseNumericValue(cellValue)
+        console.log(`🔍 About to parse: "${cellValue}"`)
+        const result = parseNumericValue(cellValue)
+        console.log(`🔍 Parsed result: ${result}`)
+        return result
       }
       
       // Helper function to parse range (e.g., A1:A10 or $A$1:$A$10)
@@ -621,8 +898,8 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
         const values = []
         for (let r = startRowIndex; r <= endRowIndex; r++) {
           for (let c = startColIndex; c <= endColIndex; c++) {
-            const rawOrValue = data[r]?.[c]?.rawValue !== undefined ? data[r][c].rawValue : data[r]?.[c]?.value
-            const cellValue = rawOrValue ?? 0
+            // Use rawValue if available (contains the actual numeric value), otherwise use value
+            const cellValue = data[r]?.[c]?.rawValue !== undefined ? data[r][c].rawValue : data[r]?.[c]?.value ?? 0
             const stringValue = String(cellValue)
             
             // If the cell contains a formula, evaluate it recursively
@@ -775,14 +1052,8 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
             if (date && !isNaN(date.getTime())) {
               // Add the specified number of months, then set to the last day of that month
               // EOMONTH: Add months, then get the last day of that month
-              console.log(`EOMONTH Debug - Start date:`, date.toISOString().split('T')[0], `(${date.getMonth() + 1}/${date.getDate()}/${date.getFullYear()})`)
-              console.log(`EOMONTH Debug - Adding ${months} months`)
-              
               const targetMonth = date.getMonth() + months
-              console.log(`EOMONTH Debug - Target month: ${targetMonth} (${targetMonth + 1})`)
-              
               date.setMonth(targetMonth + 1, 0) // Go to next month, then set day to 0 (last day of target month)
-              console.log(`EOMONTH Debug - Result date:`, date.toISOString().split('T')[0], `(${date.getMonth() + 1}/${date.getDate()}/${date.getFullYear()})`)
               
               const result = { type: 'date', value: date, serial: Math.floor(date.getTime() / (1000 * 60 * 60 * 24)) + 25569 }
               formulaCacheRef.current.set(cacheKey, result)
@@ -1217,11 +1488,15 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
         // Updated regex to handle absolute references with $ symbols
         const cellRefRegex = /\$?([A-Z]+)\$?(\d+)/g
         processedExpression = processedExpression.replace(cellRefRegex, (match) => {
-          return getCellValue(match, visitedCells)
+          const cellValue = getCellValue(match, visitedCells)
+          console.log(`🧮 Arithmetic: replaced ${match} with ${cellValue}`)
+          return cellValue
         })
         
+        console.log(`🧮 Arithmetic: original="${expression}", processed="${processedExpression}"`)
         const result = Function('"use strict"; return (' + processedExpression + ')')()
         const finalResult = isNaN(result) ? stringFormula : result
+        console.log(`🧮 Arithmetic: result=${result}, finalResult=${finalResult}`)
         
         // Cache the result
         formulaCacheRef.current.set(cacheKey, finalResult)
@@ -1254,6 +1529,8 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
   // Get display value for a cell with memoization
   const getCellDisplayValue = useCallback((cell, rowIndex, colIndex) => {
     const cellValue = String(cell?.value || '')
+    const cellKey = `${rowIndex}-${colIndex}`
+    
     if (cellValue.startsWith('=')) {
       // Show formula only if this specific cell is being edited OR if we're in formula display mode
       const isThisCellEditing = editingCell?.row === rowIndex && editingCell?.col === colIndex
@@ -1261,32 +1538,25 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
       if (shouldShowFormula) {
         return cellValue
       } else {
+        // Track dependencies for this formula cell
+        const references = extractCellReferences(cellValue)
+        const dependencyKeys = references.map(ref => `${ref.row}-${ref.col}`)
+        trackDependencies(cellKey, dependencyKeys)
+        
         const result = evaluateFormula(cellValue, rowIndex, colIndex)
         
-        // Debug formula evaluation for first few cells
-        if (rowIndex < 3 && colIndex < 3) {
-          console.log(`Formula evaluation for R${rowIndex + 1}C${colIndex + 1}:`, {
-            formula: cellValue,
-            result: result,
-            resultType: typeof result
-          })
+        // Debug: Log formula evaluation for cells that should be recalculating
+        const wasInQueue = recalculationQueueRef.current.has(cellKey)
+        if (wasInQueue) {
+          console.log(`🧮 Recalculating formula at ${cellKey}: ${cellValue} = ${result}`)
         }
         
         // Apply enhanced formatting based on cell properties
         const formattedResult = formatCellValueWithProperties(result, cell)
         
-        // Debug formatting for first few cells
-        if (rowIndex < 3 && colIndex < 3) {
-          console.log(`Formatting result for R${rowIndex + 1}C${colIndex + 1}:`, {
-            originalResult: result,
-            formattedResult: formattedResult,
-            cellProperties: {
-              isDate: cell?.isDate,
-              isCurrency: cell?.isCurrency,
-              isPercentage: cell?.isPercentage,
-              numberFormat: cell?.numberFormat
-            }
-          })
+        // Debug: Log the final result
+        if (wasInQueue) {
+          console.log(`📊 Final result for ${cellKey}: ${formattedResult}`)
         }
         
         return formattedResult
@@ -1295,11 +1565,12 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
       // For non-formula cells, use the enhanced formatting
       return formatCellValueWithProperties(cellValue, cell)
     }
-  }, [editingCell, evaluateFormula, formulaDisplayMode])
+  }, [editingCell, evaluateFormula, formulaDisplayMode, extractCellReferences, trackDependencies, forceUpdate])
 
   // Enhanced cell value formatting function
   const formatCellValueWithProperties = useCallback((value, cell) => {
     if (!value && value !== 0) return ''
+    
     
     // If it's a formula result, return as-is
     if (typeof value === 'string' && value.startsWith('=')) {
@@ -1487,7 +1758,7 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
           const currentValue = e.target.value
           const beforeEquals = currentValue.split('=')[0] || ''
           const newValue = beforeEquals + '=' + selectedFormula.name + '('
-          handleCellChange(rowIndex, colIndex, newValue)
+          handleCellChange(rowIndex, colIndex, newValue, false) // false = don't recalculate during autocomplete
           setAutocompleteVisible(false)
           // Position cursor before the closing parenthesis
           setTimeout(() => {
@@ -1506,6 +1777,12 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
     // Handle cell navigation
         if (e.key === 'Enter') {
           e.preventDefault()
+          
+          // Trigger recalculation when Enter is pressed
+          const currentValue = e.target.value
+          console.log(`🚀 Enter pressed for cell ${rowIndex}-${colIndex} with value: "${currentValue}"`)
+          handleCellChange(rowIndex, colIndex, currentValue, true) // true = shouldRecalculate
+          
           setEditingCell(null)
           setAutocompleteVisible(false)
           setIsFormulaEditing(false)
@@ -1517,6 +1794,11 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
           }
         } else if (e.key === 'Tab') {
           e.preventDefault()
+          
+          // Trigger recalculation when Tab is pressed
+          const currentValue = e.target.value
+          handleCellChange(rowIndex, colIndex, currentValue, true) // true = shouldRecalculate
+          
           setEditingCell(null)
           setAutocompleteVisible(false)
           setIsFormulaEditing(false)
@@ -1534,24 +1816,32 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
           setReferencedCells([])
           setReferencedCellColors({})
     } else if (e.key === 'ArrowLeft' && !autocompleteVisible) {
-      e.preventDefault()
-      setEditingCell(null)
-      setAutocompleteVisible(false)
-      setIsFormulaEditing(false)
-      setReferencedCells([])
-      // Move to previous column
-      if (colIndex > 0) {
-        setSelectedCell({ row: rowIndex, col: colIndex - 1 })
+      // Don't prevent default - let the cursor move within the text
+      // Only move to previous cell if we're not editing
+      if (!editingCell) {
+        e.preventDefault()
+        setEditingCell(null)
+        setAutocompleteVisible(false)
+        setIsFormulaEditing(false)
+        setReferencedCells([])
+        // Move to previous column
+        if (colIndex > 0) {
+          setSelectedCell({ row: rowIndex, col: colIndex - 1 })
+        }
       }
     } else if (e.key === 'ArrowRight' && !autocompleteVisible) {
-      e.preventDefault()
-      setEditingCell(null)
-      setAutocompleteVisible(false)
-      setIsFormulaEditing(false)
-      setReferencedCells([])
-      // Move to next column
-      if (colIndex < (data[0]?.length || 0) - 1) {
-        setSelectedCell({ row: rowIndex, col: colIndex + 1 })
+      // Don't prevent default - let the cursor move within the text
+      // Only move to next cell if we're not editing
+      if (!editingCell) {
+        e.preventDefault()
+        setEditingCell(null)
+        setAutocompleteVisible(false)
+        setIsFormulaEditing(false)
+        setReferencedCells([])
+        // Move to next column
+        if (colIndex < (data[0]?.length || 0) - 1) {
+          setSelectedCell({ row: rowIndex, col: colIndex + 1 })
+        }
       }
     } else if (e.key === 'ArrowUp' && !autocompleteVisible) {
       e.preventDefault()
@@ -1607,7 +1897,7 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
       onScroll={handleScroll}
     >
       {/* Virtual table with only visible cells */}
-      <table className="excel-grid w-full border-collapse">
+      <table key={`spreadsheet-${recalcTrigger}-${forceUpdate}`} className="excel-grid w-full border-collapse">
         <thead className="sticky top-0 bg-white z-10">
           <tr>
             <th className="bg-gray-100 border border-gray-300 text-center text-xs font-medium text-gray-700 py-2">
@@ -1732,10 +2022,23 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
                             id={`cell-${actualRowIndex}-${actualColIndex}`}
                             name={`cell-${actualRowIndex}-${actualColIndex}`}
                             value={cellValue}
-                            onChange={(e) => handleCellChange(actualRowIndex, actualColIndex, e.target.value)}
+                            onChange={(e) => handleCellChange(actualRowIndex, actualColIndex, e.target.value, false)} // false = don't recalculate during typing
                             onKeyDown={(e) => handleCellKeyPress(e, actualRowIndex, actualColIndex)}
+                            onClick={(e) => {
+                              // Allow normal cursor positioning by not preventing default
+                              e.stopPropagation()
+                            }}
+                            onMouseDown={(e) => {
+                              // Prevent the cell's onMouseDown from firing when clicking on the input
+                              e.stopPropagation()
+                            }}
                             onBlur={() => {
                               setTimeout(() => {
+                                // Trigger recalculation when cell loses focus
+                                const currentValue = cellValue
+                                console.log(`🚀 Blur triggered for cell ${actualRowIndex}-${actualColIndex} with value: "${currentValue}"`)
+                                handleCellChange(actualRowIndex, actualColIndex, currentValue, true) // true = shouldRecalculate
+                                
                                 setEditingCell(null)
                                 setAutocompleteVisible(false)
                                 setIsFormulaEditing(false)
@@ -1755,7 +2058,7 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
                                   }`}
                                   onClick={() => {
                                     const newValue = '=' + formula.name + '('
-                                    handleCellChange(actualRowIndex, actualColIndex, newValue)
+                                    handleCellChange(actualRowIndex, actualColIndex, newValue, false) // false = don't recalculate during autocomplete
                                     setAutocompleteVisible(false)
                                   }}
                                 >
@@ -1786,17 +2089,8 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
   )
 }
 
-// Memoize the component to prevent unnecessary re-renders
-export default memo(ReactSpreadsheet, (prevProps, nextProps) => {
-  // Only re-render if data length or structure changes, not on every scroll
-  return (
-    prevProps.data === nextProps.data &&
-    prevProps.onDataChange === nextProps.onDataChange &&
-    prevProps.formulaDisplayMode === nextProps.formulaDisplayMode &&
-    prevProps.selectedCells === nextProps.selectedCells &&
-    prevProps.onSelectedCellsChange === nextProps.onSelectedCellsChange
-  )
-})
+// Disable memoization completely to ensure recalculation works
+export default ReactSpreadsheet
 
 ReactSpreadsheet.propTypes = {
   data: PropTypes.arrayOf(PropTypes.arrayOf(PropTypes.shape({

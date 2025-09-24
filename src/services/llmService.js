@@ -1132,26 +1132,61 @@ export class LLMService {
       this.spreadsheetData[r-1][c-1] = { value: "", className: "" };
     }
     
-    // Update the value
-    this.spreadsheetData[r-1][c-1].value = newValue;
+    // Get the existing cell to preserve formatting properties
+    const existingCell = this.spreadsheetData[r-1][c-1];
     
-    // Trigger data change callback
+    // If the cell is a percentage and the new value contains a % symbol, strip it and convert to decimal
+    let processedValue = newValue;
+    if (existingCell.isPercentage && typeof newValue === 'string' && newValue.includes('%')) {
+      // Strip the % symbol and convert to decimal (e.g., "80%" -> 0.8)
+      const numericValue = parseFloat(newValue.replace('%', ''));
+      if (!isNaN(numericValue)) {
+        processedValue = numericValue / 100; // Convert percentage to decimal
+        console.log(`Converting percentage: ${newValue} -> ${processedValue}`);
+      }
+    }
+    
+    console.log(`Updating cell ${address}:`, {
+      before: existingCell,
+      newValue: newValue,
+      processedValue: processedValue,
+      newValueType: typeof newValue,
+      isPercentage: existingCell.isPercentage,
+      decimalPlaces: existingCell.decimalPlaces
+    });
+    
+    // Update the value while preserving all formatting properties
+    this.spreadsheetData[r-1][c-1] = {
+      ...existingCell,
+      value: processedValue
+    };
+    
+    console.log(`After update:`, this.spreadsheetData[r-1][c-1]);
+    
+    // Trigger data change callback with a deep copy to ensure reference change
     if (this.onDataChange) {
-      this.onDataChange([...this.spreadsheetData]);
+      const newData = JSON.parse(JSON.stringify(this.spreadsheetData));
+      console.log('Triggering data change with new reference:', newData[r-1][c-1]);
+      this.onDataChange(newData);
     }
     
     return { address, newValue };
   }
 
   /**
-   * Trigger recalculation (placeholder for now)
+   * Trigger recalculation
    */
   recalc() {
-    // In a real implementation, this would trigger formula evaluation
-    // For now, we'll just return a summary
+    // Force a data change to trigger recalculation in the spreadsheet
+    if (this.onDataChange) {
+      // Create a new reference to trigger React re-render
+      const newData = JSON.parse(JSON.stringify(this.spreadsheetData));
+      this.onDataChange(newData);
+    }
+    
     return { 
-      changed: 0, 
-      message: "Recalculation triggered (formulas will be evaluated on next render)" 
+      changed: 1, 
+      message: "Recalculation triggered - all formulas will be re-evaluated" 
     };
   }
 

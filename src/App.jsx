@@ -39,6 +39,8 @@ function ExcelApp() {
   const [formulaDisplayMode, setFormulaDisplayMode] = useState(0) // 0: normal, 1: highlight formulas, 2: show all formulas
   const [selectedCells, setSelectedCells] = useState([]) // Array of selected cell coordinates
   const [isChatLoading, setIsChatLoading] = useState(false)
+  const [decimalButtonClicked, setDecimalButtonClicked] = useState(false)
+  const [averageDecimals, setAverageDecimals] = useState(0)
   const [customApiKey, setCustomApiKey] = useState('')
   const toolCallHandlerRef = useRef(null)
   const llmServiceRef = useRef(null)
@@ -664,7 +666,8 @@ function ExcelApp() {
   }, [spreadsheetData, fileName, excelData])
 
   const handleSpreadsheetChange = useCallback((data) => {
-    console.log('Spreadsheet data changed:', data)
+    console.log('Spreadsheet data changed in App:', data.length, 'rows')
+    console.log('First few cells:', data.slice(0, 2).map(row => row.slice(0, 3)))
     setSpreadsheetData(data)
     
     // Update LLM service with new data
@@ -677,9 +680,10 @@ function ExcelApp() {
   const hasSpreadsheetData = spreadsheetData.length > 0;
   useEffect(() => {
     if (hasSpreadsheetData) {
+      console.log('Creating new LLM service with data:', spreadsheetData.length, 'rows');
       llmServiceRef.current = new LLMService(spreadsheetData, setSpreadsheetData, toolCallHandlerRef.current, customApiKey)
     }
-  }, [hasSpreadsheetData, spreadsheetData, customApiKey])
+  }, [hasSpreadsheetData, customApiKey]) // Removed spreadsheetData from dependencies to prevent recreation
 
   // Handle chat messages
   const handleChatMessage = useCallback(async (message) => {
@@ -711,6 +715,12 @@ function ExcelApp() {
     setCustomApiKey(apiKey)
   }, [])
 
+  // Reset decimal button state when selection changes
+  useEffect(() => {
+    setDecimalButtonClicked(false)
+    setAverageDecimals(0)
+  }, [selectedCells])
+
 
   // Increase decimal places for selected cells
   const increaseDecimals = useCallback(() => {
@@ -719,35 +729,53 @@ function ExcelApp() {
     setSpreadsheetData(prevData => {
       const newData = [...prevData]
       
-      // Calculate average decimal places from selected cells
-      let totalDecimals = 0
-      let cellCount = 0
-      selectedCells.forEach(({ row, col }) => {
-        if (newData[row] && newData[row][col]) {
-          const cell = newData[row][col]
-          const currentDecimals = cell.decimalPlaces || 0
-          totalDecimals += currentDecimals
-          cellCount++
-        }
-      })
-      
-      const averageDecimals = cellCount > 0 ? Math.round(totalDecimals / cellCount) : 0
-      const targetDecimals = Math.min(averageDecimals + 1, 10) // Add 1 decimal place, max 10
-      
-      selectedCells.forEach(({ row, col }) => {
-        if (newData[row] && newData[row][col]) {
-          const cell = newData[row][col]
-          
-          // Update the cell with new decimal places setting
-          newData[row][col] = {
-            ...cell,
-            decimalPlaces: targetDecimals
+      if (!decimalButtonClicked) {
+        // First click: Calculate average decimal places and set all cells to that average
+        let totalDecimals = 0
+        let cellCount = 0
+        selectedCells.forEach(({ row, col }) => {
+          if (newData[row] && newData[row][col]) {
+            const cell = newData[row][col]
+            const currentDecimals = cell.decimalPlaces || 0
+            totalDecimals += currentDecimals
+            cellCount++
           }
-        }
-      })
+        })
+        
+        const calculatedAverage = cellCount > 0 ? Math.round(totalDecimals / cellCount) : 0
+        setAverageDecimals(calculatedAverage)
+        
+        selectedCells.forEach(({ row, col }) => {
+          if (newData[row] && newData[row][col]) {
+            const cell = newData[row][col]
+            newData[row][col] = {
+              ...cell,
+              decimalPlaces: calculatedAverage
+            }
+          }
+        })
+        
+        setDecimalButtonClicked(true)
+      } else {
+        // Subsequent clicks: Add 1 decimal place to the stored average
+        const targetDecimals = Math.min(averageDecimals + 1, 10)
+        
+        selectedCells.forEach(({ row, col }) => {
+          if (newData[row] && newData[row][col]) {
+            const cell = newData[row][col]
+            newData[row][col] = {
+              ...cell,
+              decimalPlaces: targetDecimals
+            }
+          }
+        })
+        
+        setAverageDecimals(targetDecimals)
+      }
+      
       return newData
     })
-  }, [selectedCells])
+  }, [selectedCells, decimalButtonClicked, averageDecimals])
 
   // Decrease decimal places for selected cells
   const decreaseDecimals = useCallback(() => {
@@ -756,35 +784,53 @@ function ExcelApp() {
     setSpreadsheetData(prevData => {
       const newData = [...prevData]
       
-      // Calculate average decimal places from selected cells
-      let totalDecimals = 0
-      let cellCount = 0
-      selectedCells.forEach(({ row, col }) => {
-        if (newData[row] && newData[row][col]) {
-          const cell = newData[row][col]
-          const currentDecimals = cell.decimalPlaces || 0
-          totalDecimals += currentDecimals
-          cellCount++
-        }
-      })
-      
-      const averageDecimals = cellCount > 0 ? Math.round(totalDecimals / cellCount) : 0
-      const targetDecimals = Math.max(averageDecimals - 1, 0) // Remove 1 decimal place, min 0
-      
-      selectedCells.forEach(({ row, col }) => {
-        if (newData[row] && newData[row][col]) {
-          const cell = newData[row][col]
-          
-          // Update the cell with new decimal places setting
-          newData[row][col] = {
-            ...cell,
-            decimalPlaces: targetDecimals
+      if (!decimalButtonClicked) {
+        // First click: Calculate average decimal places and set all cells to that average
+        let totalDecimals = 0
+        let cellCount = 0
+        selectedCells.forEach(({ row, col }) => {
+          if (newData[row] && newData[row][col]) {
+            const cell = newData[row][col]
+            const currentDecimals = cell.decimalPlaces || 0
+            totalDecimals += currentDecimals
+            cellCount++
           }
-        }
-      })
+        })
+        
+        const calculatedAverage = cellCount > 0 ? Math.round(totalDecimals / cellCount) : 0
+        setAverageDecimals(calculatedAverage)
+        
+        selectedCells.forEach(({ row, col }) => {
+          if (newData[row] && newData[row][col]) {
+            const cell = newData[row][col]
+            newData[row][col] = {
+              ...cell,
+              decimalPlaces: calculatedAverage
+            }
+          }
+        })
+        
+        setDecimalButtonClicked(true)
+      } else {
+        // Subsequent clicks: Remove 1 decimal place from the stored average
+        const targetDecimals = Math.max(averageDecimals - 1, 0)
+        
+        selectedCells.forEach(({ row, col }) => {
+          if (newData[row] && newData[row][col]) {
+            const cell = newData[row][col]
+            newData[row][col] = {
+              ...cell,
+              decimalPlaces: targetDecimals
+            }
+          }
+        })
+        
+        setAverageDecimals(targetDecimals)
+      }
+      
       return newData
     })
-  }, [selectedCells])
+  }, [selectedCells, decimalButtonClicked, averageDecimals])
 
   // Format selected cells as dates
   const formatAsDate = useCallback(() => {
@@ -1013,7 +1059,7 @@ function ExcelApp() {
                         title={`Increase decimal places (${selectedCells.length} cells selected)`}
                       >
                         <Plus className="w-4 h-4" />
-                        <span>+0.0</span>
+                        <span>0.00</span>
                       </button>
                       
                       {/* Date formatting button */}

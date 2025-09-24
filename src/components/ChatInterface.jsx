@@ -85,6 +85,18 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
     }
   }, [openaiKey, user, hasValidKey]);
 
+  // Handle API key input changes
+  const handleKeyChange = (e) => {
+    const value = e.target.value;
+    setOpenaiKey(value);
+    setKeyError(''); // Clear any previous errors
+    
+    // Call the parent's onApiKeyChange if provided
+    if (onApiKeyChange) {
+      onApiKeyChange(value);
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!message.trim() || isLoading) return;
@@ -161,11 +173,11 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
       },
       'conclude': {
         call: '🎯 Providing final answer',
-        result: '✅ Answer concluded'
+        result: 'Answer concluded'
       },
       'small_talk': {
         call: '💬 Handling simple conversation',
-        result: '✅ Response provided'
+        result: 'Response provided'
       },
       'read_cell': {
         call: '📖 Reading cell value',
@@ -173,11 +185,11 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
       },
       'update_cell': {
         call: '✏️ Updating cell value',
-        result: '✅ Cell updated'
+        result: 'Cell updated'
       },
       'recalc': {
         call: '🔄 Recalculating formulas',
-        result: '✅ Recalculation complete'
+        result: 'Recalculation complete'
       },
       'read_sheet': {
         call: '📋 Reading spreadsheet range',
@@ -185,7 +197,7 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
       }
     };
     
-    return descriptions[toolName]?.[type] || `${type === 'call' ? '🔧' : '✅'} ${toolName}`;
+    return descriptions[toolName]?.[type] || '';
   };
 
   const formatParameters = (toolCall) => {
@@ -285,7 +297,7 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
           `Next: Analyzing the data to find the answer`
         ];
       } else {
-        return ['✅ Success'];
+        return [];
       }
     }
   };
