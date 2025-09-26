@@ -1,17 +1,15 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import PropTypes from 'prop-types';
-import { Send, Bot, User, Loader2, ChevronDown, ChevronUp, Key, Eye, EyeOff, Search } from 'lucide-react';
+import { Send, Bot, User, Loader2, ChevronDown, ChevronUp, Key, Eye, EyeOff, Square } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 
-const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToolCall = null, onApiKeyChange = null, spreadsheetData = null, llmService = null, onHighlightBlock = null }) => {
+const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToolCall = null, onApiKeyChange = null, onCancel = null }) => {
   const { user } = useAuth();
   const [message, setMessage] = useState('');
   const [openaiKey, setOpenaiKey] = useState('');
   const [showKey, setShowKey] = useState(false);
   const [keyError, setKeyError] = useState('');
   const [isKeySectionCollapsed, setIsKeySectionCollapsed] = useState(true);
-  const [indexedSections, setIndexedSections] = useState([]);
-  const [isIndexing, setIsIndexing] = useState(false);
   const [messages, setMessages] = useState([
     {
       id: 1,
@@ -22,6 +20,8 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
   ]);
   const [toolCalls, setToolCalls] = useState([]);
   const [expandedToolCalls, setExpandedToolCalls] = useState(new Set());
+  const [isCancelling, setIsCancelling] = useState(false);
+  const [isHoveringStop, setIsHoveringStop] = useState(false);
   // const [showScrollButton, setShowScrollButton] = useState(false);
   const messagesEndRef = useRef(null);
   const messagesContainerRef = useRef(null);
@@ -38,26 +38,25 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
     }
   };
 
+
   useEffect(() => {
     scrollToBottom();
   }, [messages, toolCalls]);
 
+
   // Handle tool call updates
   const handleToolCall = useCallback((toolCallData) => {
-    setToolCalls(prev => [...prev, {
+    const newToolCall = {
       id: Date.now() + Math.random(),
       ...toolCallData,
       timestamp: new Date()
-    }]);
+    };
+    setToolCalls(prev => {
+      const updated = [...prev, newToolCall];
+      return updated;
+    });
 
-    // Highlight range when index_spreadsheet tool is called
-    if (toolCallData.type === 'tool_call' && toolCallData.tool === 'index_spreadsheet' && onHighlightBlock) {
-      const frameRange = toolCallData.arguments?.frame_range;
-      if (frameRange) {
-        onHighlightBlock(frameRange);
-      }
-    }
-  }, [onHighlightBlock]);
+  }, []);
 
   useEffect(() => {
     if (onToolCall) {
@@ -107,9 +106,35 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
     }
   };
 
+  // Handle cancellation
+  const handleCancel = useCallback(() => {
+    setIsCancelling(true);
+    
+    // Call the parent's cancel handler
+    if (onCancel) {
+      onCancel();
+    }
+    
+    // Clear any pending tool calls
+    setToolCalls([]);
+    
+    // Add cancellation message
+    const cancelMessage = {
+      id: Date.now(),
+      type: 'bot',
+      content: 'Request cancelled by user.',
+      timestamp: new Date()
+    };
+    setMessages(prev => [...prev, cancelMessage]);
+    
+    // Reset states immediately
+    setIsCancelling(false);
+    setIsHoveringStop(false);
+  }, [onCancel]);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!message.trim() || isLoading) return;
+    if (!message.trim() || isLoading || isCancelling) return;
 
     // Check if user has valid key access
     if (!hasValidKey()) {
@@ -127,6 +152,10 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
     setMessages(prev => [...prev, userMessage]);
     setMessage('');
     setToolCalls([]); // Clear previous tool calls
+    
+    // Reset cancellation state for new request
+    setIsCancelling(false);
+    setIsHoveringStop(false);
 
     try {
       const response = await onSendMessage(message.trim());
@@ -205,203 +234,18 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
         call: '📋 Reading spreadsheet range',
         result: '📊 Range data loaded'
       },
-      'index_spreadsheet': {
-        call: '🔍 Analyzing spreadsheet frame',
-        result: '📋 Frame analysis complete'
-      }
+      'dependency_analysis': {
+        call: '🔍 Analyzing spreadsheet dependencies',
+        result: '📊 Dependency layer identified'
+      },
     };
     
     return descriptions[toolName]?.[type] || '';
   };
 
-  // Helper function to convert column index to letter
-  const getColumnLetter = (index) => {
-    let result = '';
-    while (index >= 0) {
-      result = String.fromCharCode(65 + (index % 26)) + result;
-      index = Math.floor(index / 26) - 1;
-    }
-    return result;
-  };
 
-  // Helper function to convert row/col to Excel address
-  const getExcelAddress = (row, col) => {
-    return getColumnLetter(col) + (row + 1);
-  };
 
-  // Algorithm to detect data blocks separated by whitespace
-  const detectDataBlocks = useCallback(() => {
-    if (!spreadsheetData || spreadsheetData.length === 0) return [];
-    
-    const blocks = [];
-    const data = spreadsheetData;
-    const rows = data.length;
-    const cols = data[0]?.length || 0;
-    
-    // Helper function to check if a row is empty
-    const isEmptyRow = (rowIndex) => {
-      if (rowIndex >= rows) return true;
-      const row = data[rowIndex];
-      if (!row) return true;
-      return row.every(cell => !cell || cell.value === '' || cell.value === null || cell.value === undefined);
-    };
-    
-    // Helper function to check if a column is empty
-    const isEmptyCol = (colIndex) => {
-      if (colIndex >= cols) return true;
-      for (let row = 0; row < rows; row++) {
-        const cell = data[row]?.[colIndex];
-        if (cell && cell.value !== '' && cell.value !== null && cell.value !== undefined) {
-          return false;
-        }
-      }
-      return true;
-    };
-    
-    // Find all non-empty cells to determine the actual data bounds
-    let minRow = rows, maxRow = -1, minCol = cols, maxCol = -1;
-    for (let row = 0; row < rows; row++) {
-      for (let col = 0; col < cols; col++) {
-        const cell = data[row]?.[col];
-        if (cell && cell.value !== '' && cell.value !== null && cell.value !== undefined) {
-          minRow = Math.min(minRow, row);
-          maxRow = Math.max(maxRow, row);
-          minCol = Math.min(minCol, col);
-          maxCol = Math.max(maxCol, col);
-        }
-      }
-    }
-    
-    if (maxRow === -1) return []; // No data found
-    
-    // Find blocks by looking for empty rows/columns that separate data
-    let currentBlock = null;
-    
-    for (let row = minRow; row <= maxRow; row++) {
-      if (isEmptyRow(row)) {
-        // End current block if we have one
-        if (currentBlock) {
-          blocks.push(currentBlock);
-          currentBlock = null;
-        }
-      } else {
-        // Start or extend current block
-        if (!currentBlock) {
-          currentBlock = {
-            startRow: row,
-            endRow: row,
-            startCol: minCol,
-            endCol: maxCol
-          };
-        } else {
-          currentBlock.endRow = row;
-        }
-      }
-    }
-    
-    // Add the last block if it exists
-    if (currentBlock) {
-      blocks.push(currentBlock);
-    }
-    
-    // Convert to Excel ranges and add metadata
-    return blocks.map((block, index) => {
-      const startAddress = getExcelAddress(block.startRow, block.startCol);
-      const endAddress = getExcelAddress(block.endRow, block.endCol);
-      const range = `${startAddress}:${endAddress}`;
-      
-      return {
-        id: `block_${index}`,
-        range: range,
-        startRow: block.startRow,
-        endRow: block.endRow,
-        startCol: block.startCol,
-        endCol: block.endCol,
-        size: (block.endRow - block.startRow + 1) * (block.endCol - block.startCol + 1)
-      };
-    });
-  }, [spreadsheetData]);
 
-  // State for tracking analyzed sections
-  const [analyzedSections, setAnalyzedSections] = useState([]);
-  const [currentBlockIndex, setCurrentBlockIndex] = useState(0);
-
-  // Indexing function that uses proper tool calling
-  const indexSpreadsheet = useCallback(async () => {
-    if (!spreadsheetData || spreadsheetData.length === 0) {
-      setKeyError('No spreadsheet data available to index');
-      return;
-    }
-
-    console.log('Index button clicked, llmService:', llmService);
-    console.log('Spreadsheet data length:', spreadsheetData.length);
-
-    if (!llmService) {
-      setKeyError('LLM service not available for indexing. Please wait for the service to initialize.');
-      return;
-    }
-
-    setIsIndexing(true);
-    setIndexedSections([{ description: 'Indexing in progress...', range: 'Processing frames', type: 'progress' }]); // Show progress
-    setAnalyzedSections([]); // Clear analyzed sections
-    setCurrentBlockIndex(0);
-    
-    try {
-      // Step 1: Get frames from the LLM service
-      const frames = llmService.getAllFrames();
-      console.log('Detected frames:', frames);
-      
-      if (frames.length === 0) {
-        setKeyError('No frames found in the spreadsheet');
-        return;
-      }
-      
-      // Step 2: Use LLM with proper tool calling to index the spreadsheet
-      const indexingPrompt = `I need to index this spreadsheet by analyzing ${frames.length} frames step by step. 
-
-Detected frames:
-${frames.map((frame, index) => `${index}. ${frame.range}`).join('\n')}
-
-You MUST process ALL ${frames.length} frames (0 to ${frames.length - 1}). Use the index_spreadsheet tool for each frame:
-1. Call index_spreadsheet with frame_range, frame_index (0, 1, 2, 3, 4, 5, 6, 7...), total_frames (${frames.length}), and current sections
-2. Review the analysis results and update your sections list
-3. Continue to the next frame until ALL frames are processed
-
-CRITICAL: Do not stop until you have processed frames 0, 1, 2, 3, 4, 5, 6, 7 (all ${frames.length} frames). Show me the progress and findings as you go.
-
-WARNING: If you try to conclude before processing all ${frames.length} frames, you will get an error and must continue. You cannot stop early.
-
-FRAME LIST TO PROCESS:
-${frames.map((frame, index) => `Frame ${index}: ${frame.range}`).join('\n')}
-
-You must call index_spreadsheet for each of these ${frames.length} frames in order.`;
-      
-      // Send the indexing prompt to trigger tool calling
-      const response = await onSendMessage(indexingPrompt);
-      
-      console.log('Indexing response:', response);
-      
-      // The response should contain the indexed sections from tool calls
-      if (response && typeof response === 'string') {
-        // Add the indexing response as a regular chat message
-        const indexingMessage = {
-          id: Date.now() + 1,
-          type: 'bot',
-          content: response,
-          timestamp: new Date()
-        };
-        setMessages(prev => [...prev, indexingMessage]);
-        setIndexedSections([{ description: 'Indexing complete', range: 'See chat messages for results', type: 'complete' }]);
-        setKeyError(''); // Clear any previous errors
-      }
-      
-    } catch (error) {
-      console.error('Error indexing spreadsheet:', error);
-      setKeyError('Error indexing spreadsheet: ' + error.message);
-    } finally {
-      setIsIndexing(false);
-    }
-  }, [spreadsheetData, llmService, onSendMessage]);
 
   const formatParameters = (toolCall) => {
     if (toolCall.type === 'tool_call') {
@@ -442,12 +286,11 @@ You must call index_spreadsheet for each of these ${frames.length} frames in ord
           `Reading range: ${toolCall.arguments?.range || 'N/A'}`,
           `Purpose: Getting data from multiple cells`
         ];
-      } else if (toolCall.tool === 'index_spreadsheet') {
+      } else if (toolCall.tool === 'dependency_analysis') {
         return [
-          `Frame: ${toolCall.arguments?.frame_range || 'N/A'}`,
-          `Progress: ${(toolCall.arguments?.frame_index || 0) + 1}/${toolCall.arguments?.total_frames || 0}`,
-          `Sections: ${toolCall.arguments?.sections?.length || 0} analyzed`,
-          `Action: ${toolCall.arguments?.frame_index === 0 ? 'Starting indexing' : 'Continuing indexing'}`
+          `Layer ${toolCall.arguments?.layer || 'N/A'}: ${toolCall.arguments?.layerType || 'Unknown'}`,
+          `Cells: ${toolCall.arguments?.cells?.join(', ') || 'N/A'}`,
+          `Frames: ${toolCall.arguments?.horizontalFrames?.join(', ') || 'None'} | ${toolCall.arguments?.verticalFrames?.join(', ') || 'None'}`
         ];
       } else {
         return Object.entries(toolCall.arguments || {}).map(([key, value]) => `${key}: ${JSON.stringify(value)}`);
@@ -481,7 +324,14 @@ You must call index_spreadsheet for each of these ${frames.length} frames in ord
           return ['📊 Subframe analysis complete'];
         }
       } else if (toolCall.tool === 'conclude') {
-        return [`🎯 Final Answer: ${toolCall.result?.answer || 'No answer provided'}`];
+        const answer = toolCall.result?.answer || 'No answer provided';
+        const confidence = toolCall.result?.confidence || 'unknown';
+        const sources = toolCall.result?.sources || [];
+        return [
+          `🎯 Final Answer: ${answer.length > 100 ? answer.substring(0, 100) + '...' : answer}`,
+          `🎯 Confidence: ${confidence}`,
+          ...(sources.length > 0 ? [`📚 Sources: ${sources.length} references`] : [])
+        ];
       } else if (toolCall.tool === 'small_talk') {
         return [`💬 Response: ${toolCall.result?.response || 'No response provided'}`];
       } else if (toolCall.tool === 'read_cell') {
@@ -501,21 +351,29 @@ You must call index_spreadsheet for each of these ${frames.length} frames in ord
           `Message: ${toolCall.result?.message || 'Recalculation complete'}`
         ];
       } else if (toolCall.tool === 'read_sheet') {
+        const window = toolCall.result?.window;
+        const range = toolCall.result?.range || 'N/A';
         return [
-          `📊 Range: ${toolCall.result?.range || 'N/A'}`,
-          `📈 Data loaded: ${toolCall.result?.window ? 'Yes' : 'No'}`,
+          `📊 Range: ${range}`,
+          `📈 Data loaded: ${window ? 'Yes' : 'No'}`,
+          ...(window ? [
+            `📏 Size: ${window.length} rows x ${window[0]?.length || 0} columns`,
+            `📋 Sample: ${window[0]?.slice(0, 3).join(', ') || 'No data'}`
+          ] : []),
           `Next: Analyzing the data to find the answer`
         ];
-      } else if (toolCall.tool === 'index_spreadsheet') {
-        const analysis = toolCall.result?.analysis;
+      } else if (toolCall.tool === 'dependency_analysis') {
+        const layer = toolCall.result?.layer || 'N/A';
+        const cellCount = toolCall.result?.cellCount || 0;
+        const frames = toolCall.result?.frames;
         return [
-          `🔍 Frame: ${toolCall.result?.frame_range || 'N/A'}`,
-          `📋 Type: ${analysis?.type || 'Unknown'}`,
-          `📝 Description: ${analysis?.description || 'N/A'}`,
-          `🔗 Merge: ${analysis?.should_merge ? 'Yes' : 'No'}`,
-          `📊 Progress: ${toolCall.result?.progress || 'N/A'}`,
-          `📈 Sections: ${toolCall.result?.sections?.length || 0} found`,
-          `✅ Complete: ${toolCall.result?.is_complete ? 'Yes' : 'No'}`
+          `📊 Layer ${layer} analyzed`,
+          `📈 Cells: ${cellCount} cells in this layer`,
+          ...(frames ? [
+            `🔗 Horizontal frames: ${frames.horizontal?.join(', ') || 'None'}`,
+            `🔗 Vertical frames: ${frames.vertical?.join(', ') || 'None'}`
+          ] : []),
+          `✅ Layer dependency structure identified`
         ];
       } else {
         return [];
@@ -642,52 +500,6 @@ You must call index_spreadsheet for each of these ${frames.length} frames in ord
         )}
       </div>
 
-      {/* Index Section */}
-      <div className="border-b border-gray-200 bg-gray-50">
-        <div className="p-4">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center space-x-2">
-              <Search className="w-4 h-4 text-gray-500" />
-              <span className="text-sm font-medium text-gray-700">Spreadsheet Index</span>
-              {indexedSections.length > 0 && (
-                <span className="text-xs text-green-600 bg-green-100 px-2 py-1 rounded-full">
-                  {indexedSections.length} sections
-                </span>
-              )}
-            </div>
-            <button
-              onClick={indexSpreadsheet}
-              disabled={!spreadsheetData || isIndexing}
-              className="px-3 py-1 text-xs rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-1"
-            >
-              {isIndexing ? (
-                <Loader2 className="w-3 h-3 animate-spin" />
-              ) : (
-                <Search className="w-3 h-3" />
-              )}
-              <span>{isIndexing ? 'Indexing...' : 'Index'}</span>
-            </button>
-          </div>
-          
-          {indexedSections.length > 0 && (
-            <div className="text-xs text-gray-500">
-              Indexing complete - see chat messages for results
-            </div>
-          )}
-          
-          {!spreadsheetData && (
-            <p className="text-xs text-gray-500">
-              Upload a spreadsheet to enable indexing
-            </p>
-          )}
-          
-          {spreadsheetData && !llmService && (
-            <p className="text-xs text-yellow-600">
-              Initializing indexing service...
-            </p>
-          )}
-        </div>
-      </div>
 
       {/* Messages */}
       <div 
@@ -848,12 +660,26 @@ You must call index_spreadsheet for each of these ${frames.length} frames in ord
             disabled={isLoading}
           />
           <button
-            type="submit"
-            disabled={!message.trim() || isLoading}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+            type={isLoading ? "button" : "submit"}
+            onClick={isLoading ? handleCancel : undefined}
+            disabled={!isLoading && (!message.trim() || isCancelling)}
+            onMouseEnter={() => isLoading && setIsHoveringStop(true)}
+            onMouseLeave={() => isLoading && setIsHoveringStop(false)}
+            className={`px-4 py-2 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-offset-2 flex items-center space-x-2 transition-all duration-200 ${
+              isLoading 
+                ? (isHoveringStop 
+                    ? 'bg-red-600 hover:bg-red-700 focus:ring-red-500' 
+                    : 'bg-blue-600 hover:bg-blue-700 focus:ring-blue-500')
+                : 'bg-blue-600 hover:bg-blue-700 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed'
+            }`}
+            title={isLoading ? (isHoveringStop ? "Click to stop processing" : "Processing...") : "Send message"}
           >
             {isLoading ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
+              isHoveringStop ? (
+                <Square className="w-4 h-4" />
+              ) : (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              )
             ) : (
               <Send className="w-4 h-4" />
             )}
@@ -872,7 +698,8 @@ ChatInterface.propTypes = {
   onApiKeyChange: PropTypes.func,
   spreadsheetData: PropTypes.array,
   llmService: PropTypes.object,
-  onHighlightBlock: PropTypes.func
+  onHighlightBlock: PropTypes.func,
+  onCancel: PropTypes.func
 };
 
 export default ChatInterface;

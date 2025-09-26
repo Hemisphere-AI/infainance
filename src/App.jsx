@@ -1,9 +1,10 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react'
-import { Upload, FileSpreadsheet, Download, Plus, Minus, Calendar, ArrowLeft, Calculator } from 'lucide-react'
+import { Upload, FileSpreadsheet, Download, Plus, Minus, Calendar, ArrowLeft, Calculator, Network } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import ReactSpreadsheet from './UniverSpreadsheet'
 import ChatInterface from './components/ChatInterface'
 import { LLMService } from './services/llmService'
+import { DependencyAnalyzer } from './services/indexService'
 import { AuthProvider } from './contexts/AuthContext.jsx'
 import { useAuth } from './hooks/useAuth'
 import LoginPage from './components/LoginPage'
@@ -43,8 +44,14 @@ function ExcelApp() {
   const [decimalButtonClicked, setDecimalButtonClicked] = useState(false)
   const [averageDecimals, setAverageDecimals] = useState(0)
   const [customApiKey, setCustomApiKey] = useState('')
+  const [dependencyFrames, setDependencyFrames] = useState(null)
   const toolCallHandlerRef = useRef(null)
   const llmServiceRef = useRef(null)
+  
+  // Handle tool call registration from ChatInterface
+  const handleToolCallRegistration = useCallback((handler) => {
+    toolCallHandlerRef.current = handler;
+  }, [])
 
   const handleFile = useCallback((file) => {
     setError('')
@@ -87,7 +94,6 @@ function ExcelApp() {
         
         try {
           // Try different approaches to get formatted data
-          console.log('Trying different XLSX reading approaches...')
           
           // Approach 1: Raw data
           jsonData = XLSX.utils.sheet_to_json(worksheet, { 
@@ -102,9 +108,6 @@ function ExcelApp() {
             defval: '',
             raw: false
           })
-          
-          console.log('Raw data sample:', jsonData.slice(0, 3))
-          console.log('Formatted data sample:', formattedData.slice(0, 3))
           
           // Debug: Log the worksheet object to see what's available
           
@@ -243,7 +246,6 @@ function ExcelApp() {
                 const cellAddress = XLSX.utils.encode_cell({ r: row, c: col })
                 const cell = worksheet[cellAddress]
                 if (cell && cell.f && jsonData[row] && jsonData[row][col] !== undefined) {
-                  console.log(`Fallback: Found formula in cell ${cellAddress}: ${cell.f}`)
                   jsonData[row][col] = '=' + cell.f
                 }
               }
@@ -502,9 +504,7 @@ function ExcelApp() {
             }
           }
         }
-        if (formatExamples.length > 0) {
-          console.log('Formatting examples (first 4 cells):', formatExamples)
-        }
+        // Format examples processed
         
         setExcelData({
           sheetName: firstSheetName,
@@ -558,98 +558,8 @@ function ExcelApp() {
   }, [])
 
 
-  // Debug function to test formatting - call from browser console
-  window.debugFormatting = () => {
-    console.log('=== FORMATTING DEBUG ===')
-    console.log('Excel Data:', excelData)
-    console.log('Spreadsheet Data (first 3 rows):', spreadsheetData.slice(0, 3))
-    
-    if (excelData?.cellFormats) {
-      console.log('Cell Formats:', excelData.cellFormats)
-      
-      // Show first few cells with formatting
-      Object.keys(excelData.cellFormats).slice(0, 3).forEach(row => {
-        Object.keys(excelData.cellFormats[row]).slice(0, 3).forEach(col => {
-          const format = excelData.cellFormats[row][col]
-          if (format.numberFormat || format.cellType) {
-            console.log(`Cell R${parseInt(row)+1}C${parseInt(col)+1}:`, format)
-          }
-        })
-      })
-    }
-    
-    // Test a specific cell
-    if (spreadsheetData.length > 0 && spreadsheetData[0].length > 0) {
-      const testCell = spreadsheetData[0][0]
-      console.log('Test Cell (A1):', testCell)
-    }
-  }
 
-  // Debug function specifically for formula cells with currency formatting
-  window.debugFormulaCurrency = () => {
-    console.log('=== FORMULA CURRENCY DEBUG ===')
-    if (!spreadsheetData.length) {
-      console.log('No spreadsheet data available')
-      return
-    }
-    
-    let foundCurrencyFormulas = false
-    spreadsheetData.forEach((row, rowIndex) => {
-      row.forEach((cell, colIndex) => {
-        if (cell?.isFormula && cell?.isCurrency) {
-          foundCurrencyFormulas = true
-          console.log(`Currency formula R${rowIndex + 1}C${colIndex + 1}:`, {
-            value: cell.value,
-            isCurrency: cell.isCurrency,
-            currencySymbol: cell.currencySymbol,
-            decimalPlaces: cell.decimalPlaces,
-            cellType: cell.cellType,
-            numberFormat: cell.numberFormat
-          })
-        }
-      })
-    })
-    
-    if (!foundCurrencyFormulas) {
-      console.log('No currency formula cells found')
-    }
-  }
 
-  // Debug function to show all number formats found in the file
-  window.debugNumberFormats = () => {
-    console.log('=== NUMBER FORMATS DEBUG ===')
-    if (!excelData?.cellFormats) {
-      console.log('No cell formats available')
-      return
-    }
-    
-    const formats = new Set()
-    Object.keys(excelData.cellFormats).forEach(row => {
-      Object.keys(excelData.cellFormats[row]).forEach(col => {
-        const format = excelData.cellFormats[row][col]
-        if (format.numberFormat) {
-          formats.add(format.numberFormat)
-        }
-      })
-    })
-    
-    console.log('All number formats found:', Array.from(formats))
-    
-    // Show cells with currency-like formats
-    Object.keys(excelData.cellFormats).forEach(row => {
-      Object.keys(excelData.cellFormats[row]).forEach(col => {
-        const format = excelData.cellFormats[row][col]
-        if (format.numberFormat && (format.numberFormat.includes('$') || format.numberFormat.includes('€') || format.numberFormat.includes('£'))) {
-          console.log(`Currency format in R${parseInt(row)+1}C${parseInt(col)+1}:`, {
-            numberFormat: format.numberFormat,
-            isFormula: format.isFormula,
-            isCurrency: format.isCurrency,
-            currencySymbol: format.currencySymbol
-          })
-        }
-      })
-    })
-  }
 
   const downloadAsExcel = useCallback(() => {
     if (!spreadsheetData.length) return
@@ -667,8 +577,6 @@ function ExcelApp() {
   }, [spreadsheetData, fileName, excelData])
 
   const handleSpreadsheetChange = useCallback((data) => {
-    console.log('Spreadsheet data changed in App:', data.length, 'rows')
-    console.log('First few cells:', data.slice(0, 2).map(row => row.slice(0, 3)))
     setSpreadsheetData(data)
     
     // Update LLM service with new data
@@ -682,18 +590,15 @@ function ExcelApp() {
   
   // Create LLM service immediately when we have data
   if (hasSpreadsheetData && !llmServiceRef.current) {
-    console.log('Creating new LLM service with data:', spreadsheetData.length, 'rows');
     llmServiceRef.current = new LLMService(spreadsheetData, setSpreadsheetData, toolCallHandlerRef.current, customApiKey)
-    console.log('LLM service created:', llmServiceRef.current);
   }
   
-  // Update LLM service when API key changes
+  // Update LLM service when API key changes or tool call handler changes
   useEffect(() => {
     if (hasSpreadsheetData && llmServiceRef.current) {
-      console.log('Updating LLM service with new API key');
       llmServiceRef.current = new LLMService(spreadsheetData, setSpreadsheetData, toolCallHandlerRef.current, customApiKey)
     }
-  }, [customApiKey])
+  }, [customApiKey, hasSpreadsheetData, spreadsheetData])
 
   // Handle chat messages
   const handleChatMessage = useCallback(async (message) => {
@@ -711,6 +616,15 @@ function ExcelApp() {
     } finally {
       setIsChatLoading(false)
     }
+  }, [])
+
+  // Handle cancellation
+  const handleCancel = useCallback(() => {
+    if (llmServiceRef.current) {
+      llmServiceRef.current.cancel()
+    }
+    // Reset loading state immediately
+    setIsChatLoading(false)
   }, [])
 
   // Handle clearing conversation history
@@ -847,6 +761,88 @@ function ExcelApp() {
     })
   }, [selectedCells, decimalButtonClicked, averageDecimals])
 
+  // Generate Green-to-Red colors in order (30 colors)
+  const generateGreenToRedColors = useCallback(() => {
+    const colors = []
+    
+    for (let i = 0; i < 30; i++) {
+      // Green (120°) to Red (0°) progression
+      const hue = 120 - (i / 29) * 120 // 120° (green) to 0° (red)
+      const saturation = 70 + (i % 3) * 10 // Vary saturation slightly
+      const lightness = 50 + (i % 2) * 5   // Vary lightness slightly
+      colors.push(`hsl(${hue}, ${saturation}%, ${lightness}%)`)
+    }
+    
+    return colors
+  }, [])
+
+  // Handle dependency analysis with visual highlighting (toggle functionality)
+  const handleDependencyAnalysis = useCallback(() => {
+    // If already showing dependency frames, clear them
+    if (dependencyFrames) {
+      setDependencyFrames(null)
+      return
+    }
+
+    if (!spreadsheetData || spreadsheetData.length === 0) {
+      alert('No spreadsheet data available for analysis. Please upload a spreadsheet first.')
+      return
+    }
+
+    try {
+      // Use the proper DependencyAnalyzer from indexService
+      const analyzer = new DependencyAnalyzer()
+      const result = analyzer.analyzeSpreadsheetData(spreadsheetData)
+      
+      // Store the analysis results (no longer needed as state)
+      
+      // Calculate max depth from inputs to outputs
+      const maxDepth = result.layers.length - 1
+      
+      // Create frame highlighting data using green-to-red colors
+      const greenToRedColors = generateGreenToRedColors()
+      
+      const frames = []
+      result.frames.forEach((frame) => {
+        // Input-based layer indexing: inputs (layer 0) get green, outputs get red
+        const depthFromInput = frame.layer
+        const colorIndex = Math.floor((depthFromInput / maxDepth) * (greenToRedColors.length - 1))
+        const color = greenToRedColors[colorIndex]
+        
+        // Process horizontal frames
+        frame.horizontal.forEach(span => {
+          frames.push({
+            range: span,
+            color: color,
+            type: 'horizontal',
+            layer: frame.layer,
+            depthFromInput: depthFromInput
+          })
+        })
+        
+        // Process vertical frames  
+        frame.vertical.forEach(span => {
+          frames.push({
+            range: span,
+            color: color,
+            type: 'vertical', 
+            layer: frame.layer,
+            depthFromInput: depthFromInput
+          })
+        })
+      })
+      
+      setDependencyFrames(frames)
+      
+      // Dependency analysis complete
+      
+    } catch (error) {
+      console.error('Dependency analysis error:', error)
+      alert(`Analysis failed: ${error.message}`)
+    }
+  }, [spreadsheetData, dependencyFrames, generateGreenToRedColors])
+
+
   // Format selected cells as dates
   const formatAsDate = useCallback(() => {
     if (selectedCells.length === 0) return
@@ -874,30 +870,22 @@ function ExcelApp() {
             const isLikelyExcelSerial = numValue >= 1 && numValue <= 2958465 && !isLikelyYear && !isSmallInteger
             
             if (isLikelyExcelSerial) {
-              console.log(`Value ${numValue} detected as likely Excel serial number (not year: ${!isLikelyYear}, not small int: ${!isSmallInteger})`)
               // Use xlsx library to convert Excel serial number to date
               try {
                 // Try using XLSX.SSF.format with date format
                 const dateString = XLSX.SSF.format('yyyy-mm-dd', numValue)
-                console.log(`Converting Excel serial ${numValue} to date:`, dateString)
                 
                 if (dateString && dateString !== 'Invalid Date' && !dateString.includes('Invalid')) {
                   const jsDate = new Date(dateString)
-                  console.log(`Parsed date for ${numValue}:`, jsDate)
                   
                   // Check if the resulting date is reasonable (between 1900 and 2100)
                   if (!isNaN(jsDate.getTime()) && jsDate.getFullYear() >= 1900 && jsDate.getFullYear() <= 2100) {
-                    console.log(`Setting cell value to:`, dateString)
                     newData[row][col] = {
                       ...cell,
                       value: dateString, // Store as YYYY-MM-DD format
                       isDate: true
                     }
-                  } else {
-                    console.log(`Date ${jsDate} is not in valid range (1900-2100), skipping conversion`)
                   }
-                } else {
-                  console.log(`Invalid date string returned for ${numValue}:`, dateString)
                 }
               } catch (error) {
                 // If xlsx conversion fails, try manual calculation
@@ -920,13 +908,7 @@ function ExcelApp() {
                 }
               }
             } else {
-              if (isLikelyYear) {
-                console.log(`Value ${numValue} appears to be a year, skipping date conversion`)
-              } else if (isSmallInteger) {
-                console.log(`Value ${numValue} is a small integer, skipping date conversion`)
-              } else {
-                console.log(`Value ${numValue} is not a likely Excel serial number, skipping date conversion`)
-              }
+              // Skip conversion for years, small integers, or non-serial numbers
             }
           }
         }
@@ -945,7 +927,7 @@ function ExcelApp() {
   // Debug effect to log spreadsheet data changes (reduced logging)
   useEffect(() => {
     if (spreadsheetData.length > 0) {
-      console.log('Spreadsheet data updated:', spreadsheetData.length, 'rows')
+      // Data updated
     }
   }, [spreadsheetData])
 
@@ -1088,6 +1070,19 @@ function ExcelApp() {
                         <span>Date</span>
                       </button>
                       
+                      {/* Dependency analysis button (toggle) */}
+                      <button
+                        onClick={handleDependencyAnalysis}
+                        className={`px-1 py-1 text-xs rounded border transition-colors flex items-center justify-center w-6 h-6 ${
+                          dependencyFrames
+                            ? 'bg-green-100 border-green-300 text-green-700 hover:bg-green-200'
+                            : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+                        }`}
+                        title={dependencyFrames ? "Clear dependency highlighting" : "Analyze formula dependencies"}
+                      >
+                        <Network className="w-4 h-4" />
+                      </button>
+                      
                     </div>
                     
                     {/* Formula display mode button */}
@@ -1120,6 +1115,7 @@ function ExcelApp() {
                       <Download className="w-5 h-5" />
                     </button>
                   </div>
+                  
                 </div>
               </div>
               
@@ -1132,6 +1128,7 @@ function ExcelApp() {
                     selectedCells={selectedCells}
                     onSelectedCellsChange={setSelectedCells}
                     highlightedBlock={highlightedBlock}
+                    dependencyFrames={dependencyFrames}
                   />
                 ) : (
                   <div className="p-8 text-center text-gray-500">
@@ -1175,11 +1172,12 @@ function ExcelApp() {
               onSendMessage={handleChatMessage}
               isLoading={isChatLoading}
               onClearHistory={handleClearHistory}
-              onToolCall={(handler) => { toolCallHandlerRef.current = handler; }}
+              onToolCall={handleToolCallRegistration}
               onApiKeyChange={handleApiKeyChange}
               spreadsheetData={spreadsheetData}
               llmService={llmServiceRef.current}
               onHighlightBlock={handleHighlightBlock}
+              onCancel={handleCancel}
             />
           </div>
         </div>

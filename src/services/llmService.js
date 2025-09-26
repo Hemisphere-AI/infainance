@@ -24,6 +24,8 @@ export class LLMService {
     this.onToolCall = onToolCall; // Callback for tool call visibility
     this.conversationHistory = [];
     this.customApiKey = customApiKey;
+    this.abortController = null; // For cancellation support
+    this.isCancelled = false; // Flag to track cancellation
   }
 
   /**
@@ -927,350 +929,6 @@ export class LLMService {
   }
 
   /**
-   * Index a spreadsheet frame and return analysis
-   */
-  indexSpreadsheet(frameRange, frameIndex, totalFrames, sections) {
-    try {
-      // Read the frame data
-      const frameData = sliceRange(this.spreadsheetData, frameRange);
-      
-      // Analyze the frame content
-      const analysis = this.analyzeFrame(frameData, frameRange, sections);
-      
-      // Create updated sections list
-      let updatedSections = [...sections];
-      
-      // If this frame should merge with existing section
-      if (analysis.should_merge && analysis.merge_with !== null && analysis.merge_with >= 0) {
-        const targetIndex = analysis.merge_with;
-        if (updatedSections[targetIndex]) {
-          // Update existing section to include this frame
-          updatedSections[targetIndex] = {
-            ...updatedSections[targetIndex],
-            range: `${updatedSections[targetIndex].range.split(':')[0]}:${frameRange.split(':')[1]}`,
-            description: `${updatedSections[targetIndex].description} (extended)`
-          };
-        }
-      } else {
-        // Add new section for this frame
-        updatedSections.push({
-          description: analysis.description,
-          range: frameRange,
-          type: analysis.type
-        });
-      }
-      
-      return {
-        frame_range: frameRange,
-        frame_index: frameIndex,
-        total_frames: totalFrames,
-        analysis: analysis,
-        sections: updatedSections,
-        progress: `${frameIndex + 1}/${totalFrames}`,
-        summary: `Processed frame ${frameIndex + 1}/${totalFrames} (${frameRange}): ${analysis.description}`,
-        is_complete: frameIndex >= totalFrames - 1
-      };
-      
-    } catch (error) {
-      return { error: `Error indexing frame ${frameRange}: ${error.message}` };
-    }
-  }
-
-  /**
-   * Get all frames for indexing
-   */
-  getAllFrames() {
-    return this.createFrames();
-  }
-
-  /**
-   * Analyze a frame and determine its content
-   */
-  analyzeFrame(frameData, frameRange, existingSections) {
-    if (!frameData || frameData.length === 0) {
-      return {
-        type: 'empty',
-        description: 'Empty frame',
-        range: frameRange,
-        should_merge: false
-      };
-    }
-
-    // Simple content analysis
-    const hasHeaders = this.detectHeaders(frameData);
-    const hasNumbers = this.detectNumbers(frameData);
-    const hasFormulas = this.detectFormulas(frameData);
-    const hasCurrency = this.detectCurrency(frameData);
-    
-    // Generate simple, descriptive analysis
-    let frameType = 'data';
-    let description = '';
-    
-    if (hasHeaders && !hasNumbers) {
-      frameType = 'headers';
-      description = this.getSimpleHeaderDescription(frameData);
-    } else if (hasFormulas) {
-      frameType = 'calculations';
-      description = this.getSimpleCalculationDescription(frameData);
-    } else if (hasNumbers || hasCurrency) {
-      frameType = 'data';
-      description = this.getSimpleDataDescription(frameData);
-    } else {
-      frameType = 'text';
-      description = this.getSimpleTextDescription(frameData);
-    }
-    
-    // Check if this should merge with existing sections
-    const shouldMerge = this.shouldMergeWithExisting(frameType, description, existingSections);
-    
-    return {
-      type: frameType,
-      description: description,
-      range: frameRange,
-      should_merge: shouldMerge,
-      merge_with: shouldMerge ? this.findBestMergeTarget(frameType, existingSections) : null,
-      content_summary: this.getContentSummary(frameData)
-    };
-  }
-
-
-  /**
-   * Detect if block contains headers
-   */
-  detectHeaders(blockData) {
-    if (blockData.length === 0) return false;
-    
-    const firstRow = blockData[0];
-    const textCount = firstRow.filter(cell => 
-      cell && typeof cell.value === 'string' && cell.value.trim() !== ''
-    ).length;
-    
-    return textCount > 1;
-  }
-
-  /**
-   * Detect if block contains numbers
-   */
-  detectNumbers(blockData) {
-    let numberCount = 0;
-    let totalCells = 0;
-    
-    blockData.forEach(row => {
-      row.forEach(cell => {
-        if (cell && cell.value !== '') {
-          totalCells++;
-          if (typeof cell.value === 'number' || 
-              (typeof cell.value === 'string' && !isNaN(parseFloat(cell.value)))) {
-            numberCount++;
-          }
-        }
-      });
-    });
-    
-    return totalCells > 0 && (numberCount / totalCells) > 0.5;
-  }
-
-  /**
-   * Detect if block contains formulas
-   */
-  detectFormulas(blockData) {
-    return blockData.some(row => 
-      row.some(cell => 
-        cell && typeof cell.value === 'string' && cell.value.startsWith('=')
-      )
-    );
-  }
-
-  /**
-   * Detect if block contains currency values
-   */
-  detectCurrency(blockData) {
-    return blockData.some(row => 
-      row.some(cell => 
-        cell && cell.isCurrency
-      )
-    );
-  }
-
-  /**
-   * Check if block should merge with existing sections
-   */
-  shouldMergeWithExisting(blockType, description, existingSections) {
-    if (existingSections.length === 0) return false;
-    
-    // Headers should merge with data
-    if (blockType === 'headers') {
-      return existingSections.some(section => 
-        section.description.toLowerCase().includes('data') ||
-        section.description.toLowerCase().includes('values')
-      );
-    }
-    
-    // Data should merge with headers
-    if (blockType === 'data') {
-      return existingSections.some(section => 
-        section.description.toLowerCase().includes('header') ||
-        section.description.toLowerCase().includes('title')
-      );
-    }
-    
-    return false;
-  }
-
-  /**
-   * Find best merge target
-   */
-  findBestMergeTarget(blockType, existingSections) {
-    if (blockType === 'headers') {
-      return existingSections.findIndex(section => 
-        section.description.toLowerCase().includes('data')
-      );
-    }
-    
-    if (blockType === 'data') {
-      return existingSections.findIndex(section => 
-        section.description.toLowerCase().includes('header')
-      );
-    }
-    
-    return -1;
-  }
-
-  /**
-   * Get content summary
-   */
-  getContentSummary(blockData) {
-    const summary = {
-      rows: blockData.length,
-      cols: blockData[0]?.length || 0,
-      sample_values: []
-    };
-    
-    // Get sample values from first few cells
-    for (let row = 0; row < Math.min(2, blockData.length); row++) {
-      for (let col = 0; col < Math.min(3, blockData[row]?.length || 0); col++) {
-        const cell = blockData[row][col];
-        if (cell && cell.value !== '') {
-          summary.sample_values.push(String(cell.value).substring(0, 20));
-        }
-      }
-    }
-    
-    return summary;
-  }
-
-  /**
-   * Get simple header description
-   */
-  getSimpleHeaderDescription(frameData) {
-    const headerTexts = frameData[0]?.map(cell => String(cell?.value || '').trim()).filter(text => text) || [];
-    const headerCount = headerTexts.length;
-    const sampleHeaders = headerTexts.slice(0, 3).join(', ');
-    
-    return `Headers (${headerCount} columns): ${sampleHeaders}`;
-  }
-
-  /**
-   * Get simple calculation description
-   */
-  getSimpleCalculationDescription(frameData) {
-    const formulaCount = frameData.reduce((count, row) => 
-      count + row.filter(cell => String(cell?.value || '').startsWith('=')).length, 0
-    );
-    
-    return `Calculations (${formulaCount} formulas)`;
-  }
-
-  /**
-   * Get simple data description
-   */
-  getSimpleDataDescription(frameData) {
-    const dataRows = frameData.filter(row => 
-      row.some(cell => cell && cell.value !== '' && cell.value !== null)
-    ).length;
-    
-    const hasCurrency = frameData.some(row => 
-      row.some(cell => cell && (cell.isCurrency || String(cell.value).includes('$')))
-    );
-    
-    const hasPercentages = frameData.some(row => 
-      row.some(cell => cell && String(cell.value).includes('%'))
-    );
-    
-    let type = 'Data';
-    if (hasCurrency) type = 'Financial data';
-    else if (hasPercentages) type = 'Percentage data';
-    
-    return `${type} (${dataRows} rows)`;
-  }
-
-  /**
-   * Get simple text description
-   */
-  getSimpleTextDescription(frameData) {
-    const textCells = frameData.reduce((count, row) => 
-      count + row.filter(cell => cell && typeof cell.value === 'string' && cell.value.trim() !== '').length, 0
-    );
-    
-    return `Text content (${textCells} entries)`;
-  }
-
-
-  /**
-   * Create frames based on whitespace gaps in the spreadsheet
-   */
-  createFrames() {
-    if (!this.spreadsheetData || this.spreadsheetData.length === 0) {
-      return [];
-    }
-
-    const frames = [];
-    const data = this.spreadsheetData;
-    let currentFrame = null;
-    
-    for (let row = 0; row < data.length; row++) {
-      const hasContent = data[row] && data[row].some(cell => 
-        cell && cell.value !== '' && cell.value !== null && cell.value !== undefined
-      );
-      
-      if (hasContent) {
-        if (!currentFrame) {
-          // Start new frame
-          currentFrame = {
-            startRow: row,
-            endRow: row,
-            startCol: 0,
-            endCol: (data[row]?.length || 1) - 1
-          };
-        } else {
-          // Extend current frame
-          currentFrame.endRow = row;
-        }
-      } else {
-        // Empty row - end current frame if exists
-        if (currentFrame) {
-          frames.push(currentFrame);
-          currentFrame = null;
-        }
-      }
-    }
-    
-    // Add final frame if exists
-    if (currentFrame) {
-      frames.push(currentFrame);
-    }
-    
-    // Convert to A1 ranges
-    return frames.map(frame => ({
-      startRow: frame.startRow,
-      endRow: frame.endRow,
-      startCol: frame.startCol,
-      endCol: frame.endCol,
-      range: `${rcToAddr(frame.startRow + 1, frame.startCol + 1)}:${rcToAddr(frame.endRow + 1, frame.endCol + 1)}`
-    }));
-  }
-
-  /**
    * Debug tool to inspect spreadsheet data
    */
   debugSheet(searchTerm = null) {
@@ -1337,8 +995,6 @@ export class LLMService {
           return this.recalc();
         case "read_sheet":
           return this.readSheet(args.range);
-        case "index_spreadsheet":
-          return this.indexSpreadsheet(args.frame_range, args.frame_index, args.total_frames, args.sections);
         default:
           return { error: `Unknown tool: ${name}` };
       }
@@ -1366,28 +1022,29 @@ export class LLMService {
   }
 
   /**
-   * Check if indexing is incomplete
+   * Cancel current request
    */
-  isIndexingIncomplete(toolOutputs) {
-    const indexCalls = toolOutputs.filter(t => t.tool_name === 'index_spreadsheet');
-    if (indexCalls.length === 0) return false;
-    
-    // Get the last index call to check if it's complete
-    const lastIndexCall = indexCalls[indexCalls.length - 1];
-    if (lastIndexCall.result && lastIndexCall.result.frame_index !== undefined) {
-      const currentFrame = lastIndexCall.result.frame_index;
-      const totalFrames = lastIndexCall.result.total_frames;
-      return currentFrame < totalFrames - 1;
+  cancel() {
+    console.log('Cancelling LLM request');
+    this.isCancelled = true;
+    if (this.abortController) {
+      this.abortController.abort();
+      this.abortController = null;
     }
-    
-    return false;
   }
+
 
   /**
    * Main chat function that handles the conversation with OpenAI
    */
   async chat(userText) {
     try {
+      // Reset cancellation flag for new request
+      this.isCancelled = false;
+      
+      // Create abort controller for this request
+      this.abortController = new AbortController();
+      
       // Determine which API key to use
       let apiKeyToUse;
       if (this.customApiKey && this.customApiKey !== import.meta.env.VITE_DEMO_KEY) {
@@ -1440,6 +1097,11 @@ export class LLMService {
       let toolOutputs = []; // Track tool outputs for protocol validation
 
       while (response.choices[0]?.message?.tool_calls?.length > 0 && iterationCount < maxIterations) {
+        // Check if request was cancelled
+        if (this.isCancelled || this.abortController?.signal?.aborted) {
+          console.log('Request cancelled during tool call processing');
+          throw new Error('Request cancelled by user');
+        }
         iterationCount++;
         const toolCalls = response.choices[0].message.tool_calls;
         
@@ -1454,18 +1116,30 @@ export class LLMService {
         
         // Execute all tool calls
         for (const call of toolCalls) {
+          // Check if request was cancelled before each tool call
+          if (this.isCancelled || this.abortController?.signal?.aborted) {
+            console.log('Request cancelled before tool call execution');
+            throw new Error('Request cancelled by user');
+          }
+          
           const toolArgs = JSON.parse(call.function.arguments);
           
           // Protocol guard: Check if conclude is being called without data read
           if (call.function.name === 'conclude') {
-            const usedDataRead = () => toolOutputs.some(t => 
-              ["read_cell", "read_sheet", "find_subframe", "find_label_value"].includes(t.tool_name)
-            );
+            const usedDataRead = () => {
+              // Check for direct data reading tools
+              const hasDataRead = toolOutputs.some(t => 
+                ["read_cell", "read_sheet", "find_subframe", "find_label_value"].includes(t.tool_name)
+              );
+              
+              
+              return hasDataRead;
+            };
             
             if (!usedDataRead()) {
               console.log('Protocol guard: Blocking conclude without data read');
               const errorResult = {
-                error: "ProtocolError: You must read spreadsheet data before concluding. Call read_cell (the intersection address) or read_sheet first."
+                error: "ProtocolError: You must read spreadsheet data before concluding. Call read_cell (the intersection address), read_sheet, or complete indexing first."
               };
               
               // Add error result to conversation
@@ -1489,52 +1163,30 @@ export class LLMService {
             }
           }
 
-          // Protocol guard: Check if indexing is incomplete
-          if (call.function.name === 'conclude' && this.isIndexingIncomplete(toolOutputs)) {
-            console.log('Protocol guard: Blocking conclude - indexing incomplete');
-            const lastIndexCall = toolOutputs.filter(t => t.tool_name === 'index_spreadsheet').pop();
-            const currentFrame = lastIndexCall?.result?.frame_index || 0;
-            const totalFrames = lastIndexCall?.result?.total_frames || 0;
-            const remainingFrames = totalFrames - currentFrame - 1;
-            
-            const errorResult = {
-              error: `ProtocolError: Indexing incomplete. You have only processed ${currentFrame + 1} of ${totalFrames} frames. You must process the remaining ${remainingFrames} frames (${currentFrame + 1}, ${currentFrame + 2}, ${currentFrame + 3}...) before concluding. Continue with index_spreadsheet tool calls.`
-            };
-            
-            // Add error result to conversation
-            messages.push({
-              role: "tool",
-              tool_call_id: call.id,
-              content: JSON.stringify(errorResult)
-            });
-            
-            // Add a system message to force continuation
-            messages.push({
-              role: "system",
-              content: `You MUST continue processing frames. You have only processed ${currentFrame + 1} of ${totalFrames} frames. Call index_spreadsheet for frame ${currentFrame + 1} immediately. Do not try to conclude again until all frames are processed.`
-            });
-            
-            // Show error in chat if callback is provided
-            if (this.onToolCall) {
-              this.onToolCall({
-                type: 'tool_result',
-                tool: call.function.name,
-                result: errorResult,
-                iteration: iterationCount
-              });
-            }
-            
-            continue; // Skip this tool call
+          
+          // Check cancellation before showing tool call
+          if (this.isCancelled || this.abortController?.signal?.aborted) {
+            console.log('Request cancelled before tool call display');
+            throw new Error('Request cancelled by user');
           }
           
           // Show tool call in chat if callback is provided
           if (this.onToolCall) {
+            console.log('LLM Service: Calling onToolCall with tool_call:', call.function.name);
             this.onToolCall({
               type: 'tool_call',
               tool: call.function.name,
               arguments: toolArgs,
               iteration: iterationCount
             });
+          } else {
+            console.log('LLM Service: onToolCall is null or undefined');
+          }
+          
+          // Check cancellation before executing tool
+          if (this.isCancelled || this.abortController?.signal?.aborted) {
+            console.log('Request cancelled before tool execution');
+            throw new Error('Request cancelled by user');
           }
           
           const result = await this.execTool(call.function.name, toolArgs);
@@ -1549,12 +1201,15 @@ export class LLMService {
           
           // Show tool result in chat if callback is provided
           if (this.onToolCall) {
+            console.log('LLM Service: Calling onToolCall with tool_result:', call.function.name);
             this.onToolCall({
               type: 'tool_result',
               tool: call.function.name,
               result: result,
               iteration: iterationCount
             });
+          } else {
+            console.log('LLM Service: onToolCall is null or undefined for result');
           }
           
           // Add tool result to conversation
@@ -1603,6 +1258,12 @@ export class LLMService {
     } catch (error) {
       console.error('LLM Service Error:', error);
       
+      // Handle cancellation
+      if (error.name === 'AbortError' || this.abortController?.signal?.aborted) {
+        console.log('Request was cancelled');
+        return 'Request cancelled by user.';
+      }
+      
       // Provide more specific error messages
       if (error.message.includes('tool_call_id')) {
         return `Tool calling error: ${error.message}. This might be a conversation state issue. Please try asking your question again.`;
@@ -1613,6 +1274,9 @@ export class LLMService {
       } else {
         return `Error: ${error.message}. Please try again or check your OpenAI API key.`;
       }
+    } finally {
+      // Clean up abort controller
+      this.abortController = null;
     }
   }
 

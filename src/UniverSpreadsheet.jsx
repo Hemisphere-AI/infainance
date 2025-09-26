@@ -1,8 +1,8 @@
-import React, { useMemo, useState, useCallback, useRef, useEffect, memo } from 'react'
+import React, { useMemo, useState, useCallback, useRef, useEffect } from 'react'
 import PropTypes from 'prop-types'
 import * as XLSX from 'xlsx'
 
-const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCells = [], onSelectedCellsChange, highlightedBlock = null }) => {
+const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCells = [], onSelectedCellsChange, highlightedBlock = null, dependencyFrames = null }) => {
   const [selectedCell, setSelectedCell] = useState(null)
   const [editingCell, setEditingCell] = useState(null)
   const [visibleRange, setVisibleRange] = useState({ startRow: 0, endRow: 50, startCol: 0, endCol: 10 })
@@ -112,7 +112,7 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
     // Clear cache for cells that need recalculation
     cellsToRecalc.forEach(cellKey => {
       // Clear all cache entries for this cell
-      for (const [cacheKey, value] of formulaCacheRef.current.entries()) {
+      for (const [cacheKey] of formulaCacheRef.current.entries()) {
         if (cacheKey.startsWith(cellKey + '-')) {
           formulaCacheRef.current.delete(cacheKey)
         }
@@ -124,7 +124,7 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
   const processRecalculationQueue = useCallback(() => {
     if (recalculationQueueRef.current.size === 0) return
     
-    const cellsToProcess = Array.from(recalculationQueueRef.current)
+    Array.from(recalculationQueueRef.current)
     // Debug logging removed to prevent console spam
     
     // Force multiple re-renders to ensure the component updates
@@ -376,55 +376,14 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
     return colors[Math.floor(Math.random() * colors.length)]
   }, [])
 
-  // Helper function to get range border info for a cell
-  const getRangeBorderInfo = useCallback((cellRef, referencedCells) => {
-    if (referencedCells.length === 0) return null
-    
-    // Find the range bounds
-    const minRow = Math.min(...referencedCells.map(c => c.row))
-    const maxRow = Math.max(...referencedCells.map(c => c.row))
-    const minCol = Math.min(...referencedCells.map(c => c.col))
-    const maxCol = Math.max(...referencedCells.map(c => c.col))
-    
-    return {
-      minRow,
-      maxRow,
-      minCol,
-      maxCol,
-      cellRef
-    }
-  }, [])
 
-  // Helper function to get border style for a cell in a range
-  const getRangeBorderStyle = useCallback((rangeInfo, color) => {
-    if (!rangeInfo) return ''
-    
-    const { minRow, maxRow, minCol, maxCol, cellRef } = rangeInfo
-    const { row, col } = cellRef
-    
-    let borderStyle = ''
-    
-    // Top border for first row
-    if (row === minRow) {
-      borderStyle += `border-top: 3px solid ${color}; `
+  // Helper function to get column index from column letter
+  const getColumnIndex = useCallback((colLetter) => {
+    let result = 0
+    for (let i = 0; i < colLetter.length; i++) {
+      result = result * 26 + (colLetter.charCodeAt(i) - 'A'.charCodeAt(0) + 1)
     }
-    
-    // Bottom border for last row
-    if (row === maxRow) {
-      borderStyle += `border-bottom: 3px solid ${color}; `
-    }
-    
-    // Left border for first column
-    if (col === minCol) {
-      borderStyle += `border-left: 3px solid ${color}; `
-    }
-    
-    // Right border for last column
-    if (col === maxCol) {
-      borderStyle += `border-right: 3px solid ${color}; `
-    }
-    
-    return borderStyle
+    return result - 1
   }, [])
 
   // Helper function to check if a cell is in the highlighted block
@@ -442,16 +401,42 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
     const endRowNum = parseInt(endRow) - 1
     
     return row >= startRowNum && row <= endRowNum && col >= startColNum && col <= endColNum
-  }, [highlightedBlock])
+  }, [highlightedBlock, getColumnIndex])
 
-  // Helper function to get column index from column letter
-  const getColumnIndex = useCallback((colLetter) => {
-    let result = 0
-    for (let i = 0; i < colLetter.length; i++) {
-      result = result * 26 + (colLetter.charCodeAt(i) - 'A'.charCodeAt(0) + 1)
+  // Helper function to get dependency frame color for a cell
+  const getDependencyFrameColor = useCallback((row, col) => {
+    if (!dependencyFrames || dependencyFrames.length === 0) return null
+    
+    const cellAddr = getColumnLetter(col) + (row + 1)
+    
+    for (const frame of dependencyFrames) {
+      const range = frame.range
+      
+      // Handle single cell (e.g., "A1")
+      if (range.match(/^[A-Z]+\d+$/)) {
+        if (range === cellAddr) {
+          return frame.color
+        }
+      }
+      // Handle range (e.g., "A1:C3")
+      else if (range.includes(':')) {
+        const rangeMatch = range.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/)
+        if (rangeMatch) {
+          const [, startCol, startRow, endCol, endRow] = rangeMatch
+          const startColNum = getColumnIndex(startCol)
+          const endColNum = getColumnIndex(endCol)
+          const startRowNum = parseInt(startRow) - 1
+          const endRowNum = parseInt(endRow) - 1
+          
+          if (row >= startRowNum && row <= endRowNum && col >= startColNum && col <= endColNum) {
+            return frame.color
+          }
+        }
+      }
     }
-    return result - 1
-  }, [])
+    
+    return null
+  }, [dependencyFrames, getColumnLetter, getColumnIndex])
 
 
   // Handle autocomplete
@@ -539,7 +524,7 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
       // Trigger autocomplete
       handleAutocomplete(value)
     }
-  }, [data, onDataChange, handleAutocomplete, extractCellReferences, generateRandomColor, referencedCellColors, trackDependencies, triggerRecalculation, processRecalculationQueue])
+  }, [data, onDataChange, handleAutocomplete, extractCellReferences, generateRandomColor, trackDependencies, triggerRecalculation, processRecalculationQueue])
 
   // Handle mouse down for drag selection
   const handleMouseDown = useCallback((rowIndex, colIndex, event) => {
@@ -603,7 +588,7 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
         setReferencedCellColors({})
       }
     }
-  }, [isFormulaEditing, editingCell, data, getColumnLetter, handleCellChange, selectedCells, onSelectedCellsChange, extractCellReferences, generateRandomColor, referencedCellColors])
+  }, [isFormulaEditing, editingCell, data, getColumnLetter, handleCellChange, selectedCells, onSelectedCellsChange, extractCellReferences, generateRandomColor])
 
   // Handle mouse move for drag selection
   const handleMouseMove = useCallback((event) => {
@@ -852,38 +837,36 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
         }
         
         const cell = data[rowIndex]?.[colIndex]
-        // Use rawValue if available (contains the actual numeric value), otherwise use value
-        const cellValue = cell?.rawValue !== undefined ? cell.rawValue : cell?.value ?? 0
-        const stringValue = String(cellValue)
         
-        // Debug logging removed to prevent console spam
+        // If cell doesn't exist, return 0
+        if (!cell) {
+          return 0
+        }
         
-        // If the cell contains a formula, evaluate it recursively
-        if (stringValue.startsWith('=')) {
+        
+        
+        // SIMPLIFIED: Only 3 cases to handle
+        
+        // CASE 1: FORMULA - Return the calculated result
+        if (cell.value && String(cell.value).startsWith('=')) {
           visitedCells.add(referencedCellKey)
-          const result = evaluateFormula(stringValue, rowIndex, colIndex, visitedCells)
+          const result = evaluateFormula(cell.value, rowIndex, colIndex, visitedCells)
           visitedCells.delete(referencedCellKey)
-          
-          // If the result is a date object, return it as-is for date functions
-          if (result && typeof result === 'object' && result.type === 'date') {
-            return result.value
-          }
-          
-          return isNaN(parseFloat(result)) ? 0 : parseFloat(result)
+          const finalResult = parseFloat(result) || 0
+          return finalResult
         }
         
-        // Check if this cell contains a date value
-        if (cell?.isDate && typeof cellValue === 'string') {
-          // Try to parse the date string (format: YYYY-MM-DD)
-          const dateMatch = cellValue.match(/^(\d{4})-(\d{2})-(\d{2})$/)
-          if (dateMatch) {
-            const [, year, month, day] = dateMatch
-            return new Date(parseInt(year), parseInt(month) - 1, parseInt(day))
-          }
+        // CASE 2: RAW VALUE - Use the numeric value for calculations
+        if (cell.rawValue !== undefined && cell.rawValue !== null) {
+          return parseFloat(cell.rawValue) || 0
         }
         
-        const result = parseNumericValue(cellValue)
-        return result
+        // CASE 3: DISPLAY VALUE - Extract numeric value from formatted string
+        if (cell.value) {
+          return parseNumericValue(cell.value)
+        }
+        
+        return 0
       }
       
       // Helper function to parse range (e.g., A1:A10 or $A$1:$A$10)
@@ -908,28 +891,33 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
         const values = []
         for (let r = startRowIndex; r <= endRowIndex; r++) {
           for (let c = startColIndex; c <= endColIndex; c++) {
-            // Use rawValue if available (contains the actual numeric value), otherwise use value
-            const cellValue = data[r]?.[c]?.rawValue !== undefined ? data[r][c].rawValue : data[r]?.[c]?.value ?? 0
-            const stringValue = String(cellValue)
+            // SIMPLIFIED: Use the same 3-case logic as getCellValue
+            const cell = data[r]?.[c]
+            if (!cell) continue // Skip empty cells
             
-            // If the cell contains a formula, evaluate it recursively
-            if (stringValue.startsWith('=')) {
+            let numValue = 0
+            
+            // CASE 1: FORMULA - Return the calculated result
+            if (cell.value && String(cell.value).startsWith('=')) {
               const cellKey = `${r}-${c}`
               if (!visitedCells.has(cellKey)) {
                 visitedCells.add(cellKey)
-                const result = evaluateFormula(stringValue, r, c, visitedCells)
+                const result = evaluateFormula(cell.value, r, c, visitedCells)
                 visitedCells.delete(cellKey)
-                const numValue = parseFloat(result)
-                if (!isNaN(numValue)) {
-                  values.push(numValue)
-                }
+                numValue = parseFloat(result) || 0
               }
-            } else {
-              // Use the enhanced number parsing for range values
-              const numValue = parseNumericValue(cellValue)
-              if (numValue !== 0 || cellValue === '0' || cellValue === 0) {
-                values.push(numValue)
-              }
+            }
+            // CASE 2: RAW VALUE - Use the numeric value for calculations
+            else if (cell.rawValue !== undefined && cell.rawValue !== null) {
+              numValue = parseFloat(cell.rawValue) || 0
+            }
+            // CASE 3: DISPLAY VALUE - Extract numeric value from formatted string
+            else if (cell.value) {
+              numValue = parseNumericValue(cell.value)
+            }
+            
+            if (numValue !== 0 || cell.value === '0' || cell.value === 0) {
+              values.push(numValue)
             }
           }
         }
@@ -1533,43 +1521,10 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
   //   return result
   // }, [])
 
-  // Get display value for a cell with memoization
-  const getCellDisplayValue = useCallback((cell, rowIndex, colIndex) => {
-    const cellValue = String(cell?.value || '')
-    const cellKey = `${rowIndex}-${colIndex}`
-    
-    if (cellValue.startsWith('=')) {
-      // Show formula only if this specific cell is being edited OR if we're in formula display mode
-      const isThisCellEditing = editingCell?.row === rowIndex && editingCell?.col === colIndex
-      const shouldShowFormula = isThisCellEditing || formulaDisplayMode === 2
-      if (shouldShowFormula) {
-        return cellValue
-      } else {
-        // Track dependencies for this formula cell
-        const references = extractCellReferences(cellValue)
-        const dependencyKeys = references.map(ref => `${ref.row}-${ref.col}`)
-        trackDependencies(cellKey, dependencyKeys)
-        
-        const result = evaluateFormula(cellValue, rowIndex, colIndex)
-        
-        // Debug logging removed to prevent console spam
-        
-        // Apply enhanced formatting based on cell properties
-        const formattedResult = formatCellValueWithProperties(result, cell)
-        
-        // Debug logging removed to prevent console spam
-        
-        return formattedResult
-      }
-    } else {
-      // For non-formula cells, use the enhanced formatting
-      return formatCellValueWithProperties(cellValue, cell)
-    }
-  }, [editingCell, evaluateFormula, formulaDisplayMode, extractCellReferences, trackDependencies, forceUpdate])
-
   // Enhanced cell value formatting function
   const formatCellValueWithProperties = useCallback((value, cell) => {
     if (!value && value !== 0) return ''
+    
     
     
     // If it's a formula result, return as-is
@@ -1638,7 +1593,9 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
     if (cell?.isCurrency || cell?.isPercentage || (cell?.cellType === 'number' && cell?.numberFormat)) {
       try {
         // Use computed result for formulas, parse rawValue for others
-        const sourceForNumber = cell?.isFormula ? value : rawValue
+        // Check if cell contains a formula by looking at the value
+        const isFormula = cell?.isFormula || (cell?.value && String(cell?.value).startsWith('='))
+        const sourceForNumber = isFormula ? value : rawValue
         const numValue = typeof sourceForNumber === 'number'
           ? sourceForNumber
           : parseFloat(String(sourceForNumber).replace(/\u00A0/g, ' ').replace(/[^\d.,-]/g, '')
@@ -1734,6 +1691,39 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
     
     return value
   }, [])
+
+  // Get display value for a cell with memoization
+  const getCellDisplayValue = useCallback((cell, rowIndex, colIndex) => {
+    const cellValue = String(cell?.value || '')
+    const cellKey = `${rowIndex}-${colIndex}`
+    
+    if (cellValue.startsWith('=')) {
+      // Show formula only if this specific cell is being edited OR if we're in formula display mode
+      const isThisCellEditing = editingCell?.row === rowIndex && editingCell?.col === colIndex
+      const shouldShowFormula = isThisCellEditing || formulaDisplayMode === 2
+      if (shouldShowFormula) {
+        return cellValue
+      } else {
+        // Track dependencies for this formula cell
+        const references = extractCellReferences(cellValue)
+        const dependencyKeys = references.map(ref => `${ref.row}-${ref.col}`)
+        trackDependencies(cellKey, dependencyKeys)
+        
+        const result = evaluateFormula(cellValue, rowIndex, colIndex)
+        
+        // Debug logging removed to prevent console spam
+        
+        // Apply enhanced formatting based on cell properties
+        const formattedResult = formatCellValueWithProperties(result, cell)
+        
+        return formattedResult
+      }
+    } else {
+      // For non-formula cells, use the enhanced formatting
+      return formatCellValueWithProperties(cellValue, cell)
+    }
+  }, [editingCell, evaluateFormula, formulaDisplayMode, extractCellReferences, trackDependencies, formatCellValueWithProperties])
+
 
   // Handle key press in cell
   const handleCellKeyPress = useCallback((e, rowIndex, colIndex) => {
@@ -1863,7 +1853,7 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
         setSelectedCell({ row: rowIndex + 1, col: colIndex })
       }
     }
-  }, [data, autocompleteVisible, autocompleteOptions, autocompleteIndex, handleCellChange])
+  }, [data, autocompleteVisible, autocompleteOptions, autocompleteIndex, handleCellChange, editingCell])
 
   if (!data || data.length === 0) {
     return (
@@ -1998,15 +1988,19 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
                   // Check if this cell is in the highlighted block
                   const isHighlighted = isInHighlightedBlock(actualRowIndex, actualColIndex)
                   
+                  // Check if this cell is in a dependency frame
+                  const dependencyFrameColor = getDependencyFrameColor(actualRowIndex, actualColIndex)
+                  
                   return (
                     <td
                       key={actualColIndex}
                       style={{ 
                         width: `${width}px`,
                         border: isReferenced && referencedColor ? `3px solid ${referencedColor}` : 
-                               isHighlighted ? '3px solid #f59e0b' : '1px solid #d1d5db',
+                               isHighlighted ? '3px solid #f59e0b' : 
+                               dependencyFrameColor ? `3px solid ${dependencyFrameColor}` : '1px solid #d1d5db',
                         position: 'relative',
-                        zIndex: isReferenced ? 20 : isHighlighted ? 15 : 'auto'
+                        zIndex: isReferenced ? 20 : isHighlighted ? 15 : dependencyFrameColor ? 10 : 'auto'
                       }}
                       className={`cursor-pointer text-xs py-1 px-2 ${
                         isSelected || isMultiSelected
@@ -2110,6 +2104,12 @@ ReactSpreadsheet.propTypes = {
     col: PropTypes.number.isRequired
   })),
   onSelectedCellsChange: PropTypes.func,
-  highlightedBlock: PropTypes.string
+  highlightedBlock: PropTypes.string,
+  dependencyFrames: PropTypes.arrayOf(PropTypes.shape({
+    range: PropTypes.string.isRequired,
+    color: PropTypes.string.isRequired,
+    type: PropTypes.string.isRequired,
+    layer: PropTypes.number.isRequired
+  }))
 }
 
