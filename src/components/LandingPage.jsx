@@ -1,6 +1,7 @@
 import React from 'react'
 import { Link } from 'react-router-dom'
 import { ArrowRight, CheckCircle, Shield, FileSpreadsheet, Wand2, AlertTriangle, TrendingUp, Timer } from 'lucide-react'
+import landingPageHeader from '../assets/landing_page_header.png'
 
 const LandingPage = () => {
   return (
@@ -37,7 +38,7 @@ const LandingPage = () => {
         <div 
           className="absolute inset-0 bg-cover bg-center bg-no-repeat"
           style={{
-            backgroundImage: "url('/src/assets/landing_page_header.png')",
+            backgroundImage: `url(${landingPageHeader})`,
             backgroundSize: "cover",
             backgroundPosition: "center"
           }}
