@@ -115,7 +115,7 @@
 .excel-grid thead {
   position: sticky;
   top: 0;
-  z-index: 10;
+  z-index: 30;
   background: #f3f4f6;
   display: table-header-group;
 }
@@ -124,7 +124,7 @@
   @apply bg-gray-100 text-center font-medium text-gray-600;
   position: sticky;
   top: 0;
-  z-index: 10;
+  z-index: 30;
   user-select: none;
   background: #f3f4f6 !important;
   display: table-cell;
@@ -188,9 +188,14 @@
 .excel-grid .formula-indicator {
   margin-left: 0.25rem;
   color: #059669;
-  font-size: 0.75rem;
-  line-height: 1rem;
-  cursor: help;
+}
+
+/* Row headers should have high z-index to stay above highlighted cells */
+.excel-grid .row-header {
+  position: sticky !important;
+  left: 0;
+  z-index: 35 !important;
+  background: #f9fafb !important;
 }
 
 /* Column resize handle */

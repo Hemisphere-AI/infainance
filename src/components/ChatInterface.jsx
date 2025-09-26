@@ -1,15 +1,12 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import PropTypes from 'prop-types';
-import { Send, Bot, User, Loader2, ChevronDown, ChevronUp, Key, Eye, EyeOff } from 'lucide-react';
+import { Send, Bot, User, Loader2, Square, ChevronDown, ChevronUp, AlertTriangle } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 
-const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToolCall = null, onApiKeyChange = null }) => {
+const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToolCall = null, onCancel = null, llmService = null }) => {
   const { user } = useAuth();
   const [message, setMessage] = useState('');
-  const [openaiKey, setOpenaiKey] = useState('');
-  const [showKey, setShowKey] = useState(false);
-  const [keyError, setKeyError] = useState('');
-  const [isKeySectionCollapsed, setIsKeySectionCollapsed] = useState(true);
+  const [tokenQuotaStatus, setTokenQuotaStatus] = useState(null);
   const [messages, setMessages] = useState([
     {
       id: 1,
@@ -20,6 +17,8 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
   ]);
   const [toolCalls, setToolCalls] = useState([]);
   const [expandedToolCalls, setExpandedToolCalls] = useState(new Set());
+  const [isCancelling, setIsCancelling] = useState(false);
+  const [isHoveringStop, setIsHoveringStop] = useState(false);
   // const [showScrollButton, setShowScrollButton] = useState(false);
   const messagesEndRef = useRef(null);
   const messagesContainerRef = useRef(null);
@@ -36,17 +35,24 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
     }
   };
 
+
   useEffect(() => {
     scrollToBottom();
   }, [messages, toolCalls]);
 
+
   // Handle tool call updates
   const handleToolCall = useCallback((toolCallData) => {
-    setToolCalls(prev => [...prev, {
+    const newToolCall = {
       id: Date.now() + Math.random(),
       ...toolCallData,
       timestamp: new Date()
-    }]);
+    };
+    setToolCalls(prev => {
+      const updated = [...prev, newToolCall];
+      return updated;
+    });
+
   }, []);
 
   useEffect(() => {
@@ -56,56 +62,49 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
     }
   }, [onToolCall, handleToolCall]);
 
-  // Check if we have a valid key to determine if section should be collapsed
-  const hasValidKey = useCallback(() => {
-    if (!user) return false;
-    
-    // If user is the demo user, they can use the environment key
-    if (user.email === import.meta.env.VITE_DEMO_USER) {
-      return true;
-    }
-    
-    // If user entered the demo key from environment, they can use the environment key
-    if (openaiKey.trim() === import.meta.env.VITE_DEMO_KEY) {
-      return true;
-    }
-    
-    // If user entered a valid-looking OpenAI key
-    if (openaiKey.trim().startsWith('sk-') && openaiKey.trim().length > 20) {
-      return true;
-    }
-    
-    return false;
-  }, [user, openaiKey]);
-
-  // Auto-collapse when valid key is detected
+  // Update token quota status
   useEffect(() => {
-    if (hasValidKey()) {
-      setIsKeySectionCollapsed(true);
+    if (llmService) {
+      const quotaStatus = llmService.getTokenQuotaStatus();
+      console.log('Token quota status:', quotaStatus);
+      console.log('Limit is Infinity?', quotaStatus?.limit === Infinity);
+      console.log('Will show progress bar?', quotaStatus?.limit !== Infinity && quotaStatus?.limit > 0);
+      setTokenQuotaStatus(quotaStatus);
+    } else {
+      console.log('No llmService available');
+      setTokenQuotaStatus(null);
     }
-  }, [openaiKey, user, hasValidKey]);
+  }, [llmService]);
 
-  // Handle API key input changes
-  const handleKeyChange = (e) => {
-    const value = e.target.value;
-    setOpenaiKey(value);
-    setKeyError(''); // Clear any previous errors
+  // Handle cancellation
+  const handleCancel = useCallback(() => {
+    setIsCancelling(true);
     
-    // Call the parent's onApiKeyChange if provided
-    if (onApiKeyChange) {
-      onApiKeyChange(value);
+    // Call the parent's cancel handler
+    if (onCancel) {
+      onCancel();
     }
-  };
+    
+    // Clear any pending tool calls
+    setToolCalls([]);
+    
+    // Add cancellation message
+    const cancelMessage = {
+      id: Date.now(),
+      type: 'bot',
+      content: 'Request cancelled by user.',
+      timestamp: new Date()
+    };
+    setMessages(prev => [...prev, cancelMessage]);
+    
+    // Reset states immediately
+    setIsCancelling(false);
+    setIsHoveringStop(false);
+  }, [onCancel]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!message.trim() || isLoading) return;
-
-    // Check if user has valid key access
-    if (!hasValidKey()) {
-      setKeyError('Please enter a valid OpenAI API key');
-      return;
-    }
+    if (!message.trim() || isLoading || isCancelling) return;
 
     const userMessage = {
       id: Date.now(),
@@ -117,6 +116,10 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
     setMessages(prev => [...prev, userMessage]);
     setMessage('');
     setToolCalls([]); // Clear previous tool calls
+    
+    // Reset cancellation state for new request
+    setIsCancelling(false);
+    setIsHoveringStop(false);
 
     try {
       const response = await onSendMessage(message.trim());
@@ -194,11 +197,19 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
       'read_sheet': {
         call: '📋 Reading spreadsheet range',
         result: '📊 Range data loaded'
-      }
+      },
+      'dependency_analysis': {
+        call: '🔍 Analyzing spreadsheet dependencies',
+        result: '📊 Dependency layer identified'
+      },
     };
     
     return descriptions[toolName]?.[type] || '';
   };
+
+
+
+
 
   const formatParameters = (toolCall) => {
     if (toolCall.type === 'tool_call') {
@@ -239,6 +250,12 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
           `Reading range: ${toolCall.arguments?.range || 'N/A'}`,
           `Purpose: Getting data from multiple cells`
         ];
+      } else if (toolCall.tool === 'dependency_analysis') {
+        return [
+          `Layer ${toolCall.arguments?.layer || 'N/A'}: ${toolCall.arguments?.layerType || 'Unknown'}`,
+          `Cells: ${toolCall.arguments?.cells?.join(', ') || 'N/A'}`,
+          `Frames: ${toolCall.arguments?.horizontalFrames?.join(', ') || 'None'} | ${toolCall.arguments?.verticalFrames?.join(', ') || 'None'}`
+        ];
       } else {
         return Object.entries(toolCall.arguments || {}).map(([key, value]) => `${key}: ${JSON.stringify(value)}`);
       }
@@ -271,7 +288,14 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
           return ['📊 Subframe analysis complete'];
         }
       } else if (toolCall.tool === 'conclude') {
-        return [`🎯 Final Answer: ${toolCall.result?.answer || 'No answer provided'}`];
+        const answer = toolCall.result?.answer || 'No answer provided';
+        const confidence = toolCall.result?.confidence || 'unknown';
+        const sources = toolCall.result?.sources || [];
+        return [
+          `🎯 Final Answer: ${answer.length > 100 ? answer.substring(0, 100) + '...' : answer}`,
+          `🎯 Confidence: ${confidence}`,
+          ...(sources.length > 0 ? [`📚 Sources: ${sources.length} references`] : [])
+        ];
       } else if (toolCall.tool === 'small_talk') {
         return [`💬 Response: ${toolCall.result?.response || 'No response provided'}`];
       } else if (toolCall.tool === 'read_cell') {
@@ -291,10 +315,29 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
           `Message: ${toolCall.result?.message || 'Recalculation complete'}`
         ];
       } else if (toolCall.tool === 'read_sheet') {
+        const window = toolCall.result?.window;
+        const range = toolCall.result?.range || 'N/A';
         return [
-          `📊 Range: ${toolCall.result?.range || 'N/A'}`,
-          `📈 Data loaded: ${toolCall.result?.window ? 'Yes' : 'No'}`,
+          `📊 Range: ${range}`,
+          `📈 Data loaded: ${window ? 'Yes' : 'No'}`,
+          ...(window ? [
+            `📏 Size: ${window.length} rows x ${window[0]?.length || 0} columns`,
+            `📋 Sample: ${window[0]?.slice(0, 3).join(', ') || 'No data'}`
+          ] : []),
           `Next: Analyzing the data to find the answer`
+        ];
+      } else if (toolCall.tool === 'dependency_analysis') {
+        const layer = toolCall.result?.layer || 'N/A';
+        const cellCount = toolCall.result?.cellCount || 0;
+        const frames = toolCall.result?.frames;
+        return [
+          `📊 Layer ${layer} analyzed`,
+          `📈 Cells: ${cellCount} cells in this layer`,
+          ...(frames ? [
+            `🔗 Horizontal frames: ${frames.horizontal?.join(', ') || 'None'}`,
+            `🔗 Vertical frames: ${frames.vertical?.join(', ') || 'None'}`
+          ] : []),
+          `✅ Layer dependency structure identified`
         ];
       } else {
         return [];
@@ -335,91 +378,52 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
         </p>
       </div>
 
-      {/* OpenAI Key Input */}
-      <div className="border-b border-gray-200 bg-gray-50">
-        {/* Collapsible Header */}
-        <button
-          onClick={() => setIsKeySectionCollapsed(!isKeySectionCollapsed)}
-          className="w-full p-4 flex items-center justify-between hover:bg-gray-100 transition-colors"
-        >
-          <div className="flex items-center space-x-2">
-            <Key className="w-4 h-4 text-gray-500" />
-            <span className="text-sm font-medium text-gray-700">OpenAI API Key</span>
-            {hasValidKey() && (
-              <span className="text-xs text-green-600 bg-green-100 px-2 py-1 rounded-full">
-                ✓ Configured
-              </span>
-            )}
+      {/* Token Usage Display */}
+      {tokenQuotaStatus && (
+        <div className="border-b border-gray-200 bg-gray-50 p-4">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-xs font-medium text-gray-700">Token Usage</span>
+            <span className="text-xs font-medium text-gray-600">
+              {tokenQuotaStatus.used >= 1000 ? `${(tokenQuotaStatus.used / 1000).toFixed(1)}K` : tokenQuotaStatus.used.toLocaleString()}
+              {tokenQuotaStatus.limit === Infinity ? ' (unlimited)' : ` / ${tokenQuotaStatus.limit >= 1000 ? `${(tokenQuotaStatus.limit / 1000).toFixed(0)}K` : tokenQuotaStatus.limit.toLocaleString()}`}
+            </span>
           </div>
-          <div className="flex items-center space-x-2">
-            {hasValidKey() && (
-              <span className="text-xs text-gray-500">
-                {user?.email === import.meta.env.VITE_DEMO_USER
-                  ? 'Environment key' 
-                  : openaiKey.trim() === import.meta.env.VITE_DEMO_KEY
-                    ? 'Demo key' 
-                    : 'Custom key'
-                }
-              </span>
-            )}
-            {isKeySectionCollapsed ? (
-              <ChevronDown className="w-4 h-4 text-gray-400" />
-            ) : (
-              <ChevronUp className="w-4 h-4 text-gray-400" />
-            )}
-          </div>
-        </button>
-
-        {/* Collapsible Content */}
-        {!isKeySectionCollapsed && (
-          <div className="px-4 pb-4 space-y-2">
-            <div className="flex space-x-2">
-              <div className="flex-1 relative">
-                <input
-                  type={showKey ? "text" : "password"}
-                  value={openaiKey}
-                  onChange={handleKeyChange}
-                  placeholder={
-                    user?.email === import.meta.env.VITE_DEMO_USER
-                      ? "Using environment key (demo user)" 
-                      : "Enter your OpenAI API key"
-                  }
-                  className={`w-full px-3 py-2 pr-10 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
-                    keyError ? 'border-red-300' : 'border-gray-300'
-                  }`}
-                  disabled={user?.email === import.meta.env.VITE_DEMO_USER}
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowKey(!showKey)}
-                  className="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                  disabled={user?.email === import.meta.env.VITE_DEMO_USER}
-                >
-                  {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
+          {/* Only show progress bar for non-test users with limited quota */}
+          {tokenQuotaStatus.limit !== Infinity && tokenQuotaStatus.limit > 0 && (
+            <div className="w-full bg-gray-200 rounded-full h-2">
+              <div 
+                className="h-2 rounded-full bg-blue-500 transition-all duration-300"
+                style={{ width: `${Math.min(100, (tokenQuotaStatus.used / tokenQuotaStatus.limit) * 100)}%` }}
+              ></div>
+            </div>
+          )}
+          
+          {/* Token limit exceeded warning */}
+          {tokenQuotaStatus.hasReachedQuota && (
+            <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-lg">
+              <div className="flex items-center">
+                <AlertTriangle className="w-4 h-4 text-red-600 mr-2 flex-shrink-0" />
+                <div className="flex-1">
+                  <p className="text-sm text-red-800 font-medium">
+                    Token limit reached! Number of tokens used: {tokenQuotaStatus.used.toLocaleString()}
+                  </p>
+                  <p className="text-xs text-red-600 mt-1">
+                    <a 
+                      href="https://calendly.com/hemisphere/30min" 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="underline hover:text-red-800 transition-colors"
+                    >
+                      Click here to increase your limit
+                    </a>
+                  </p>
+                </div>
               </div>
             </div>
-            {keyError && (
-              <p className="text-sm text-red-600">{keyError}</p>
-            )}
-            {user?.email === import.meta.env.VITE_DEMO_USER && (
-              <p className="text-xs text-green-600">
-                ✓ Using environment key for demo user
-              </p>
-            )}
-            {openaiKey.trim() === import.meta.env.VITE_DEMO_KEY && user?.email !== import.meta.env.VITE_DEMO_USER && (
-              <p className="text-xs text-blue-600">
-                ✓ Using demo key
-              </p>
-            )}
-            {openaiKey.trim().startsWith('sk-') && openaiKey.trim().length > 20 && (
-              <p className="text-xs text-green-600">
-                ✓ Using your OpenAI API key
-              </p>
-            )}
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      )}
+
 
       {/* Messages */}
       <div 
@@ -580,12 +584,26 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
             disabled={isLoading}
           />
           <button
-            type="submit"
-            disabled={!message.trim() || isLoading}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+            type={isLoading ? "button" : "submit"}
+            onClick={isLoading ? handleCancel : undefined}
+            disabled={!isLoading && (!message.trim() || isCancelling)}
+            onMouseEnter={() => isLoading && setIsHoveringStop(true)}
+            onMouseLeave={() => isLoading && setIsHoveringStop(false)}
+            className={`px-4 py-2 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-offset-2 flex items-center space-x-2 transition-all duration-200 ${
+              isLoading 
+                ? (isHoveringStop 
+                    ? 'bg-red-600 hover:bg-red-700 focus:ring-red-500' 
+                    : 'bg-blue-600 hover:bg-blue-700 focus:ring-blue-500')
+                : 'bg-blue-600 hover:bg-blue-700 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed'
+            }`}
+            title={isLoading ? (isHoveringStop ? "Click to stop processing" : "Processing...") : "Send message"}
           >
             {isLoading ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
+              isHoveringStop ? (
+                <Square className="w-4 h-4" />
+              ) : (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              )
             ) : (
               <Send className="w-4 h-4" />
             )}
@@ -601,7 +619,8 @@ ChatInterface.propTypes = {
   isLoading: PropTypes.bool,
   onClearHistory: PropTypes.func,
   onToolCall: PropTypes.func,
-  onApiKeyChange: PropTypes.func
+  llmService: PropTypes.object,
+  onCancel: PropTypes.func
 };
 
 export default ChatInterface;

@@ -3,6 +3,143 @@ import { tools, SYSTEM_PROMPT } from '../utils/tools.js';
 import { addrToRC, rcToAddr, sliceRange, getColumnIndex } from '../utils/a1Helpers.js';
 import { tokenSortJaroWinkler } from '../utils/similarity.js';
 
+/**
+ * Token Cache System for tracking OpenAI API usage
+ * Tracks tokens per API key with monthly reset
+ */
+class TokenCache {
+  constructor() {
+    this.cacheKey = 'openai_token_usage';
+    this.quotaLimit = 500000; // Token limit per month (500k)
+    this.loadCache();
+  }
+
+  /**
+   * Load token cache from localStorage
+   */
+  loadCache() {
+    try {
+      const cached = localStorage.getItem(this.cacheKey);
+      if (cached) {
+        const data = JSON.parse(cached);
+        this.cache = data.cache || {};
+        this.lastReset = new Date(data.lastReset);
+        
+        // Check if we need to reset (new month)
+        if (this.shouldReset()) {
+          this.resetCache();
+        }
+      } else {
+        this.cache = {};
+        this.lastReset = new Date();
+        this.saveCache();
+      }
+    } catch (error) {
+      console.warn('Error loading token cache:', error);
+      this.cache = {};
+      this.lastReset = new Date();
+    }
+  }
+
+  /**
+   * Save token cache to localStorage
+   */
+  saveCache() {
+    try {
+      const data = {
+        cache: this.cache,
+        lastReset: this.lastReset.toISOString()
+      };
+      localStorage.setItem(this.cacheKey, JSON.stringify(data));
+    } catch (error) {
+      console.warn('Error saving token cache:', error);
+    }
+  }
+
+  /**
+   * Check if cache should be reset (new month)
+   */
+  shouldReset() {
+    const now = new Date();
+    const lastReset = new Date(this.lastReset);
+    
+    // Reset on the 1st of each month
+    return now.getMonth() !== lastReset.getMonth() || 
+           now.getFullYear() !== lastReset.getFullYear();
+  }
+
+  /**
+   * Reset cache for new month
+   */
+  resetCache() {
+    this.cache = {};
+    this.lastReset = new Date();
+    this.saveCache();
+    console.log('Token cache reset for new month');
+  }
+
+  /**
+   * Get current token usage for an API key
+   */
+  getTokenUsage(apiKey) {
+    const keyHash = this.hashApiKey(apiKey);
+    return this.cache[keyHash] || { totalTokens: 0, lastUsed: null };
+  }
+
+  /**
+   * Add tokens to cache for an API key
+   */
+  addTokens(apiKey, tokens) {
+    const keyHash = this.hashApiKey(apiKey);
+    const current = this.getTokenUsage(apiKey);
+    
+    this.cache[keyHash] = {
+      totalTokens: current.totalTokens + tokens,
+      lastUsed: new Date().toISOString()
+    };
+    
+    this.saveCache();
+    
+    console.log(`Added ${tokens} tokens for API key. Total: ${this.cache[keyHash].totalTokens}/${this.quotaLimit}`);
+  }
+
+  /**
+   * Check if API key has reached quota
+   */
+  hasReachedQuota(apiKey) {
+    const usage = this.getTokenUsage(apiKey);
+    return usage.totalTokens >= this.quotaLimit;
+  }
+
+  /**
+   * Get quota status for an API key
+   */
+  getQuotaStatus(apiKey) {
+    const usage = this.getTokenUsage(apiKey);
+    return {
+      used: usage.totalTokens,
+      limit: this.quotaLimit,
+      remaining: Math.max(0, this.quotaLimit - usage.totalTokens),
+      hasReachedQuota: usage.totalTokens >= this.quotaLimit,
+      lastUsed: usage.lastUsed
+    };
+  }
+
+  /**
+   * Hash API key for storage (for privacy)
+   */
+  hashApiKey(apiKey) {
+    // Simple hash function for API key identification
+    let hash = 0;
+    for (let i = 0; i < apiKey.length; i++) {
+      const char = apiKey.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32-bit integer
+    }
+    return `key_${Math.abs(hash)}`;
+  }
+}
+
 // Initialize OpenAI client
 const apiKey = import.meta.env.VITE_OPENAI_KEY;
 if (!apiKey || apiKey === 'your_openai_api_key_here') {
@@ -18,12 +155,15 @@ if (!apiKey || apiKey === 'your_openai_api_key_here') {
  * LLM Service for spreadsheet interaction
  */
 export class LLMService {
-  constructor(spreadsheetData, onDataChange, onToolCall = null, customApiKey = null) {
+  constructor(spreadsheetData, onDataChange, onToolCall = null, user = null) {
     this.spreadsheetData = spreadsheetData;
     this.onDataChange = onDataChange;
     this.onToolCall = onToolCall; // Callback for tool call visibility
     this.conversationHistory = [];
-    this.customApiKey = customApiKey;
+    this.abortController = null; // For cancellation support
+    this.isCancelled = false; // Flag to track cancellation
+    this.tokenCache = new TokenCache(); // Token tracking system
+    this.user = user; // Store user information
   }
 
   /**
@@ -646,291 +786,6 @@ export class LLMService {
     };
   }
 
-  generateSubFramePatterns(pos1, pos2) {
-    const patterns = [];
-    
-    // Pattern 1: pos1 as column header, pos2 as row header (relaxed)
-    if (pos2.col === 0) {
-      patterns.push({
-        type: 'column_row_headers',
-        columnHeader: pos1,
-        rowHeader: pos2,
-        dataStartRow: Math.min(pos1.row, pos2.row) + 1,
-        dataStartCol: pos1.col + 1
-      });
-    }
-    
-    // Pattern 2: pos2 as column header, pos1 as row header (relaxed)
-    if (pos1.col === 0) {
-      patterns.push({
-        type: 'column_row_headers',
-        columnHeader: pos2,
-        rowHeader: pos1,
-        dataStartRow: Math.min(pos1.row, pos2.row) + 1,
-        dataStartCol: pos2.col + 1
-      });
-    }
-    
-    // Pattern 3: dual column headers (shared header row)
-    if (pos1.row === pos2.row && pos1.row === 0) {
-      patterns.push({
-        type: 'dual_column_headers',
-        header1: pos1,
-        header2: pos2,
-        headerRow: pos1.row,
-        dataStartRow: pos1.row + 1
-      });
-    }
-    
-    // Pattern 4: dual row headers (shared header column)
-    if (pos1.col === pos2.col && pos1.col === 0) {
-      patterns.push({
-        type: 'dual_row_headers',
-        header1: pos1,
-        header2: pos2,
-        headerCol: pos1.col,
-        dataStartCol: pos1.col + 1
-      });
-    }
-    
-    return patterns;
-  }
-
-  createSubFrame(pattern, contextRange, valueType) {
-    try {
-      let subFrameData = [];
-      let context = {};
-      
-      switch (pattern.type) {
-        case 'column_row_headers':
-          subFrameData = this.extractColumnRowSubFrame(pattern, valueType);
-          context = this.extractContext(pattern.dataStartRow - contextRange, pattern.dataStartCol - contextRange, contextRange);
-          break;
-          
-        case 'dual_column_headers':
-          subFrameData = this.extractDualColumnSubFrame(pattern, valueType);
-          context = this.extractContext(pattern.dataStartRow - contextRange, 0, contextRange);
-          break;
-          
-        case 'dual_row_headers':
-          subFrameData = this.extractDualRowSubFrame(pattern, valueType);
-          context = this.extractContext(0, pattern.dataStartCol - contextRange, contextRange);
-          break;
-          
-        default:
-          return null;
-      }
-      
-      if (subFrameData.length === 0) {
-        return null;
-      }
-      
-      return {
-        pattern: pattern,
-        subFrameData: subFrameData,
-        context: context,
-        totalEntries: subFrameData.length,
-        maxValue: Math.max(...subFrameData.map(d => d.value)),
-        minValue: Math.min(...subFrameData.map(d => d.value))
-      };
-      
-    } catch (error) {
-      console.error('Error creating sub-frame:', error);
-      return null;
-    }
-  }
-
-  extractColumnRowSubFrame(pattern, valueType) {
-    const data = [];
-    const { dataStartRow, dataStartCol } = pattern;
-    
-    // Determine robust startRow
-    let startRow = 1;
-    for (let r = 1; r < this.spreadsheetData.length; r++) {
-      const rowLabelCellProbe = this.spreadsheetData[r]?.[pattern.rowHeader.col];
-      const valueCellProbe = this.spreadsheetData[r]?.[dataStartCol - 1];
-      if ((rowLabelCellProbe && String(rowLabelCellProbe.value ?? '').trim() !== '') || (valueCellProbe && String(valueCellProbe.value ?? '').trim() !== '')) {
-        startRow = r; break;
-      }
-    }
-    
-    for (let row = Math.max(startRow, dataStartRow); row < this.spreadsheetData.length; row++) {
-      const cell = this.spreadsheetData[row]?.[dataStartCol - 1];
-      const rowLabelCell = this.spreadsheetData[row]?.[pattern.rowHeader.col];
-      if (cell && rowLabelCell) {
-        const cellValue = cell.value;
-        const rowLabel = rowLabelCell.value;
-        if (this.validateValueType(cellValue, valueType) && rowLabel) {
-          const numericValue = this.parseNumericValue(cellValue);
-          if (numericValue !== undefined) {
-            data.push({
-              row: row + 1,
-              column: dataStartCol,
-              address: rcToAddr(row + 1, dataStartCol),
-              value: numericValue,
-              rowLabel: rowLabel,
-              rowLabelAddress: rcToAddr(row + 1, pattern.rowHeader.col + 1)
-            });
-          }
-        }
-      }
-    }
-    return data;
-  }
-
-  extractDualColumnSubFrame(pattern, valueType) {
-    const data = [];
-    const { dataStartRow, header1, header2 } = pattern;
-    
-    // Scan down both columns
-    for (let row = dataStartRow; row < this.spreadsheetData.length; row++) {
-      const cell1 = this.spreadsheetData[row]?.[header1.col];
-      const cell2 = this.spreadsheetData[row]?.[header2.col];
-      
-      if (cell1 && cell2) {
-        const value1 = this.parseNumericValue(cell1.value);
-        const value2 = this.parseNumericValue(cell2.value);
-        
-        if (value1 !== undefined && this.validateValueType(cell1.value, valueType)) {
-          data.push({
-            row: row + 1,
-            column: header1.col + 1,
-            address: rcToAddr(row + 1, header1.col + 1),
-            value: value1,
-            label: header1.value,
-            labelAddress: rcToAddr(1, header1.col + 1)
-          });
-        }
-        
-        if (value2 !== undefined && this.validateValueType(cell2.value, valueType)) {
-          data.push({
-            row: row + 1,
-            column: header2.col + 1,
-            address: rcToAddr(row + 1, header2.col + 1),
-            value: value2,
-            label: header2.value,
-            labelAddress: rcToAddr(1, header2.col + 1)
-          });
-        }
-      }
-    }
-    
-    return data;
-  }
-
-  extractDualRowSubFrame(pattern, valueType) {
-    const data = [];
-    const { dataStartCol, header1, header2 } = pattern;
-    
-    // Scan across both rows
-    for (let col = dataStartCol; col < (this.spreadsheetData[0]?.length || 0); col++) {
-      const cell1 = this.spreadsheetData[header1.row]?.[col];
-      const cell2 = this.spreadsheetData[header2.row]?.[col];
-      
-      if (cell1 && cell2) {
-        const value1 = this.parseNumericValue(cell1.value);
-        const value2 = this.parseNumericValue(cell2.value);
-        
-        if (value1 !== undefined && this.validateValueType(cell1.value, valueType)) {
-          data.push({
-            row: header1.row + 1,
-            column: col + 1,
-            address: rcToAddr(header1.row + 1, col + 1),
-            value: value1,
-            label: header1.value,
-            labelAddress: rcToAddr(header1.row + 1, 1)
-          });
-        }
-        
-        if (value2 !== undefined && this.validateValueType(cell2.value, valueType)) {
-          data.push({
-            row: header2.row + 1,
-            column: col + 1,
-            address: rcToAddr(header2.row + 1, col + 1),
-            value: value2,
-            label: header2.value,
-            labelAddress: rcToAddr(header2.row + 1, 1)
-          });
-        }
-      }
-    }
-    
-    return data;
-  }
-
-  extractContext(startRow, startCol, range) {
-    const context = {
-      topLeft: null,
-      top: null,
-      left: null,
-      title: null
-    };
-    
-    if (startRow >= 0 && startCol >= 0) {
-      const titleCell = this.spreadsheetData[startRow]?.[startCol];
-      if (titleCell && titleCell.value) {
-        context.title = {
-          value: titleCell.value,
-          address: rcToAddr(startRow + 1, startCol + 1)
-        };
-      }
-    }
-    
-    for (let r = Math.max(0, startRow); r < Math.min(this.spreadsheetData.length, startRow + range); r++) {
-      for (let c = Math.max(0, startCol); c < Math.min((this.spreadsheetData[r]?.length || 0), startCol + range); c++) {
-        const cell = this.spreadsheetData[r]?.[c];
-        if (cell && cell.value) {
-          const address = rcToAddr(r + 1, c + 1);
-          if (r === startRow && c === startCol) {
-            context.topLeft = { value: cell.value, address };
-          } else if (r === startRow) {
-            context.top = { value: cell.value, address };
-          } else if (c === startCol) {
-            context.left = { value: cell.value, address };
-          }
-        }
-      }
-    }
-    return context;
-  }
-
-  analyzeMultipleSubFrames(subFrames, label1, label2) {
-    console.log(`Analyzing ${subFrames.length} sub-frames for labels "${label1}" and "${label2}"`);
-    
-    // Check if all sub-frames have the same values
-    const allValues = subFrames.flatMap(sf => sf.subFrameData.map(d => d.value));
-    const uniqueValues = [...new Set(allValues)];
-    
-    if (uniqueValues.length === 1) {
-      // All values are the same, return the first sub-frame
-      return {
-        ...subFrames[0],
-        multipleSubFrames: true,
-        allValuesSame: true,
-        value: uniqueValues[0],
-        message: `Multiple sub-frames found, but all have the same value: ${uniqueValues[0]}`
-      };
-    }
-    
-    // Values are different, need to analyze context
-    const analysis = subFrames.map((sf, index) => ({
-      index,
-      pattern: sf.pattern.type,
-      context: sf.context,
-      maxValue: sf.maxValue,
-      minValue: sf.minValue,
-      totalEntries: sf.totalEntries,
-      subFrameData: sf.subFrameData
-    }));
-    
-    return {
-      multipleSubFrames: true,
-      allValuesSame: false,
-      subFrames: analysis,
-      message: `Multiple sub-frames found with different values. Examine context to determine which sub-frame to use.`,
-      recommendation: "Use the sub-frame with the most relevant context based on the question asked."
-    };
-  }
 
   /**
    * Get all data from a specific row
@@ -1305,23 +1160,90 @@ export class LLMService {
   }
 
   /**
+   * Cancel current request
+   */
+  cancel() {
+    console.log('Cancelling LLM request');
+    this.isCancelled = true;
+    if (this.abortController) {
+      this.abortController.abort();
+      this.abortController = null;
+    }
+  }
+
+  /**
+   * Get token quota status for the current API key
+   */
+  getTokenQuotaStatus() {
+    // Use environment API key
+    const apiKeyToUse = import.meta.env.VITE_OPENAI_KEY;
+
+    if (!apiKeyToUse || apiKeyToUse === 'your_openai_api_key_here') {
+      return null;
+    }
+
+    const quotaStatus = this.tokenCache.getQuotaStatus(apiKeyToUse);
+    
+    // Check if this is a test user (demo user or demo key)
+    const isTestUser = this.isTestUser();
+    
+    console.log('Token quota check:', { 
+      apiKeyToUse, 
+      isTestUser, 
+      quotaStatus 
+    });
+    
+    if (isTestUser) {
+      return {
+        ...quotaStatus,
+        limit: Infinity,
+        remaining: Infinity,
+        hasReachedQuota: false
+      };
+    }
+
+    return quotaStatus;
+  }
+
+  /**
+   * Check if current user is a test user
+   */
+  isTestUser() {
+    // Check if user is the demo user
+    if (this.user && this.user.email === import.meta.env.VITE_DEMO_USER) {
+      return true;
+    }
+    
+    // All other users have limited quota
+    return false;
+  }
+
+
+  /**
    * Main chat function that handles the conversation with OpenAI
    */
   async chat(userText) {
     try {
-      // Determine which API key to use
-      let apiKeyToUse;
-      if (this.customApiKey && this.customApiKey !== import.meta.env.VITE_DEMO_KEY) {
-        // Use custom API key if provided and not the demo key
-        apiKeyToUse = this.customApiKey;
-      } else {
-        // Use environment key for demo user or demo key
-        apiKeyToUse = import.meta.env.VITE_OPENAI_KEY;
-      }
+      // Reset cancellation flag for new request
+      this.isCancelled = false;
+      
+      // Create abort controller for this request
+      this.abortController = new AbortController();
+      
+      // Use environment API key
+      const apiKeyToUse = import.meta.env.VITE_OPENAI_KEY;
 
       // Check if API key is properly configured
       if (!apiKeyToUse || apiKeyToUse === 'your_openai_api_key_here') {
         throw new Error('OpenAI API key not configured.');
+      }
+
+      // Check token quota before making API call (skip for test user)
+      const isTestUser = this.isTestUser();
+      
+      if (!isTestUser && this.tokenCache.hasReachedQuota(apiKeyToUse)) {
+        const quotaStatus = this.tokenCache.getQuotaStatus(apiKeyToUse);
+        throw new Error(`OpenAI API key: token limit reached, number of tokens used: ${quotaStatus.used}. <a href="https://calendly.com/hemisphere/30min" target="_blank" rel="noopener noreferrer" class="underline hover:text-blue-800 transition-colors">Click here to increase your limit</a>`);
       }
 
       // Create OpenAI client with the appropriate API key
@@ -1354,13 +1276,23 @@ export class LLMService {
         temperature: 0.1 // Lower temperature for more consistent behavior
       });
 
+      // Track tokens from the response
+      if (response.usage && response.usage.total_tokens) {
+        this.tokenCache.addTokens(apiKeyToUse, response.usage.total_tokens);
+      }
+
       // 2) Handle tool calls in a loop
       let finalResponse = response;
       let iterationCount = 0;
-      const maxIterations = 5; // Prevent infinite loops
+      const maxIterations = 20; // Allow more iterations for complex operations like indexing
       let toolOutputs = []; // Track tool outputs for protocol validation
 
       while (response.choices[0]?.message?.tool_calls?.length > 0 && iterationCount < maxIterations) {
+        // Check if request was cancelled
+        if (this.isCancelled || this.abortController?.signal?.aborted) {
+          console.log('Request cancelled during tool call processing');
+          throw new Error('Request cancelled by user');
+        }
         iterationCount++;
         const toolCalls = response.choices[0].message.tool_calls;
         
@@ -1375,18 +1307,30 @@ export class LLMService {
         
         // Execute all tool calls
         for (const call of toolCalls) {
+          // Check if request was cancelled before each tool call
+          if (this.isCancelled || this.abortController?.signal?.aborted) {
+            console.log('Request cancelled before tool call execution');
+            throw new Error('Request cancelled by user');
+          }
+          
           const toolArgs = JSON.parse(call.function.arguments);
           
           // Protocol guard: Check if conclude is being called without data read
           if (call.function.name === 'conclude') {
-            const usedDataRead = () => toolOutputs.some(t => 
-              ["read_cell", "read_sheet", "find_subframe", "find_label_value"].includes(t.tool_name)
-            );
+            const usedDataRead = () => {
+              // Check for direct data reading tools
+              const hasDataRead = toolOutputs.some(t => 
+                ["read_cell", "read_sheet", "find_subframe", "find_label_value"].includes(t.tool_name)
+              );
+              
+              
+              return hasDataRead;
+            };
             
             if (!usedDataRead()) {
               console.log('Protocol guard: Blocking conclude without data read');
               const errorResult = {
-                error: "ProtocolError: You must read spreadsheet data before concluding. Call read_cell (the intersection address) or read_sheet first."
+                error: "ProtocolError: You must read spreadsheet data before concluding. Call read_cell (the intersection address), read_sheet, or complete indexing first."
               };
               
               // Add error result to conversation
@@ -1409,15 +1353,31 @@ export class LLMService {
               continue; // Skip this tool call
             }
           }
+
+          
+          // Check cancellation before showing tool call
+          if (this.isCancelled || this.abortController?.signal?.aborted) {
+            console.log('Request cancelled before tool call display');
+            throw new Error('Request cancelled by user');
+          }
           
           // Show tool call in chat if callback is provided
           if (this.onToolCall) {
+            console.log('LLM Service: Calling onToolCall with tool_call:', call.function.name);
             this.onToolCall({
               type: 'tool_call',
               tool: call.function.name,
               arguments: toolArgs,
               iteration: iterationCount
             });
+          } else {
+            console.log('LLM Service: onToolCall is null or undefined');
+          }
+          
+          // Check cancellation before executing tool
+          if (this.isCancelled || this.abortController?.signal?.aborted) {
+            console.log('Request cancelled before tool execution');
+            throw new Error('Request cancelled by user');
           }
           
           const result = await this.execTool(call.function.name, toolArgs);
@@ -1432,12 +1392,15 @@ export class LLMService {
           
           // Show tool result in chat if callback is provided
           if (this.onToolCall) {
+            console.log('LLM Service: Calling onToolCall with tool_result:', call.function.name);
             this.onToolCall({
               type: 'tool_result',
               tool: call.function.name,
               result: result,
               iteration: iterationCount
             });
+          } else {
+            console.log('LLM Service: onToolCall is null or undefined for result');
           }
           
           // Add tool result to conversation
@@ -1474,6 +1437,11 @@ export class LLMService {
           temperature: 0.1 // Lower temperature for more consistent behavior
         });
 
+        // Track tokens from the response
+        if (response.usage && response.usage.total_tokens) {
+          this.tokenCache.addTokens(apiKeyToUse, response.usage.total_tokens);
+        }
+
         finalResponse = response;
       }
 
@@ -1486,6 +1454,12 @@ export class LLMService {
     } catch (error) {
       console.error('LLM Service Error:', error);
       
+      // Handle cancellation
+      if (error.name === 'AbortError' || this.abortController?.signal?.aborted) {
+        console.log('Request was cancelled');
+        return 'Request cancelled by user.';
+      }
+      
       // Provide more specific error messages
       if (error.message.includes('tool_call_id')) {
         return `Tool calling error: ${error.message}. This might be a conversation state issue. Please try asking your question again.`;
@@ -1494,8 +1468,11 @@ export class LLMService {
       } else if (error.message.includes('401')) {
         return `Authentication Error: ${error.message}. Please check your OpenAI API key.`;
       } else {
-        return `Error: ${error.message}. Please try again or check your OpenAI API key.`;
+        return `Error: ${error.message}. Please try again or check your OpenAI API key. <a href="https://calendly.com/hemisphere/30min" target="_blank" rel="noopener noreferrer" class="underline hover:text-blue-800 transition-colors">Click here to increase your limit</a>`;
       }
+    } finally {
+      // Clean up abort controller
+      this.abortController = null;
     }
   }
 

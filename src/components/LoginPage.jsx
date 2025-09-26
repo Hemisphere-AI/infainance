@@ -1,10 +1,19 @@
 import React, { useEffect, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
 import { Shield } from 'lucide-react'
 
 const LoginPage = () => {
-  const { error } = useAuth()
+  const { user, error } = useAuth()
+  const navigate = useNavigate()
   const googleButtonRef = useRef(null)
+
+  // Redirect to app if user is already logged in
+  useEffect(() => {
+    if (user) {
+      navigate('/app')
+    }
+  }, [user, navigate])
 
   useEffect(() => {
     // Render Google Sign-In button with custom styling
@@ -136,7 +145,7 @@ const LoginPage = () => {
 
         {/* Footer */}
         <div className="text-center text-sm text-gray-500">
-          <p>Your data is processed securely and never stored on our servers</p>
+          <p></p>
         </div>
       </div>
     </div>
