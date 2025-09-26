@@ -1887,7 +1887,7 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
     >
       {/* Virtual table with only visible cells */}
       <table key={`spreadsheet-${recalcTrigger}-${forceUpdate}`} className="excel-grid w-full border-collapse">
-        <thead className="sticky top-0 bg-white z-10">
+        <thead className="sticky top-0 bg-white z-30">
           <tr>
             <th className="bg-gray-100 border border-gray-300 text-center text-xs font-medium text-gray-700 py-2">
               {/* Corner cell */}
@@ -1942,7 +1942,7 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
               <tr key={actualRowIndex}>
                 {/* Row Number */}
                 <td 
-                  className="sticky left-0 bg-gray-50 border border-gray-300 text-center text-xs font-medium text-gray-700 py-1 z-5 cursor-pointer hover:bg-gray-200 select-none"
+                  className="row-header sticky left-0 bg-gray-50 border border-gray-300 text-center text-xs font-medium text-gray-700 py-1 cursor-pointer hover:bg-gray-200 select-none"
                   onClick={(e) => handleRowHeaderClick(actualRowIndex, e)}
                 >
                   {actualRowIndex + 1}

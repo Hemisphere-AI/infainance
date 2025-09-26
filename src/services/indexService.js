@@ -60,6 +60,54 @@ function rcToA1(r, c) {
   return `${numToCol(c)}${r}`;
 }
 
+// Parse A1 with absolute flags, e.g., $H28, H$28, $H$28
+function parseA1WithAbs(a1) {
+  const m = a1.match(/^(\$?)([A-Z]{1,3})(\$?)(\d+)$/);
+  if (!m) throw new Error(`Bad A1: ${a1}`);
+  const [, colAbs, col, rowAbs, rowStr] = m;
+  return {
+    r: parseInt(rowStr, 10),
+    c: colToNum(col),
+    absRow: rowAbs === '$',
+    absCol: colAbs === '$',
+  };
+}
+
+function tokenForRefCell(sheetName, a1, baseR, baseC) {
+  const { r, c, absRow, absCol } = parseA1WithAbs(a1);
+  const rToken = absRow ? `RABS:${r}` : `RREL:${r - baseR}`;
+  const cToken = absCol ? `CABS:${c}` : `CREL:${c - baseC}`;
+  const sToken = `S:${sheetName}`;
+  return `${sToken},${rToken},${cToken}`;
+}
+
+function computeFormulaSignature(formula, baseR, baseC) {
+  if (typeof formula !== 'string' || !formula.startsWith('=')) return null;
+  let out = '';
+  let last = 0;
+  CELL_REF_RE.lastIndex = 0;
+  let m;
+  while ((m = CELL_REF_RE.exec(formula))) {
+    const startIdx = m.index;
+    out += formula.slice(last, startIdx);
+    const [, sheet1, start, sheet2, end] = m;
+    const s1 = sheet1 || 'Sheet1';
+    if (end) {
+      const s2 = sheet2 || s1;
+      const tStart = tokenForRefCell(s1, start, baseR, baseC);
+      const tEnd = tokenForRefCell(s2, end, baseR, baseC);
+      out += `RANGE(${tStart}->${tEnd})`;
+    } else {
+      const t = tokenForRefCell(s1, start, baseR, baseC);
+      out += `REF(${t})`;
+    }
+    last = CELL_REF_RE.lastIndex;
+  }
+  out += formula.slice(last);
+  // Normalize case and whitespace
+  return out.replace(/\s+/g, '').toUpperCase();
+}
+
 // Expand ranges like A1:C3 -> ["A1","B1","C1","A2",...]
 function expandRange(start, end) {
   const s = a1ToRC(start);
@@ -109,16 +157,17 @@ function buildDependencyGraphFromSpreadsheetData(spreadsheetData) {
   const allNodes = new Set();
   const formulaNodes = new Set();
   const referencedNodes = new Set(); // Track cells that are referenced by formulas
+  const nodeMeta = new Map(); // nodeK -> { r, c, formula, refOffsets: [{dr,dc}], adjOffset: {dr,dc}|null }
 
   // First pass: identify formula cells and their references
   for (let rowIndex = 0; rowIndex < spreadsheetData.length; rowIndex++) {
     const row = spreadsheetData[rowIndex];
     if (!row) continue;
-    
+
     for (let colIndex = 0; colIndex < row.length; colIndex++) {
       const cell = row[colIndex];
       if (!cell) continue;
-      
+
       const cellAddr = rcToA1(rowIndex + 1, colIndex + 1);
       const nodeK = keyOf({ sheet: "Sheet1", addr: cellAddr });
 
@@ -127,7 +176,10 @@ function buildDependencyGraphFromSpreadsheetData(spreadsheetData) {
       if (cellValue.startsWith('=')) {
         formulaNodes.add(nodeK);
         allNodes.add(nodeK);
-        
+
+        // Track reference offsets relative to this cell
+        const refOffsets = [];
+
         // Extract cell references from the formula
         for (const refObj of iterCellRefs(cellValue)) {
           const startSheet = refObj.sheet || "Sheet1";
@@ -135,25 +187,50 @@ function buildDependencyGraphFromSpreadsheetData(spreadsheetData) {
             const endSheet = refObj.end.sheet || startSheet;
             if (endSheet !== startSheet) {
               // Fallback: treat only the start cell to be conservative
-              const srcK = keyOf({ sheet: startSheet, addr: stripDollar(refObj.start) });
+              const srcAddr = stripDollar(refObj.start);
+              const srcK = keyOf({ sheet: startSheet, addr: srcAddr });
               referencedNodes.add(srcK);
               allNodes.add(srcK);
               addEdge(srcK, nodeK, dependents, precedents);
+              const rc = a1ToRC(srcAddr);
+              refOffsets.push({ dr: rc.r - (rowIndex + 1), dc: rc.c - (colIndex + 1) });
             } else {
               for (const a1 of expandRange(stripDollar(refObj.start), stripDollar(refObj.end.addr))) {
                 const srcK = keyOf({ sheet: startSheet, addr: a1 });
                 referencedNodes.add(srcK);
                 allNodes.add(srcK);
                 addEdge(srcK, nodeK, dependents, precedents);
+                const rc = a1ToRC(a1);
+                refOffsets.push({ dr: rc.r - (rowIndex + 1), dc: rc.c - (colIndex + 1) });
               }
             }
           } else {
-            const srcK = keyOf({ sheet: startSheet, addr: stripDollar(refObj.start) });
+            const srcAddr = stripDollar(refObj.start);
+            const srcK = keyOf({ sheet: startSheet, addr: srcAddr });
             referencedNodes.add(srcK);
             allNodes.add(srcK);
             addEdge(srcK, nodeK, dependents, precedents);
+            const rc = a1ToRC(srcAddr);
+            refOffsets.push({ dr: rc.r - (rowIndex + 1), dc: rc.c - (colIndex + 1) });
           }
         }
+
+        // Compute single adjacent offset if applicable (one referenced cell and adjacent only)
+        let adjOffset = null;
+        if (refOffsets.length === 1) {
+          const off = refOffsets[0];
+          const manhattan = Math.abs(off.dr) + Math.abs(off.dc);
+          if (manhattan === 1) adjOffset = off; // up/down/left/right
+        }
+
+        nodeMeta.set(nodeK, {
+          r: rowIndex + 1,
+          c: colIndex + 1,
+          formula: cellValue,
+          refOffsets,
+          adjOffset,
+          signature: computeFormulaSignature(cellValue, rowIndex + 1, colIndex + 1),
+        });
       }
     }
   }
@@ -173,7 +250,7 @@ function buildDependencyGraphFromSpreadsheetData(spreadsheetData) {
     if (!precedents.has(k)) precedents.set(k, new Set());
   }
 
-  return { dependents, precedents, allNodes: finalNodes, formulaNodes };
+  return { dependents, precedents, allNodes: finalNodes, formulaNodes, nodeMeta };
 }
 
 function addEdge(srcK, dstK, dependents, precedents) {
@@ -299,6 +376,174 @@ function framesForLayers(layers) {
 
 
 // -----------------------------
+// Adjacent replicated formulas grouping
+// -----------------------------
+
+function computeReplicatedFormulaGroups(graph) {
+  // Union-Find helpers
+  const parent = new Map();
+  function find(x) {
+    if (parent.get(x) !== x) {
+      parent.set(x, find(parent.get(x)));
+    }
+    return parent.get(x);
+  }
+  function union(a, b) {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra === rb) return;
+    // Simple lexical choose stable root
+    const root = ra < rb ? ra : rb;
+    const other = ra < rb ? rb : ra;
+    parent.set(other, root);
+  }
+
+  // Initialize parent for every node we might touch
+  for (const k of graph.allNodes) parent.set(k, k);
+
+  // Build coordinate index for formula nodes
+  const coordToNode = new Map(); // key "r,c" -> nodeK
+  for (const k of graph.formulaNodes) {
+    const meta = graph.nodeMeta?.get(k);
+    if (!meta) continue;
+    coordToNode.set(`${meta.r},${meta.c}`, k);
+  }
+
+  // Connect adjacent replicated formulas with the same canonical signature
+  for (const k of graph.formulaNodes) {
+    const meta = graph.nodeMeta?.get(k);
+    if (!meta) continue;
+    const neighbors = [
+      [meta.r + 1, meta.c],
+      [meta.r - 1, meta.c],
+      [meta.r, meta.c + 1],
+      [meta.r, meta.c - 1],
+    ];
+    for (const [nr, nc] of neighbors) {
+      const neighbor = coordToNode.get(`${nr},${nc}`);
+      if (!neighbor) continue;
+      const nmeta = graph.nodeMeta?.get(neighbor);
+      if (!nmeta) continue;
+      if (nmeta.signature && meta.signature && nmeta.signature === meta.signature) {
+        union(k, neighbor);
+      }
+    }
+  }
+
+  // Build groups: ensure all nodes (including non-formula, referenced-only) exist
+  const groupByNode = new Map();
+  for (const k of graph.allNodes) {
+    if (!parent.has(k)) parent.set(k, k);
+    groupByNode.set(k, find(k));
+  }
+
+  // Normalize group ids to a canonical representative (lexicographically smallest member)
+  const membersByGroup = new Map();
+  for (const [node, root] of groupByNode.entries()) {
+    const g = membersByGroup.get(root) || new Set();
+    g.add(node);
+    membersByGroup.set(root, g);
+  }
+  const canonicalByRoot = new Map();
+  for (const [root, memSet] of membersByGroup.entries()) {
+    const arr = [...memSet];
+    arr.sort();
+    canonicalByRoot.set(root, arr[0]);
+    membersByGroup.set(root, new Set(arr));
+  }
+
+  // Remap groupByNode to canonical group ids
+  for (const [node, root] of groupByNode.entries()) {
+    groupByNode.set(node, canonicalByRoot.get(root));
+  }
+  const membersByCanonical = new Map();
+  for (const [root, memSet] of membersByGroup.entries()) {
+    const canon = canonicalByRoot.get(root);
+    membersByCanonical.set(canon, memSet);
+  }
+
+  return { groupByNode, membersByGroup: membersByCanonical };
+}
+
+function compressGraphByGroups(graph, groups) {
+  const gDependents = new Map();
+  const gPrecedents = new Map();
+  const gAllNodes = new Set();
+  const gFormulaNodes = new Set();
+
+  function ensureNode(k) {
+    if (!gDependents.has(k)) gDependents.set(k, new Set());
+    if (!gPrecedents.has(k)) gPrecedents.set(k, new Set());
+    gAllNodes.add(k);
+  }
+
+  // Prepare group membership for all nodes
+  const groupOf = (nodeK) => groups.groupByNode.get(nodeK) || nodeK;
+
+  for (const src of graph.dependents.keys()) {
+    const srcG = groupOf(src);
+    ensureNode(srcG);
+    for (const dst of graph.dependents.get(src)) {
+      const dstG = groupOf(dst);
+      ensureNode(dstG);
+      if (srcG === dstG) continue;
+      gDependents.get(srcG).add(dstG);
+      gPrecedents.get(dstG).add(srcG);
+    }
+  }
+
+  // Formula groups: any group that contains at least one formula node
+  for (const g of gAllNodes) {
+    const members = groups.membersByGroup.get(g) || new Set([g]);
+    for (const m of members) {
+      if (graph.formulaNodes.has(m)) {
+        gFormulaNodes.add(g);
+        break;
+      }
+    }
+  }
+
+  return {
+    dependents: gDependents,
+    precedents: gPrecedents,
+    allNodes: gAllNodes,
+    formulaNodes: gFormulaNodes,
+  };
+}
+
+function expandGroupLayersToNodes(groupLayers, groups) {
+  // Flatten each group back to node keys; keep stable sorted order within groups
+  const layers = [];
+  for (const layer of groupLayers) {
+    const expanded = [];
+    for (const g of layer) {
+      const memSet = groups.membersByGroup.get(g);
+      if (!memSet) {
+        expanded.push(g);
+        continue;
+      }
+      const arr = [...memSet];
+      arr.sort();
+      expanded.push(...arr);
+    }
+    layers.push(expanded);
+  }
+  return layers;
+}
+
+function reverseGraph(graph) {
+  // Swap dependents and precedents
+  const dependents = new Map();
+  const precedents = new Map();
+  for (const k of graph.allNodes) {
+    dependents.set(k, new Set(graph.precedents.get(k) || []));
+    precedents.set(k, new Set(graph.dependents.get(k) || []));
+  }
+  return { dependents, precedents, allNodes: new Set(graph.allNodes), formulaNodes: new Set(graph.formulaNodes) };
+}
+
+
+// -----------------------------
 // Main DependencyAnalyzer class
 // -----------------------------
 
@@ -312,7 +557,15 @@ class DependencyAnalyzer {
 
   analyzeSpreadsheetData(spreadsheetData) {
     const graph = buildDependencyGraphFromSpreadsheetData(spreadsheetData);
-    const layers = forwardTopoLayers(graph);
+
+    // Group adjacent replicated formulas so they share the same depth layer
+    const groups = computeReplicatedFormulaGroups(graph);
+    const compressed = compressGraphByGroups(graph, groups);
+
+    // Compute layers from outputs backward: nodes feeding same outputs share distance from outputs
+    const reversed = reverseGraph(compressed);
+    const groupLayers = forwardTopoLayers(reversed);
+    const layers = expandGroupLayersToNodes(groupLayers, groups);
     const frames = framesForLayers(layers);
     
     return {
@@ -357,4 +610,5 @@ class DependencyAnalyzer {
 
 // Export for use in other modules
 export { DependencyAnalyzer };
+
 

@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react'
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
 import { Upload, FileSpreadsheet, Download, Plus, Minus, Calendar, ArrowLeft, Calculator, Network } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import ReactSpreadsheet from './UniverSpreadsheet'
@@ -8,6 +9,9 @@ import { DependencyAnalyzer } from './services/indexService'
 import { AuthProvider } from './contexts/AuthContext.jsx'
 import { useAuth } from './hooks/useAuth'
 import LoginPage from './components/LoginPage'
+import LandingPage from './components/LandingPage'
+import TermsOfService from './components/TermsOfService'
+import PrivacyPolicy from './components/PrivacyPolicy'
 import UserProfile from './components/UserProfile'
 
 function MainApp() {
@@ -24,14 +28,25 @@ function MainApp() {
     )
   }
 
-  if (!user) {
-    return <LoginPage />
-  }
-
-  return <ExcelApp />
+  return (
+    <Router>
+      <Routes>
+        <Route path="/" element={user ? <Navigate to="/app" replace /> : <LandingPage />} />
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/terms" element={<TermsOfService />} />
+        <Route path="/privacy" element={<PrivacyPolicy />} />
+        <Route 
+          path="/app" 
+          element={user ? <ExcelApp /> : <Navigate to="/login" replace />} 
+        />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </Router>
+  )
 }
 
 function ExcelApp() {
+  const { user } = useAuth()
   const [excelData, setExcelData] = useState(null)
   const [fileName, setFileName] = useState('')
   const [isDragOver, setIsDragOver] = useState(false)
@@ -43,7 +58,6 @@ function ExcelApp() {
   const [isChatLoading, setIsChatLoading] = useState(false)
   const [decimalButtonClicked, setDecimalButtonClicked] = useState(false)
   const [averageDecimals, setAverageDecimals] = useState(0)
-  const [customApiKey, setCustomApiKey] = useState('')
   const [dependencyFrames, setDependencyFrames] = useState(null)
   const toolCallHandlerRef = useRef(null)
   const llmServiceRef = useRef(null)
@@ -590,15 +604,15 @@ function ExcelApp() {
   
   // Create LLM service immediately when we have data
   if (hasSpreadsheetData && !llmServiceRef.current) {
-    llmServiceRef.current = new LLMService(spreadsheetData, setSpreadsheetData, toolCallHandlerRef.current, customApiKey)
+    llmServiceRef.current = new LLMService(spreadsheetData, setSpreadsheetData, toolCallHandlerRef.current, user)
   }
   
-  // Update LLM service when API key changes or tool call handler changes
+  // Update LLM service when tool call handler changes
   useEffect(() => {
     if (hasSpreadsheetData && llmServiceRef.current) {
-      llmServiceRef.current = new LLMService(spreadsheetData, setSpreadsheetData, toolCallHandlerRef.current, customApiKey)
+      llmServiceRef.current = new LLMService(spreadsheetData, setSpreadsheetData, toolCallHandlerRef.current, user)
     }
-  }, [customApiKey, hasSpreadsheetData, spreadsheetData])
+  }, [hasSpreadsheetData, spreadsheetData, user])
 
   // Handle chat messages
   const handleChatMessage = useCallback(async (message) => {
@@ -634,10 +648,6 @@ function ExcelApp() {
     }
   }, [])
 
-  // Handle API key changes
-  const handleApiKeyChange = useCallback((apiKey) => {
-    setCustomApiKey(apiKey)
-  }, [])
 
   // Handle block highlighting for indexing
   const handleHighlightBlock = useCallback((blockRange) => {
@@ -796,17 +806,20 @@ function ExcelApp() {
       
       // Store the analysis results (no longer needed as state)
       
-      // Calculate max depth from inputs to outputs
-      const maxDepth = result.layers.length - 1
+      // Calculate max depth from outputs to inputs (output-centric layering)
+      const maxDepth = Math.max(0, result.layers.length - 1)
       
       // Create frame highlighting data using green-to-red colors
       const greenToRedColors = generateGreenToRedColors()
       
       const frames = []
       result.frames.forEach((frame) => {
-        // Input-based layer indexing: inputs (layer 0) get green, outputs get red
-        const depthFromInput = frame.layer
-        const colorIndex = Math.floor((depthFromInput / maxDepth) * (greenToRedColors.length - 1))
+        // Output-based layer indexing: outputs (layer 0) should be red, inputs green
+        const depthFromOutput = frame.layer
+        let colorIndex = greenToRedColors.length - 1
+        if (maxDepth > 0) {
+          colorIndex = Math.floor(((maxDepth - depthFromOutput) / maxDepth) * (greenToRedColors.length - 1))
+        }
         const color = greenToRedColors[colorIndex]
         
         // Process horizontal frames
@@ -816,7 +829,7 @@ function ExcelApp() {
             color: color,
             type: 'horizontal',
             layer: frame.layer,
-            depthFromInput: depthFromInput
+            depthFromInput: depthFromOutput
           })
         })
         
@@ -827,7 +840,7 @@ function ExcelApp() {
             color: color,
             type: 'vertical', 
             layer: frame.layer,
-            depthFromInput: depthFromInput
+            depthFromInput: depthFromOutput
           })
         })
       })
@@ -1173,10 +1186,7 @@ function ExcelApp() {
               isLoading={isChatLoading}
               onClearHistory={handleClearHistory}
               onToolCall={handleToolCallRegistration}
-              onApiKeyChange={handleApiKeyChange}
-              spreadsheetData={spreadsheetData}
               llmService={llmServiceRef.current}
-              onHighlightBlock={handleHighlightBlock}
               onCancel={handleCancel}
             />
           </div>

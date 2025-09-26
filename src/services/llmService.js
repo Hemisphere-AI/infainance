@@ -3,6 +3,143 @@ import { tools, SYSTEM_PROMPT } from '../utils/tools.js';
 import { addrToRC, rcToAddr, sliceRange, getColumnIndex } from '../utils/a1Helpers.js';
 import { tokenSortJaroWinkler } from '../utils/similarity.js';
 
+/**
+ * Token Cache System for tracking OpenAI API usage
+ * Tracks tokens per API key with monthly reset
+ */
+class TokenCache {
+  constructor() {
+    this.cacheKey = 'openai_token_usage';
+    this.quotaLimit = 500000; // Token limit per month (500k)
+    this.loadCache();
+  }
+
+  /**
+   * Load token cache from localStorage
+   */
+  loadCache() {
+    try {
+      const cached = localStorage.getItem(this.cacheKey);
+      if (cached) {
+        const data = JSON.parse(cached);
+        this.cache = data.cache || {};
+        this.lastReset = new Date(data.lastReset);
+        
+        // Check if we need to reset (new month)
+        if (this.shouldReset()) {
+          this.resetCache();
+        }
+      } else {
+        this.cache = {};
+        this.lastReset = new Date();
+        this.saveCache();
+      }
+    } catch (error) {
+      console.warn('Error loading token cache:', error);
+      this.cache = {};
+      this.lastReset = new Date();
+    }
+  }
+
+  /**
+   * Save token cache to localStorage
+   */
+  saveCache() {
+    try {
+      const data = {
+        cache: this.cache,
+        lastReset: this.lastReset.toISOString()
+      };
+      localStorage.setItem(this.cacheKey, JSON.stringify(data));
+    } catch (error) {
+      console.warn('Error saving token cache:', error);
+    }
+  }
+
+  /**
+   * Check if cache should be reset (new month)
+   */
+  shouldReset() {
+    const now = new Date();
+    const lastReset = new Date(this.lastReset);
+    
+    // Reset on the 1st of each month
+    return now.getMonth() !== lastReset.getMonth() || 
+           now.getFullYear() !== lastReset.getFullYear();
+  }
+
+  /**
+   * Reset cache for new month
+   */
+  resetCache() {
+    this.cache = {};
+    this.lastReset = new Date();
+    this.saveCache();
+    console.log('Token cache reset for new month');
+  }
+
+  /**
+   * Get current token usage for an API key
+   */
+  getTokenUsage(apiKey) {
+    const keyHash = this.hashApiKey(apiKey);
+    return this.cache[keyHash] || { totalTokens: 0, lastUsed: null };
+  }
+
+  /**
+   * Add tokens to cache for an API key
+   */
+  addTokens(apiKey, tokens) {
+    const keyHash = this.hashApiKey(apiKey);
+    const current = this.getTokenUsage(apiKey);
+    
+    this.cache[keyHash] = {
+      totalTokens: current.totalTokens + tokens,
+      lastUsed: new Date().toISOString()
+    };
+    
+    this.saveCache();
+    
+    console.log(`Added ${tokens} tokens for API key. Total: ${this.cache[keyHash].totalTokens}/${this.quotaLimit}`);
+  }
+
+  /**
+   * Check if API key has reached quota
+   */
+  hasReachedQuota(apiKey) {
+    const usage = this.getTokenUsage(apiKey);
+    return usage.totalTokens >= this.quotaLimit;
+  }
+
+  /**
+   * Get quota status for an API key
+   */
+  getQuotaStatus(apiKey) {
+    const usage = this.getTokenUsage(apiKey);
+    return {
+      used: usage.totalTokens,
+      limit: this.quotaLimit,
+      remaining: Math.max(0, this.quotaLimit - usage.totalTokens),
+      hasReachedQuota: usage.totalTokens >= this.quotaLimit,
+      lastUsed: usage.lastUsed
+    };
+  }
+
+  /**
+   * Hash API key for storage (for privacy)
+   */
+  hashApiKey(apiKey) {
+    // Simple hash function for API key identification
+    let hash = 0;
+    for (let i = 0; i < apiKey.length; i++) {
+      const char = apiKey.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32-bit integer
+    }
+    return `key_${Math.abs(hash)}`;
+  }
+}
+
 // Initialize OpenAI client
 const apiKey = import.meta.env.VITE_OPENAI_KEY;
 if (!apiKey || apiKey === 'your_openai_api_key_here') {
@@ -18,14 +155,15 @@ if (!apiKey || apiKey === 'your_openai_api_key_here') {
  * LLM Service for spreadsheet interaction
  */
 export class LLMService {
-  constructor(spreadsheetData, onDataChange, onToolCall = null, customApiKey = null) {
+  constructor(spreadsheetData, onDataChange, onToolCall = null, user = null) {
     this.spreadsheetData = spreadsheetData;
     this.onDataChange = onDataChange;
     this.onToolCall = onToolCall; // Callback for tool call visibility
     this.conversationHistory = [];
-    this.customApiKey = customApiKey;
     this.abortController = null; // For cancellation support
     this.isCancelled = false; // Flag to track cancellation
+    this.tokenCache = new TokenCache(); // Token tracking system
+    this.user = user; // Store user information
   }
 
   /**
@@ -1033,6 +1171,53 @@ export class LLMService {
     }
   }
 
+  /**
+   * Get token quota status for the current API key
+   */
+  getTokenQuotaStatus() {
+    // Use environment API key
+    const apiKeyToUse = import.meta.env.VITE_OPENAI_KEY;
+
+    if (!apiKeyToUse || apiKeyToUse === 'your_openai_api_key_here') {
+      return null;
+    }
+
+    const quotaStatus = this.tokenCache.getQuotaStatus(apiKeyToUse);
+    
+    // Check if this is a test user (demo user or demo key)
+    const isTestUser = this.isTestUser();
+    
+    console.log('Token quota check:', { 
+      apiKeyToUse, 
+      isTestUser, 
+      quotaStatus 
+    });
+    
+    if (isTestUser) {
+      return {
+        ...quotaStatus,
+        limit: Infinity,
+        remaining: Infinity,
+        hasReachedQuota: false
+      };
+    }
+
+    return quotaStatus;
+  }
+
+  /**
+   * Check if current user is a test user
+   */
+  isTestUser() {
+    // Check if user is the demo user
+    if (this.user && this.user.email === import.meta.env.VITE_DEMO_USER) {
+      return true;
+    }
+    
+    // All other users have limited quota
+    return false;
+  }
+
 
   /**
    * Main chat function that handles the conversation with OpenAI
@@ -1045,19 +1230,20 @@ export class LLMService {
       // Create abort controller for this request
       this.abortController = new AbortController();
       
-      // Determine which API key to use
-      let apiKeyToUse;
-      if (this.customApiKey && this.customApiKey !== import.meta.env.VITE_DEMO_KEY) {
-        // Use custom API key if provided and not the demo key
-        apiKeyToUse = this.customApiKey;
-      } else {
-        // Use environment key for demo user or demo key
-        apiKeyToUse = import.meta.env.VITE_OPENAI_KEY;
-      }
+      // Use environment API key
+      const apiKeyToUse = import.meta.env.VITE_OPENAI_KEY;
 
       // Check if API key is properly configured
       if (!apiKeyToUse || apiKeyToUse === 'your_openai_api_key_here') {
         throw new Error('OpenAI API key not configured.');
+      }
+
+      // Check token quota before making API call (skip for test user)
+      const isTestUser = this.isTestUser();
+      
+      if (!isTestUser && this.tokenCache.hasReachedQuota(apiKeyToUse)) {
+        const quotaStatus = this.tokenCache.getQuotaStatus(apiKeyToUse);
+        throw new Error(`OpenAI API key: token limit reached, number of tokens used: ${quotaStatus.used}. <a href="https://calendly.com/hemisphere/30min" target="_blank" rel="noopener noreferrer" class="underline hover:text-blue-800 transition-colors">Click here to increase your limit</a>`);
       }
 
       // Create OpenAI client with the appropriate API key
@@ -1089,6 +1275,11 @@ export class LLMService {
         tool_choice: "auto", // Let model choose appropriate tools
         temperature: 0.1 // Lower temperature for more consistent behavior
       });
+
+      // Track tokens from the response
+      if (response.usage && response.usage.total_tokens) {
+        this.tokenCache.addTokens(apiKeyToUse, response.usage.total_tokens);
+      }
 
       // 2) Handle tool calls in a loop
       let finalResponse = response;
@@ -1246,6 +1437,11 @@ export class LLMService {
           temperature: 0.1 // Lower temperature for more consistent behavior
         });
 
+        // Track tokens from the response
+        if (response.usage && response.usage.total_tokens) {
+          this.tokenCache.addTokens(apiKeyToUse, response.usage.total_tokens);
+        }
+
         finalResponse = response;
       }
 
@@ -1272,7 +1468,7 @@ export class LLMService {
       } else if (error.message.includes('401')) {
         return `Authentication Error: ${error.message}. Please check your OpenAI API key.`;
       } else {
-        return `Error: ${error.message}. Please try again or check your OpenAI API key.`;
+        return `Error: ${error.message}. Please try again or check your OpenAI API key. <a href="https://calendly.com/hemisphere/30min" target="_blank" rel="noopener noreferrer" class="underline hover:text-blue-800 transition-colors">Click here to increase your limit</a>`;
       }
     } finally {
       // Clean up abort controller
