@@ -1,21 +1,33 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import PropTypes from 'prop-types';
-import { Send, Bot, User, Loader2, Square, ChevronDown, ChevronUp, AlertTriangle } from 'lucide-react';
-import { useAuth } from '../hooks/useAuth';
+import { Send, Bot, User, Loader2, Square, ChevronDown, ChevronUp, AlertTriangle, Plus, X } from 'lucide-react';
 
-const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToolCall = null, onCancel = null, llmService = null }) => {
-  const { user } = useAuth();
+const ChatInterface = ({ onSendMessage, isLoading = false, onToolCall = null, onCancel = null, llmService = null, onAddBotMessage = null }) => {
   const [message, setMessage] = useState('');
   const [tokenQuotaStatus, setTokenQuotaStatus] = useState(null);
-  const [messages, setMessages] = useState([
-    {
+  
+  // Chat tabs management
+  const [activeChatId, setActiveChatId] = useState(1);
+  const [chats, setChats] = useState({
+    1: {
       id: 1,
-      type: 'bot',
-      content: 'Hello! I\'m your Spreadsheet Copilot. I can help you analyze and modify your Excel data. Try asking me something like "What if my interest rate was twice as high?" or "Find the total in column A".',
-      timestamp: new Date()
+      name: 'Chat 1',
+      messages: [{
+        id: 1,
+        type: 'bot',
+        content: 'Hello! I can help you analyze and modify your Excel data. Try asking me something like "What if my interest rate was twice as high?" or "Find the total in column A".',
+        timestamp: new Date()
+      }],
+      toolCalls: []
     }
-  ]);
-  const [toolCalls, setToolCalls] = useState([]);
+  });
+  const [nextChatId, setNextChatId] = useState(2);
+  
+  // Get current chat data
+  const currentChat = chats[activeChatId];
+  const messages = useMemo(() => currentChat?.messages || [], [currentChat?.messages]);
+  const toolCalls = useMemo(() => currentChat?.toolCalls || [], [currentChat?.toolCalls]);
+  
   const [expandedToolCalls, setExpandedToolCalls] = useState(new Set());
   const [isCancelling, setIsCancelling] = useState(false);
   const [isHoveringStop, setIsHoveringStop] = useState(false);
@@ -35,6 +47,52 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
     }
   };
 
+  // Tab management functions
+  const addNewChat = () => {
+    const newChatId = nextChatId;
+    const newChat = {
+      id: newChatId,
+      name: `Chat ${newChatId}`,
+      messages: [{
+        id: 1,
+        type: 'bot',
+        content: 'Hello! I can help you analyze and modify your Excel data. Try asking me something like "What if my interest rate was twice as high?" or "Find the total in column A".',
+        timestamp: new Date()
+      }],
+      toolCalls: []
+    };
+    
+    setChats(prev => ({
+      ...prev,
+      [newChatId]: newChat
+    }));
+    setActiveChatId(newChatId);
+    setNextChatId(prev => prev + 1);
+  };
+
+  const closeChat = (chatId) => {
+    if (Object.keys(chats).length <= 1) return; // Don't close the last chat
+    
+    // Actually delete the chat tab
+    setChats(prev => {
+      const newChats = { ...prev };
+      delete newChats[chatId];
+      return newChats;
+    });
+    
+    // If we're closing the active chat, switch to the first available chat
+    if (activeChatId === chatId) {
+      const remainingChatIds = Object.keys(chats).filter(id => id !== chatId);
+      if (remainingChatIds.length > 0) {
+        setActiveChatId(parseInt(remainingChatIds[0]));
+      }
+    }
+  };
+
+  const switchToChat = (chatId) => {
+    setActiveChatId(chatId);
+  };
+
 
   useEffect(() => {
     scrollToBottom();
@@ -48,12 +106,31 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
       ...toolCallData,
       timestamp: new Date()
     };
-    setToolCalls(prev => {
-      const updated = [...prev, newToolCall];
-      return updated;
-    });
+    setChats(prev => ({
+      ...prev,
+      [activeChatId]: {
+        ...prev[activeChatId],
+        toolCalls: [...(prev[activeChatId]?.toolCalls || []), newToolCall]
+      }
+    }));
+  }, [activeChatId]);
 
-  }, []);
+  // Handle adding bot messages directly
+  const addBotMessage = useCallback((content) => {
+    const botMessage = {
+      id: Date.now(),
+      type: 'bot',
+      content: content,
+      timestamp: new Date()
+    };
+    setChats(prev => ({
+      ...prev,
+      [activeChatId]: {
+        ...prev[activeChatId],
+        messages: [...(prev[activeChatId]?.messages || []), botMessage]
+      }
+    }));
+  }, [activeChatId]);
 
   useEffect(() => {
     if (onToolCall) {
@@ -61,6 +138,13 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
       onToolCall(handleToolCall);
     }
   }, [onToolCall, handleToolCall]);
+
+  useEffect(() => {
+    if (onAddBotMessage) {
+      // Store the handler so it can be called from the parent
+      onAddBotMessage(addBotMessage);
+    }
+  }, [onAddBotMessage, addBotMessage]);
 
   // Update token quota status
   useEffect(() => {
@@ -86,7 +170,13 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
     }
     
     // Clear any pending tool calls
-    setToolCalls([]);
+    setChats(prev => ({
+      ...prev,
+      [activeChatId]: {
+        ...prev[activeChatId],
+        toolCalls: []
+      }
+    }));
     
     // Add cancellation message
     const cancelMessage = {
@@ -95,12 +185,18 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
       content: 'Request cancelled by user.',
       timestamp: new Date()
     };
-    setMessages(prev => [...prev, cancelMessage]);
+    setChats(prev => ({
+      ...prev,
+      [activeChatId]: {
+        ...prev[activeChatId],
+        messages: [...(prev[activeChatId]?.messages || []), cancelMessage]
+      }
+    }));
     
     // Reset states immediately
     setIsCancelling(false);
     setIsHoveringStop(false);
-  }, [onCancel]);
+  }, [onCancel, activeChatId]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -113,9 +209,17 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
       timestamp: new Date()
     };
 
-    setMessages(prev => [...prev, userMessage]);
+    // Add user message to current chat
+    setChats(prev => ({
+      ...prev,
+      [activeChatId]: {
+        ...prev[activeChatId],
+        messages: [...(prev[activeChatId]?.messages || []), userMessage],
+        toolCalls: [] // Clear previous tool calls for this chat
+      }
+    }));
+    
     setMessage('');
-    setToolCalls([]); // Clear previous tool calls
     
     // Reset cancellation state for new request
     setIsCancelling(false);
@@ -131,7 +235,25 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
         timestamp: new Date()
       };
 
-      setMessages(prev => [...prev, botMessage]);
+      // Add bot message to current chat
+      setChats(prev => ({
+        ...prev,
+        [activeChatId]: {
+          ...prev[activeChatId],
+          messages: [...(prev[activeChatId]?.messages || []), botMessage]
+        }
+      }));
+      
+      // Update token quota status after successful completion
+      if (llmService) {
+        // Add a small delay to ensure token cache is fully updated
+        setTimeout(() => {
+          const updatedQuotaStatus = llmService.getTokenQuotaStatus();
+          console.log('Updating token quota status after completion:', updatedQuotaStatus);
+          // Force a new object reference to ensure React re-renders
+          setTokenQuotaStatus({...updatedQuotaStatus});
+        }, 100);
+      }
     } catch (error) {
       const errorMessage = {
         id: Date.now() + 1,
@@ -140,7 +262,14 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
         timestamp: new Date()
       };
 
-      setMessages(prev => [...prev, errorMessage]);
+      // Add error message to current chat
+      setChats(prev => ({
+        ...prev,
+        [activeChatId]: {
+          ...prev[activeChatId],
+          messages: [...(prev[activeChatId]?.messages || []), errorMessage]
+        }
+      }));
     }
   };
 
@@ -346,41 +475,11 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
   };
 
   return (
-    <div className="flex flex-col h-full bg-white border-l border-gray-200">
-      {/* Header */}
-      <div className="p-4 border-b border-gray-200 bg-gray-50">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-2">
-            <Bot className="w-5 h-5 text-blue-600" />
-            <h3 className="text-lg font-semibold text-gray-800">Spreadsheet Copilot</h3>
-          </div>
-          {onClearHistory && (
-            <button
-              onClick={() => {
-                setMessages([{
-                  id: 1,
-                  type: 'bot',
-                  content: 'Hello! I\'m your Spreadsheet Copilot. I can help you analyze and modify your Excel data. Try asking me something like "What if my interest rate was twice as high?" or "Find the total in column A".',
-                  timestamp: new Date()
-                }]);
-                setToolCalls([]);
-                onClearHistory();
-              }}
-              className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1 rounded border border-gray-300 hover:bg-gray-100"
-              title="Clear conversation history"
-            >
-              Clear
-            </button>
-          )}
-        </div>
-        <p className="text-sm text-gray-600 mt-1">
-          Ask me to analyze or modify your spreadsheet data
-        </p>
-      </div>
+    <div className="flex flex-col h-full bg-white border border-gray-200 rounded-lg">
 
       {/* Token Usage Display */}
       {tokenQuotaStatus && (
-        <div className="border-b border-gray-200 bg-gray-50 p-4">
+        <div className="bg-gray-50 p-4 rounded-t-lg">
           <div className="flex items-center justify-between mb-1">
             <span className="text-xs font-medium text-gray-700">Token Usage</span>
             <span className="text-xs font-medium text-gray-600">
@@ -424,12 +523,50 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
         </div>
       )}
 
+      {/* Chat Tabs */}
+      <div className="bg-gray-50 px-4 py-0 -mt-px">
+        <div className="flex items-center space-x-0.5">
+          {Object.values(chats).map((chat) => (
+            <div
+              key={chat.id}
+              className={`flex items-center space-x-2 px-3 py-2 rounded-t-lg transition-colors ${
+                activeChatId === chat.id
+                  ? 'bg-white text-gray-800'
+                  : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
+              }`}
+            >
+              <button
+                onClick={() => switchToChat(chat.id)}
+                className="text-sm font-medium"
+              >
+                {chat.name}
+              </button>
+              {Object.keys(chats).length > 1 && (
+                <button
+                  onClick={() => closeChat(chat.id)}
+                  className="ml-1 p-1 hover:bg-gray-300 rounded-full transition-colors"
+                  title="Close chat"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+          ))}
+          <button
+            onClick={addNewChat}
+            className="flex items-center px-3 py-2 rounded-t-lg bg-gray-200 hover:bg-gray-300 text-gray-600 transition-colors"
+            title="Add new chat"
+          >
+            <Plus className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
 
       {/* Messages */}
       <div 
         ref={messagesContainerRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto p-4 space-y-2 scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100 hover:scrollbar-thumb-gray-400 relative"
+        className="flex-1 overflow-y-auto p-4 space-y-2 scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100 hover:scrollbar-thumb-gray-400 relative rounded-b-lg"
       >
         {messages.map((msg) => (
           <div
@@ -444,9 +581,6 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
               }`}
             >
               <div className="flex items-start space-x-2">
-                {msg.type === 'bot' && (
-                  <Bot className="w-4 h-4 mt-0.5 text-blue-600 flex-shrink-0" />
-                )}
                 {msg.type === 'user' && (
                   <User className="w-4 h-4 mt-0.5 text-white flex-shrink-0" />
                 )}
@@ -617,10 +751,10 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onClearHistory, onToo
 ChatInterface.propTypes = {
   onSendMessage: PropTypes.func.isRequired,
   isLoading: PropTypes.bool,
-  onClearHistory: PropTypes.func,
   onToolCall: PropTypes.func,
   llmService: PropTypes.object,
-  onCancel: PropTypes.func
+  onCancel: PropTypes.func,
+  onAddBotMessage: PropTypes.func
 };
 
 export default ChatInterface;

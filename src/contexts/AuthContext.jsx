@@ -80,6 +80,9 @@ export const AuthProvider = ({ children }) => {
       setUser(null)
       localStorage.removeItem('user')
       console.log('User signed out')
+      
+      // Redirect to landing page after sign out
+      window.location.href = '/'
     } catch (err) {
       console.error('Error signing out:', err)
       setError('Failed to sign out')
