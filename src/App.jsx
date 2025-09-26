@@ -1,11 +1,24 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react'
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from 'react-router-dom'
 import { Upload, FileSpreadsheet, Download, Plus, Minus, Calendar, ArrowLeft, Calculator, Network } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import ReactSpreadsheet from './UniverSpreadsheet'
 import ChatInterface from './components/ChatInterface'
 import { LLMService } from './services/llmService'
 import { DependencyAnalyzer } from './services/indexService'
+
+// Helper function to parse node keys (from indexService.js)
+function parseKey(k) {
+  const idx = k.indexOf("!");
+  return { sheet: k.slice(0, idx), addr: k.slice(idx + 1) };
+}
+
+// Helper function to check if user is a test user
+function isTestUser(user) {
+  if (!user || !user.email) return false;
+  const demoUser = import.meta.env.VITE_DEMO_USER;
+  return demoUser && user.email === demoUser;
+}
 import { AuthProvider } from './contexts/AuthContext.jsx'
 import { useAuth } from './hooks/useAuth'
 import LoginPage from './components/LoginPage'
@@ -19,7 +32,7 @@ function MainApp() {
 
   if (loading) {
     return (
-      <div className="h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
+      <div className="h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto mb-4"></div>
           <p className="text-gray-600">Loading...</p>
@@ -31,7 +44,7 @@ function MainApp() {
   return (
     <Router>
       <Routes>
-        <Route path="/" element={user ? <Navigate to="/app" replace /> : <LandingPage />} />
+        <Route path="/" element={<LandingPage />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/terms" element={<TermsOfService />} />
         <Route path="/privacy" element={<PrivacyPolicy />} />
@@ -47,6 +60,7 @@ function MainApp() {
 
 function ExcelApp() {
   const { user } = useAuth()
+  const navigate = useNavigate()
   const [excelData, setExcelData] = useState(null)
   const [fileName, setFileName] = useState('')
   const [isDragOver, setIsDragOver] = useState(false)
@@ -54,17 +68,22 @@ function ExcelApp() {
   const [spreadsheetData, setSpreadsheetData] = useState([])
   const [formulaDisplayMode, setFormulaDisplayMode] = useState(0) // 0: normal, 1: highlight formulas, 2: show all formulas
   const [selectedCells, setSelectedCells] = useState([]) // Array of selected cell coordinates
-  const [highlightedBlock, setHighlightedBlock] = useState(null)
   const [isChatLoading, setIsChatLoading] = useState(false)
   const [decimalButtonClicked, setDecimalButtonClicked] = useState(false)
   const [averageDecimals, setAverageDecimals] = useState(0)
   const [dependencyFrames, setDependencyFrames] = useState(null)
   const toolCallHandlerRef = useRef(null)
   const llmServiceRef = useRef(null)
+  const addBotMessageRef = useRef(null)
   
   // Handle tool call registration from ChatInterface
   const handleToolCallRegistration = useCallback((handler) => {
     toolCallHandlerRef.current = handler;
+  }, [])
+
+  // Handle bot message registration from ChatInterface
+  const handleBotMessageRegistration = useCallback((handler) => {
+    addBotMessageRef.current = handler;
   }, [])
 
   const handleFile = useCallback((file) => {
@@ -539,6 +558,33 @@ function ExcelApp() {
     reader.readAsArrayBuffer(file)
   }, [])
 
+  // Auto-upload Map2.xlsx for test users
+  useEffect(() => {
+    const autoUploadForTestUser = async () => {
+      if (isTestUser(user) && !excelData) {
+        try {
+          // Fetch the Map2.xlsx file from assets
+          const response = await fetch('/Map2.xlsx');
+          if (response.ok) {
+            const blob = await response.blob();
+            const file = new File([blob], 'Map2.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+            
+            // Process the file using the existing handleFile function
+            await handleFile(file);
+            
+            console.log('Auto-uploaded Map2.xlsx for test user');
+          } else {
+            console.warn('Could not fetch Map2.xlsx for auto-upload');
+          }
+        } catch (error) {
+          console.error('Error auto-uploading Map2.xlsx:', error);
+        }
+      }
+    };
+
+    autoUploadForTestUser();
+  }, [user, excelData, handleFile])
+
   const handleDrop = useCallback((e) => {
     e.preventDefault()
     setIsDragOver(false)
@@ -649,10 +695,6 @@ function ExcelApp() {
   }, [])
 
 
-  // Handle block highlighting for indexing
-  const handleHighlightBlock = useCallback((blockRange) => {
-    setHighlightedBlock(blockRange)
-  }, [])
 
   // Reset decimal button state when selection changes
   useEffect(() => {
@@ -786,6 +828,70 @@ function ExcelApp() {
     return colors
   }, [])
 
+  // Generate AI bot message with indexing results
+  const generateIndexingResultsMessage = useCallback((result) => {
+    const totalLayers = result.layers.length
+    const totalCells = result.layers.reduce((sum, layer) => sum + layer.length, 0)
+    const formulaCells = result.layers.flat().filter(nodeKey => {
+      const meta = result.graph.nodeMeta?.get(nodeKey)
+      return meta && meta.formula
+    }).length
+    
+    let message = `📊 **Dependency Analysis Complete!**\n\n`
+    message += `🔍 **Analysis Summary:**\n`
+    message += `• **${totalLayers}** dependency layers identified\n`
+    message += `• **${totalCells}** total cells analyzed\n`
+    message += `• **${formulaCells}** formula cells found\n\n`
+    
+    message += `📋 **Layer Breakdown:**\n`
+    result.layers.forEach((layer, index) => {
+      const layerCells = layer.length
+      const layerFormulas = layer.filter(nodeKey => {
+        const meta = result.graph.nodeMeta?.get(nodeKey)
+        return meta && meta.formula
+      }).length
+      
+      message += `**Layer ${index}:** ${layerCells} cells (${layerFormulas} formulas)\n`
+      
+      // Show some example cells from this layer
+      const exampleCells = layer.slice(0, 5).map(nodeKey => {
+        const { addr } = parseKey(nodeKey)
+        return addr
+      }).join(', ')
+      
+      if (layer.length > 5) {
+        message += `  └─ Examples: ${exampleCells}... (+${layer.length - 5} more)\n`
+      } else {
+        message += `  └─ Cells: ${exampleCells}\n`
+      }
+    })
+    
+    message += `\n🎯 **Key Insights:**\n`
+    if (totalLayers > 1) {
+      message += `• Your spreadsheet has a ${totalLayers}-layer dependency structure\n`
+      message += `• Layer 0 contains the final outputs/results\n`
+      message += `• Higher layers contain the input data and intermediate calculations\n`
+    } else {
+      message += `• All formulas are at the same dependency level\n`
+    }
+    
+    if (formulaCells > 0) {
+      message += `• ${formulaCells} cells contain formulas that create dependencies\n`
+    }
+    
+    // Add frame information
+    const totalFrames = result.frames.reduce((sum, frame) => sum + frame.horizontal.length + frame.vertical.length, 0)
+    if (totalFrames > 0) {
+      message += `\n🔗 **Contiguous Formula Groups:**\n`
+      message += `• ${totalFrames} contiguous formula ranges identified\n`
+      message += `• These represent areas where similar formulas are replicated\n`
+    }
+    
+    message += `\n💡 **Visual Highlighting:** The spreadsheet is now color-coded to show the dependency layers. Green areas are inputs, red areas are outputs, with gradients showing the flow of dependencies.`
+    
+    return message
+  }, [])
+
   // Handle dependency analysis with visual highlighting (toggle functionality)
   const handleDependencyAnalysis = useCallback(() => {
     // If already showing dependency frames, clear them
@@ -803,8 +909,6 @@ function ExcelApp() {
       // Use the proper DependencyAnalyzer from indexService
       const analyzer = new DependencyAnalyzer()
       const result = analyzer.analyzeSpreadsheetData(spreadsheetData)
-      
-      // Store the analysis results (no longer needed as state)
       
       // Calculate max depth from outputs to inputs (output-centric layering)
       const maxDepth = Math.max(0, result.layers.length - 1)
@@ -847,13 +951,19 @@ function ExcelApp() {
       
       setDependencyFrames(frames)
       
-      // Dependency analysis complete
+      // Generate and send AI bot message with indexing results
+      const indexingMessage = generateIndexingResultsMessage(result)
+      
+      // Add the message to chat interface directly
+      if (addBotMessageRef.current) {
+        addBotMessageRef.current(indexingMessage)
+      }
       
     } catch (error) {
       console.error('Dependency analysis error:', error)
       alert(`Analysis failed: ${error.message}`)
     }
-  }, [spreadsheetData, dependencyFrames, generateGreenToRedColors])
+  }, [spreadsheetData, dependencyFrames, generateGreenToRedColors, generateIndexingResultsMessage])
 
 
   // Format selected cells as dates
@@ -945,28 +1055,36 @@ function ExcelApp() {
   }, [spreadsheetData])
 
   return (
-    <div className="h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex flex-col overflow-hidden">
+    <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">
       {/* Header */}
       <div className="bg-white border-b border-gray-200 px-6 py-4 flex-shrink-0">
         <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-3">
-            <div className="w-8 h-8 bg-gradient-to-br from-yellow-400 to-orange-500 rounded-full flex items-center justify-center">
-              <div className="relative w-5 h-5">
-                {/* 4-point star with central square and triangular points */}
-                {/* Central square */}
-                <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-2 h-2 bg-white"></div>
-                {/* Top point */}
-                <div className="absolute top-0 left-1/2 transform -translate-x-1/2 w-0 h-0 border-l-[3px] border-r-[3px] border-b-[6px] border-l-transparent border-r-transparent border-b-white"></div>
-                {/* Bottom point */}
-                <div className="absolute bottom-0 left-1/2 transform -translate-x-1/2 w-0 h-0 border-l-[3px] border-r-[3px] border-t-[6px] border-l-transparent border-r-transparent border-t-white"></div>
-                {/* Left point */}
-                <div className="absolute top-1/2 left-0 transform -translate-y-1/2 w-0 h-0 border-t-[3px] border-b-[3px] border-r-[6px] border-t-transparent border-b-transparent border-r-white"></div>
-                {/* Right point */}
-                <div className="absolute top-1/2 right-0 transform -translate-y-1/2 w-0 h-0 border-t-[3px] border-b-[3px] border-l-[6px] border-t-transparent border-b-transparent border-l-white"></div>
-              </div>
+          <button 
+            onClick={() => navigate('/')}
+            className="flex items-center space-x-3 hover:opacity-80 transition-opacity cursor-pointer"
+          >
+            <div className="w-8 h-8 flex items-center justify-center">
+              <svg fill="#000000" height="32px" width="32px" viewBox="0 0 470 470" xmlns="http://www.w3.org/2000/svg">
+                <path d="M464.37,227.737l-137.711-35.46l55.747-94.413c1.74-2.946,1.265-6.697-1.155-9.117c-2.42-2.42-6.169-2.894-9.117-1.154
+                  l-94.413,55.747L242.263,5.63C241.41,2.316,238.422,0,235,0s-6.41,2.316-7.263,5.63l-35.46,137.711L97.865,87.593
+                  c-2.947-1.742-6.697-1.267-9.117,1.154c-2.419,2.42-2.895,6.171-1.155,9.117l55.747,94.413L5.63,227.737
+                  C2.316,228.59,0,231.578,0,235s2.316,6.41,5.63,7.263l137.711,35.46l-55.747,94.413c-1.74,2.946-1.265,6.697,1.155,9.117
+                  c1.445,1.445,3.365,2.196,5.306,2.196c1.308,0,2.625-0.342,3.811-1.042l94.413-55.747l35.46,137.71
+                  c0.854,3.313,3.841,5.63,7.263,5.63s6.41-2.316,7.263-5.63l35.46-137.711l94.413,55.748c1.187,0.701,2.503,1.042,3.811,1.042
+                  c1.94,0,3.86-0.751,5.306-2.196c2.419-2.42,2.895-6.171,1.155-9.117l-55.747-94.413l137.71-35.46
+                  c3.314-0.853,5.63-3.841,5.63-7.263S467.684,228.59,464.37,227.737z M287.743,287.744l23.796-6.128l43.142,73.065l-73.065-43.143
+                  L287.743,287.744z M313.44,265.638c-0.035,0.009-0.07,0.019-0.106,0.027l-29.473,7.59l-22.344-22.345
+                  c-2.929-2.928-7.678-2.928-10.606,0c-2.929,2.93-2.929,7.678,0,10.607l22.344,22.344l-7.59,29.478
+                  c-0.008,0.033-0.018,0.065-0.025,0.099L235,432.423l-30.644-119.01c-0.004-0.016-7.61-29.552-7.61-29.552l87.115-87.116
+                  l29.302,7.546c0.047,0.012,119.26,30.709,119.26,30.709L313.44,265.638z M287.743,182.256l-6.127-23.795l73.065-43.143
+                  l-43.142,73.064L287.743,182.256z M265.644,156.587c0.004,0.016,7.61,29.552,7.61,29.552L235,224.393l-38.254-38.254l7.59-29.478
+                  c0.008-0.033,0.018-0.065,0.025-0.099L235,37.577L265.644,156.587z M182.257,182.256l-23.796,6.128l-43.142-73.065l73.065,43.143
+                  L182.257,182.256z M186.139,196.745L224.393,235l-38.254,38.255L37.577,235L186.139,196.745z M182.257,287.744l6.127,23.795
+                  l-73.065,43.143l43.142-73.064L182.257,287.744z"/>
+              </svg>
             </div>
             <h1 className="text-xl font-bold text-gray-800">Zenith</h1>
-          </div>
+          </button>
           <UserProfile />
         </div>
       </div>
@@ -1140,7 +1258,6 @@ function ExcelApp() {
                     formulaDisplayMode={formulaDisplayMode}
                     selectedCells={selectedCells}
                     onSelectedCellsChange={setSelectedCells}
-                    highlightedBlock={highlightedBlock}
                     dependencyFrames={dependencyFrames}
                   />
                 ) : (
@@ -1186,6 +1303,7 @@ function ExcelApp() {
               isLoading={isChatLoading}
               onClearHistory={handleClearHistory}
               onToolCall={handleToolCallRegistration}
+              onAddBotMessage={handleBotMessageRegistration}
               llmService={llmServiceRef.current}
               onCancel={handleCancel}
             />

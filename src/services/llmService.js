@@ -93,6 +93,8 @@ class TokenCache {
     const keyHash = this.hashApiKey(apiKey);
     const current = this.getTokenUsage(apiKey);
     
+    console.log(`Before adding tokens: ${current.totalTokens}, adding: ${tokens}`);
+    
     this.cache[keyHash] = {
       totalTokens: current.totalTokens + tokens,
       lastUsed: new Date().toISOString()
@@ -101,6 +103,7 @@ class TokenCache {
     this.saveCache();
     
     console.log(`Added ${tokens} tokens for API key. Total: ${this.cache[keyHash].totalTokens}/${this.quotaLimit}`);
+    console.log('Cache after update:', this.cache);
   }
 
   /**
@@ -116,13 +119,15 @@ class TokenCache {
    */
   getQuotaStatus(apiKey) {
     const usage = this.getTokenUsage(apiKey);
-    return {
+    const quotaStatus = {
       used: usage.totalTokens,
       limit: this.quotaLimit,
       remaining: Math.max(0, this.quotaLimit - usage.totalTokens),
       hasReachedQuota: usage.totalTokens >= this.quotaLimit,
       lastUsed: usage.lastUsed
     };
+    console.log('getQuotaStatus called:', { apiKey: apiKey.substring(0, 10) + '...', usage, quotaStatus });
+    return quotaStatus;
   }
 
   /**
