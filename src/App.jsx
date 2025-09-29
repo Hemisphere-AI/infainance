@@ -5,13 +5,94 @@ import * as XLSX from 'xlsx'
 import ReactSpreadsheet from './UniverSpreadsheet'
 import ChatInterface from './components/ChatInterface'
 import { LLMService } from './services/llmService'
-import { DependencyAnalyzer } from './services/indexService'
+import { DependencyAnalyzer, TextLabelIndexer } from './services/indexService'
 
 // Helper function to parse node keys (from indexService.js)
 function parseKey(k) {
   const idx = k.indexOf("!");
   return { sheet: k.slice(0, idx), addr: k.slice(idx + 1) };
 }
+
+// Helper functions for A1 to RC conversion
+function a1ToRC(a1) {
+  const clean = a1.replace(/\$/g, '');
+  const m = clean.match(/^([A-Z]{1,3})(\d+)$/);
+  if (!m) throw new Error(`Bad A1: ${a1}`);
+  const [, col, rowStr] = m;
+  return { r: parseInt(rowStr, 10), c: colToNum(col) };
+}
+
+function colToNum(col) {
+  let n = 0;
+  for (let i = 0; i < col.length; i++) {
+    n = n * 26 + (col.charCodeAt(i) - 64); // A=1 ... Z=26
+  }
+  return n;
+}
+
+function numToCol(n) {
+  let s = "";
+  while (n > 0) {
+    const r = (n - 1) % 26;
+    s = String.fromCharCode(65 + r) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return s;
+}
+
+function rcToA1(r, c) {
+  return `${numToCol(c)}${r}`;
+}
+
+// Helper function to create compact ranges for a list of cells
+function createCompactRangesForCells(cells) {
+  if (cells.length === 0) return [];
+  
+  // Convert to RC coordinates and sort
+  const cellCoords = cells.map(addr => a1ToRC(addr)).sort((a, b) => a.r - b.r || a.c - b.c);
+  
+  // Group by row first
+  const byRow = new Map();
+  cellCoords.forEach(coord => {
+    if (!byRow.has(coord.r)) byRow.set(coord.r, []);
+    byRow.get(coord.r).push(coord.c);
+  });
+  
+  const ranges = [];
+  
+  // Process each row
+  for (const [row, cols] of byRow.entries()) {
+    cols.sort((a, b) => a - b);
+    
+    // Create ranges within this row
+    let start = cols[0];
+    let end = cols[0];
+    
+    for (let i = 1; i < cols.length; i++) {
+      if (cols[i] === end + 1) {
+        end = cols[i];
+      } else {
+        // End current range and start new one
+        if (start === end) {
+          ranges.push(rcToA1(row, start));
+        } else {
+          ranges.push(`${rcToA1(row, start)}:${rcToA1(row, end)}`);
+        }
+        start = end = cols[i];
+      }
+    }
+    
+    // Add the last range for this row
+    if (start === end) {
+      ranges.push(rcToA1(row, start));
+    } else {
+      ranges.push(`${rcToA1(row, start)}:${rcToA1(row, end)}`);
+    }
+  }
+  
+  return ranges;
+}
+
 
 // Helper function to check if user is a test user
 function isTestUser(user) {
@@ -104,6 +185,9 @@ function ExcelApp() {
     }
 
     setFileName(file.name)
+    
+    // Reset formula display mode when new file is uploaded
+    setFormulaDisplayMode(0)
     
     const reader = new FileReader()
     reader.onload = (e) => {
@@ -539,12 +623,114 @@ function ExcelApp() {
         }
         // Format examples processed
         
+        // Store all sheets data
+        const allSheetsData = {}
+        workbook.SheetNames.forEach(sheetName => {
+          const sheet = workbook.Sheets[sheetName]
+          const sheetJsonData = XLSX.utils.sheet_to_json(sheet, { 
+            header: 1, 
+            defval: '',
+            raw: true
+          })
+          
+          // Process formatting for this sheet
+          const sheetCellFormats = {}
+          if (sheet['!ref']) {
+            const range = XLSX.utils.decode_range(sheet['!ref'])
+            for (let row = range.s.r; row <= range.e.r; row++) {
+              for (let col = range.s.c; col <= range.e.c; col++) {
+                const cellAddress = XLSX.utils.encode_cell({ r: row, c: col })
+                const cell = sheet[cellAddress]
+                if (cell) {
+                  const formatInfo = {
+                    numberFormat: cell.z || null,
+                    cellType: cell.t || null,
+                    isFormula: !!cell.f,
+                    formula: cell.f || null,
+                    style: cell.s || null,
+                    rawValue: cell.v || null,
+                    displayValue: cell.w || null,
+                    isDate: false,
+                    isCurrency: false,
+                    isPercentage: false,
+                    decimalPlaces: null,
+                    currencySymbol: null
+                  }
+                  
+                  // Analyze number format
+                  if (formatInfo.numberFormat) {
+                    const format = formatInfo.numberFormat.toLowerCase()
+                    if (format.includes('mm') || format.includes('dd') || format.includes('yyyy')) {
+                      formatInfo.isDate = true
+                    }
+                    if (format.includes('$') || format.includes('€') || format.includes('£')) {
+                      formatInfo.isCurrency = true
+                      if (format.includes('$')) formatInfo.currencySymbol = '$'
+                      if (format.includes('€')) formatInfo.currencySymbol = '€'
+                      if (format.includes('£')) formatInfo.currencySymbol = '£'
+                    }
+                    if (format.includes('%')) {
+                      formatInfo.isPercentage = true
+                    }
+                    const decimalMatch = format.match(/\.(\d+)/)
+                    if (decimalMatch) {
+                      formatInfo.decimalPlaces = parseInt(decimalMatch[1])
+                    }
+                  }
+                  
+                  if (!sheetCellFormats[row]) sheetCellFormats[row] = {}
+                  sheetCellFormats[row][col] = formatInfo
+                }
+              }
+            }
+          }
+          
+          // Convert to spreadsheet format with proper formula handling
+          const sheetSpreadsheetFormat = sheetJsonData.map((row, rowIndex) => 
+            row.map((cell, colIndex) => {
+              const formatInfo = sheetCellFormats[rowIndex]?.[colIndex] || {}
+              
+              // For formulas, use the formula string as the value, otherwise use the cell value
+              let cellValue = cell || '';
+              if (formatInfo.isFormula && formatInfo.formula) {
+                cellValue = '=' + formatInfo.formula; // Add = prefix for formulas
+              }
+              
+              return {
+                value: cellValue,
+                className: '',
+                cellType: formatInfo.cellType || 'text',
+                isFormula: formatInfo.isFormula || false,
+                formula: formatInfo.formula || null,
+                rawValue: formatInfo.rawValue !== null ? formatInfo.rawValue : cell,
+                displayValue: formatInfo.displayValue || cell,
+                numberFormat: formatInfo.numberFormat || null,
+                isDate: formatInfo.isDate || false,
+                isCurrency: formatInfo.isCurrency || false,
+                isPercentage: formatInfo.isPercentage || false,
+                decimalPlaces: formatInfo.decimalPlaces || null,
+                currencySymbol: formatInfo.currencySymbol || null,
+                style: formatInfo.style || null
+              }
+            })
+          )
+          
+          allSheetsData[sheetName] = {
+            sheetName: sheetName,
+            data: sheetJsonData,
+            worksheet: sheet,
+            cellFormats: sheetCellFormats,
+            spreadsheetData: sheetSpreadsheetFormat
+          }
+        })
+        
         setExcelData({
           sheetName: firstSheetName,
           data: jsonData,
           allSheets: workbook.SheetNames,
           worksheet: worksheet,
-          cellFormats: cellFormats // Include formatting information
+          cellFormats: cellFormats,
+          allSheetsData: allSheetsData // Store all sheets data
         })
         
         
@@ -617,6 +803,32 @@ function ExcelApp() {
     setSpreadsheetData([])
   }, [])
 
+  // Handle sheet switching
+  const handleSheetChange = useCallback((sheetName) => {
+    if (excelData && excelData.allSheetsData && excelData.allSheetsData[sheetName]) {
+      const sheetData = excelData.allSheetsData[sheetName];
+      
+      // Reset formula display mode when switching sheets
+      setFormulaDisplayMode(0)
+      
+      // Update the current sheet data
+      setExcelData(prev => ({
+        ...prev,
+        sheetName: sheetName,
+        data: sheetData.data,
+        worksheet: sheetData.worksheet,
+        cellFormats: sheetData.cellFormats
+      }));
+      
+      setSpreadsheetData(sheetData.spreadsheetData);
+      
+      // Update LLM service with new sheet data
+      if (llmServiceRef.current) {
+        llmServiceRef.current.updateSpreadsheetData(sheetData.spreadsheetData);
+      }
+    }
+  }, [excelData])
+
 
 
 
@@ -662,20 +874,24 @@ function ExcelApp() {
 
   // Handle chat messages
   const handleChatMessage = useCallback(async (message) => {
-    if (!llmServiceRef.current) {
-      return "Please upload a spreadsheet first to start chatting with the AI assistant."
-    }
+    // TEMPORARILY DISABLED: LLM tool calling
+    // if (!llmServiceRef.current) {
+    //   return "Please upload a spreadsheet first to start chatting with the AI assistant."
+    // }
 
-    setIsChatLoading(true)
-    try {
-      const response = await llmServiceRef.current.chat(message)
-      return response
-    } catch (error) {
-      console.error('Chat error:', error)
-      return `Error: ${error.message}. Please check your OpenAI API key in the .env file.`
-    } finally {
-      setIsChatLoading(false)
-    }
+    // setIsChatLoading(true)
+    // try {
+    //   const response = await llmServiceRef.current.chat(message)
+    //   return response
+    // } catch (error) {
+    //   console.error('Chat error:', error)
+    //   return `Error: ${error.message}. Please check your OpenAI API key in the .env file.`
+    // } finally {
+    //   setIsChatLoading(false)
+    // }
+
+    // TEMPORARY: Return the input message as output (for testing)
+    return `[TESTING MODE] You said: "${message}"`
   }, [])
 
   // Handle cancellation
@@ -828,6 +1044,172 @@ function ExcelApp() {
     return colors
   }, [])
 
+  // Helper function to detect labels for a group of cells
+  const detectLabelsForGroup = useCallback((cells, result) => {
+    console.log(`detectLabelsForGroup called with ${cells.length} cells:`, cells);
+    if (!result.textIndex) {
+      console.log('No textIndex available');
+      return null;
+    }
+    
+    const textIndexer = new TextLabelIndexer();
+    textIndexer.textCells = result.textIndex.textCells || [];
+    textIndexer.textIndexByRC = new Map();
+    textIndexer.sectionHeaders = result.textIndex.sectionHeaders || [];
+    textIndexer.globalDateHeader = result.textIndex.globalDateHeader;
+    
+    // Build the RC index
+    textIndexer.textCells.forEach(cell => {
+      textIndexer.textIndexByRC.set(`${cell.r},${cell.c}`, cell);
+    });
+    
+    const labels = {
+      section: null,
+      row: null,
+      column: null,
+      dateHeader: null
+    };
+    
+    // Get the range of cells for this group
+    const cellRanges = [];
+    const cellsByRow = {};
+    
+    // Group cells by row
+    cells.forEach(cell => {
+      const rc = a1ToRC(cell);
+      if (!cellsByRow[rc.r]) cellsByRow[rc.r] = [];
+      cellsByRow[rc.r].push(cell);
+    });
+    
+    // Process each row to create ranges
+    Object.keys(cellsByRow).sort((a, b) => parseInt(a) - parseInt(b)).forEach(row => {
+      const rowCells = cellsByRow[row].sort((a, b) => {
+        const aRC = a1ToRC(a);
+        const bRC = a1ToRC(b);
+        return aRC.c - bRC.c;
+      });
+      
+      // Create ranges within this row
+      let currentRange = { start: rowCells[0], end: rowCells[0] };
+      
+      for (let i = 1; i < rowCells.length; i++) {
+        const current = a1ToRC(rowCells[i]);
+        const prev = a1ToRC(rowCells[i-1]);
+        
+        // Check if cells are adjacent (consecutive columns)
+        if (current.c === prev.c + 1) {
+          currentRange.end = rowCells[i];
+        } else {
+          // End current range and start new one
+          if (currentRange.start === currentRange.end) {
+            cellRanges.push(currentRange.start);
+          } else {
+            cellRanges.push(`${currentRange.start}:${currentRange.end}`);
+          }
+          currentRange = { start: rowCells[i], end: rowCells[i] };
+        }
+      }
+      
+      // Add the last range for this row
+      if (currentRange.start === currentRange.end) {
+        cellRanges.push(currentRange.start);
+      } else {
+        cellRanges.push(`${currentRange.start}:${currentRange.end}`);
+      }
+    });
+    
+    // Find the overall range for this group
+    const allRCs = cells.map(cell => a1ToRC(cell));
+    const minRow = Math.min(...allRCs.map(rc => rc.r));
+    const maxRow = Math.max(...allRCs.map(rc => rc.r));
+    const minCol = Math.min(...allRCs.map(rc => rc.c));
+    const maxCol = Math.max(...allRCs.map(rc => rc.c));
+    
+    // Create a mock frame for label detection
+    const mockFrame = {
+      horizontal: [{
+        startRow: minRow,
+        endRow: maxRow,
+        startCol: minCol,
+        endCol: maxCol
+      }],
+      vertical: [{
+        startRow: minRow,
+        endRow: maxRow,
+        startCol: minCol,
+        endCol: maxCol
+      }]
+    };
+    
+    // Find section header
+    labels.section = textIndexer.findSectionForFrame(mockFrame);
+    
+    // Find date header
+    labels.dateHeader = textIndexer.findDateHeaderForFrame(mockFrame);
+    
+    // Find row and column labels
+    const rowLabels = [];
+    const columnLabels = [];
+    
+    // Check each cell for nearby labels
+    cells.forEach(cell => {
+      const rc = a1ToRC(cell);
+      
+      // Find left label
+      const leftLabel = textIndexer.nearestLeftText(rc.r, rc.c, null, result.spreadsheetData);
+      if (leftLabel) {
+        rowLabels.push({
+          ...leftLabel,
+          score: textIndexer.scoreLabel(leftLabel)
+        });
+      }
+      
+      // Find top label
+      const topLabel = textIndexer.nearestUpText(rc.r, rc.c, null, result.spreadsheetData, result.dateFrames);
+      if (topLabel) {
+        columnLabels.push({
+          ...topLabel,
+          score: textIndexer.scoreLabel(topLabel)
+        });
+      }
+    });
+    
+    // Choose best row label
+    if (rowLabels.length > 0) {
+      const bestRowLabel = rowLabels.reduce((best, current) => 
+        current.score > best.score ? current : best
+      );
+      labels.row = {
+        text: bestRowLabel.text,
+        confidence: bestRowLabel.score,
+        source: 'left-scan',
+        at: `${numToCol(bestRowLabel.c)}${bestRowLabel.r}`
+      };
+      console.log(`Found row label: ${bestRowLabel.text}`);
+    } else {
+      console.log('No row labels found');
+    }
+    
+    // Choose best column label
+    if (columnLabels.length > 0) {
+      const bestColumnLabel = columnLabels.reduce((best, current) => 
+        current.score > best.score ? current : best
+      );
+      labels.column = {
+        text: bestColumnLabel.text,
+        confidence: bestColumnLabel.score,
+        source: 'top-scan',
+        at: `${numToCol(bestColumnLabel.c)}${bestColumnLabel.r}`
+      };
+      console.log(`Found column label: ${bestColumnLabel.text}`);
+    } else {
+      console.log('No column labels found');
+    }
+    
+    console.log('Final labels:', labels);
+    return labels;
+  }, []);
+
   // Generate AI bot message with indexing results
   const generateIndexingResultsMessage = useCallback((result) => {
     const totalLayers = result.layers.length
@@ -841,6 +1223,18 @@ function ExcelApp() {
     message += `• **${totalLayers}** dependency layers identified\n`
     message += `• **${totalCells}** total cells analyzed\n`
     message += `• **${formulaCells}** formula cells found\n\n`
+    
+    // Add text/label analysis summary
+    if (result.textIndex) {
+      const textCells = result.textIndex.textCells?.length || 0
+      const sectionHeaders = result.textIndex.sectionHeaders?.length || 0
+      const hasGlobalDateHeader = result.textIndex.globalDateHeader !== null
+      
+      message += `**Text/Label Analysis:**\n`
+      message += `• **${textCells}** text cells indexed\n`
+      message += `• **${sectionHeaders}** section headers detected\n`
+      message += `• **${hasGlobalDateHeader ? 'Yes' : 'No'}** global date header found\n\n`
+    }
     
 
 
@@ -914,7 +1308,10 @@ function ExcelApp() {
       relationshipsByTarget[rel.to].push(rel);
     });
     
-    // Display all relationships
+    // Group cells with identical formulas and dependencies for more concise output
+    const formulaGroups = {};
+    
+    // First, group cells by their formula signature and dependencies
     Object.keys(relationshipsByTarget).forEach(targetCell => {
       const relationships = relationshipsByTarget[targetCell];
       const targetMeta = result.graph.nodeMeta?.get(
@@ -927,11 +1324,183 @@ function ExcelApp() {
       const targetFormula = targetMeta ? targetMeta.formula : 'Data';
       const targetDesc = getFormulaDescription(targetFormula);
       
-      message += `\n**${targetCell}** (${targetDesc}):\n`;
-      message += `  Formula: ${targetFormula}\n`;
+      // Create a signature for this cell's dependency pattern using relative references and formula structure
+      const dependencySignature = relationships.map(rel => {
+        const sourceMeta = result.graph.nodeMeta?.get(
+          Array.from(result.graph.allNodes).find(nodeKey => {
+            const { addr } = parseKey(nodeKey);
+            return addr === rel.from;
+          })
+        );
+        const sourceFormula = sourceMeta ? sourceMeta.formula : 'Data';
+        
+        // Get the relative position of the source cell
+        const targetRC = a1ToRC(targetCell);
+        const sourceRC = a1ToRC(rel.from);
+        const relativeRow = sourceRC.r - targetRC.r;
+        const relativeCol = sourceRC.c - targetRC.c;
+        
+        // Create a normalized formula signature that ignores specific cell references
+        let normalizedFormula = sourceFormula;
+        if (sourceFormula && sourceFormula.startsWith('=')) {
+          // Replace cell references with generic patterns
+          normalizedFormula = sourceFormula
+            .replace(/\$?[A-Z]+\$?\d+/g, 'CELL') // Replace A1, $B$2, etc. with CELL
+            .replace(/\$?[A-Z]+\$?\d+:\$?[A-Z]+\$?\d+/g, 'RANGE'); // Replace A1:B2 with RANGE
+        }
+        
+        return `${relativeRow},${relativeCol}:${normalizedFormula}`;
+      }).sort().join('|');
+      
+      // Also normalize the target formula for better grouping
+      let normalizedTargetFormula = targetFormula;
+      if (targetFormula && targetFormula.startsWith('=')) {
+        normalizedTargetFormula = targetFormula
+          .replace(/\$?[A-Z]+\$?\d+/g, 'CELL') // Replace A1, $B$2, etc. with CELL
+          .replace(/\$?[A-Z]+\$?\d+:\$?[A-Z]+\$?\d+/g, 'RANGE'); // Replace A1:B2 with RANGE
+      }
+      
+      const groupKey = `${normalizedTargetFormula}|${dependencySignature}`;
+      
+      if (!formulaGroups[groupKey]) {
+        formulaGroups[groupKey] = {
+          formula: targetFormula,
+          description: targetDesc,
+          relationships: relationships,
+          cells: []
+        };
+      }
+      
+      formulaGroups[groupKey].cells.push(targetCell);
+    });
+    
+    // Post-process to merge groups with similar patterns
+    const mergedGroups = {};
+    Object.values(formulaGroups).forEach(group => {
+      // Create a more generic signature that ignores specific relative positions
+      const genericSignature = group.relationships.map(rel => {
+        const sourceMeta = result.graph.nodeMeta?.get(
+          Array.from(result.graph.allNodes).find(nodeKey => {
+            const { addr } = parseKey(nodeKey);
+            return addr === rel.from;
+          })
+        );
+        const sourceFormula = sourceMeta ? sourceMeta.formula : 'Data';
+        
+        // Create a normalized formula signature that ignores specific cell references
+        let normalizedFormula = sourceFormula;
+        if (sourceFormula && sourceFormula.startsWith('=')) {
+          normalizedFormula = sourceFormula
+            .replace(/\$?[A-Z]+\$?\d+/g, 'CELL') // Replace A1, $B$2, etc. with CELL
+            .replace(/\$?[A-Z]+\$?\d+:\$?[A-Z]+\$?\d+/g, 'RANGE'); // Replace A1:B2 with RANGE
+        }
+        
+        return normalizedFormula;
+      }).sort().join('|');
+      
+      const mergedKey = `${group.formula.replace(/\$?[A-Z]+\$?\d+/g, 'CELL').replace(/\$?[A-Z]+\$?\d+:\$?[A-Z]+\$?\d+/g, 'RANGE')}|${genericSignature}`;
+      
+      if (!mergedGroups[mergedKey]) {
+        mergedGroups[mergedKey] = {
+          formula: group.formula,
+          description: group.description,
+          relationships: group.relationships,
+          cells: []
+        };
+      }
+      
+      mergedGroups[mergedKey].cells.push(...group.cells);
+    });
+    
+    // Use the merged groups for display
+    const finalGroups = mergedGroups;
+    
+    // Display grouped relationships using the compact frames from the analysis
+    // Instead of using the complex group mapping, use the frames directly
+    const processedGroups = new Set();
+    result.frames.forEach((frame) => {
+      // Get all cells in this frame
+      const frameCells = new Set();
+      
+      // Collect all cells from horizontal ranges
+      frame.horizontal.forEach(range => {
+        if (range.includes(':')) {
+          const [start, end] = range.split(':');
+          const startRC = a1ToRC(start);
+          const endRC = a1ToRC(end);
+          for (let r = startRC.r; r <= endRC.r; r++) {
+            for (let c = startRC.c; c <= endRC.c; c++) {
+              frameCells.add(rcToA1(r, c));
+            }
+          }
+        } else {
+          frameCells.add(range);
+        }
+      });
+      
+      // Collect all cells from vertical ranges
+      frame.vertical.forEach(range => {
+        if (range.includes(':')) {
+          const [start, end] = range.split(':');
+          const startRC = a1ToRC(start);
+          const endRC = a1ToRC(end);
+          for (let r = startRC.r; r <= endRC.r; r++) {
+            for (let c = startRC.c; c <= endRC.c; c++) {
+              frameCells.add(rcToA1(r, c));
+            }
+          }
+        } else {
+          frameCells.add(range);
+        }
+      });
+      
+      // Find the group that matches this frame
+      const matchingGroup = Object.values(finalGroups).find(group => {
+        return group.cells.some(cell => frameCells.has(cell));
+      });
+      
+      if (!matchingGroup) return;
+      
+      // Skip if we've already processed this group
+      const groupKey = matchingGroup.cells.sort().join(',');
+      if (processedGroups.has(groupKey)) return;
+      processedGroups.add(groupKey);
+      
+      // Use the compact ranges from the frame, removing duplicates
+      const allRanges = [...new Set([...frame.horizontal, ...frame.vertical])];
+      const cellDisplay = allRanges.join(', ');
+      
+      // Detect labels for this group
+      console.log(`Detecting labels for group: ${cellDisplay}`);
+      const labels = detectLabelsForGroup(matchingGroup.cells, result);
+      console.log(`Labels found:`, labels);
+      
+      message += `\n**${cellDisplay}** (${matchingGroup.description}):\n`;
+      
+      // Add label information if available
+      if (labels) {
+        if (labels.section) {
+          message += `  📂 Section: "${labels.section.text}" (${(labels.section.confidence * 100).toFixed(0)}%)\n`;
+        }
+        if (labels.row) {
+          message += `  📋 Row Label: "${labels.row.text}" (${(labels.row.confidence * 100).toFixed(0)}%)\n`;
+        }
+        if (labels.column) {
+          message += `  📊 Column Label: "${labels.column.text}" (${(labels.column.confidence * 100).toFixed(0)}%)\n`;
+        }
+        if (labels.dateHeader) {
+          message += `  📅 Date Header: ${labels.dateHeader.range} (${(labels.dateHeader.confidence * 100).toFixed(0)}%)\n`;
+        }
+      } else {
+        console.log(`No labels found for group: ${cellDisplay}`);
+      }
+      
+      message += `  Formula: ${matchingGroup.formula}\n`;
       message += `  Depends on:\n`;
       
-      relationships.forEach(rel => {
+      // Group source dependencies by their relative position and normalized formula pattern
+      const sourceGroups = {};
+      matchingGroup.relationships.forEach(rel => {
         const sourceMeta = result.graph.nodeMeta?.get(
           Array.from(result.graph.allNodes).find(nodeKey => {
             const { addr } = parseKey(nodeKey);
@@ -941,12 +1510,53 @@ function ExcelApp() {
         const sourceFormula = sourceMeta ? sourceMeta.formula : 'Data';
         const sourceDesc = getFormulaDescription(sourceFormula);
         
-        message += `    • ${rel.from} (${sourceDesc}) → ${rel.to}\n`;
-        if (sourceFormula !== 'Data') {
-          message += `      Source formula: ${sourceFormula}\n`;
+        // Create a normalized formula signature for the source (without relative position)
+        let normalizedSourceFormula = sourceFormula;
+        if (sourceFormula && sourceFormula.startsWith('=')) {
+          // More aggressive normalization to group similar patterns
+          normalizedSourceFormula = sourceFormula
+            .replace(/\$?[A-Z]+\$?\d+/g, 'CELL') // Replace A1, $B$2, etc. with CELL
+            .replace(/\$?[A-Z]+\$?\d+:\$?[A-Z]+\$?\d+/g, 'RANGE'); // Replace A1:B2 with RANGE
+        }
+        
+        // For formulas that are just cell references (like =E13, =E14), group them together
+        if (normalizedSourceFormula === '=CELL' && sourceFormula && sourceFormula.startsWith('=')) {
+          normalizedSourceFormula = '=CELL_REF'; // Group all single cell references together
+        }
+        
+        // Debug: log the formula normalization
+        console.log(`Source formula: ${sourceFormula} -> normalized: ${normalizedSourceFormula}`);
+        
+        // Group by formula pattern and description only, not by relative position
+        const sourceKey = `${normalizedSourceFormula}|${sourceDesc}`;
+        if (!sourceGroups[sourceKey]) {
+          sourceGroups[sourceKey] = {
+            formula: sourceFormula,
+            description: sourceDesc,
+            cells: []
+          };
+        }
+        sourceGroups[sourceKey].cells.push(rel.from);
+      });
+      
+      // Display grouped source dependencies with compact ranges
+      Object.values(sourceGroups).forEach(sourceGroup => {
+        // Debug: log the cells being processed
+        console.log(`Source group cells:`, sourceGroup.cells);
+        
+        // Use the compact range algorithm for source cells
+        const compactRanges = createCompactRangesForCells(sourceGroup.cells);
+        console.log(`Compact ranges:`, compactRanges);
+        
+        const sourceCellDisplay = compactRanges.join(', ');
+        
+        message += `    • ${sourceCellDisplay} (${sourceGroup.description})\n`;
+        if (sourceGroup.formula !== 'Data') {
+          message += `      Source formula: ${sourceGroup.formula}\n`;
         }
       });
     });
+
 
     // Add date patterns information
     if (result.dateFrames && result.dateFrames.length > 0) {
@@ -969,10 +1579,10 @@ function ExcelApp() {
     }
     
     return message
-  }, [])
+  }, [detectLabelsForGroup])
 
   // Handle dependency analysis with visual highlighting (toggle functionality)
-  const handleDependencyAnalysis = useCallback(() => {
+  const handleDependencyAnalysis = useCallback(async () => {
     // If already showing dependency frames, clear them
     if (dependencyFrames) {
       setDependencyFrames(null)
@@ -987,7 +1597,7 @@ function ExcelApp() {
     try {
       // Use the proper DependencyAnalyzer from indexService
       const analyzer = new DependencyAnalyzer()
-      const result = analyzer.analyzeSpreadsheetData(spreadsheetData)
+      const result = analyzer.analyzeSpreadsheetData(spreadsheetData, excelData?.allSheetsData || {})
       
       // Calculate max depth from outputs to inputs (output-centric layering)
       const maxDepth = Math.max(0, result.layers.length - 1)
@@ -1032,10 +1642,36 @@ function ExcelApp() {
       const allFrames = [...frames, ...(result.dateFrames || [])];
       setDependencyFrames(allFrames)
       
-      // Generate and send AI bot message with indexing results
+      // Generate dependency analysis message
       const indexingMessage = generateIndexingResultsMessage(result)
       
-      // Add the message to chat interface directly
+      // TEMPORARILY DISABLED: Process the analysis through LLM with dependency analyzer prompt
+      // if (llmServiceRef.current) {
+      //   setIsChatLoading(true)
+      //   try {
+      //     const response = await llmServiceRef.current.dependencyAnalysisChat(indexingMessage)
+      //     
+      //     // Add the LLM response to chat interface
+      //     if (addBotMessageRef.current) {
+      //       addBotMessageRef.current(response)
+      //     }
+      //   } catch (error) {
+      //     console.error('Dependency analysis LLM error:', error)
+      //     // Fallback to showing the raw analysis message
+      //     if (addBotMessageRef.current) {
+      //       addBotMessageRef.current(indexingMessage)
+      //     }
+      //   } finally {
+      //     setIsChatLoading(false)
+      //   }
+      // } else {
+      //   // Fallback: Add the raw analysis message if no LLM service
+      //   if (addBotMessageRef.current) {
+      //     addBotMessageRef.current(indexingMessage)
+      //   }
+      // }
+
+      // TEMPORARY: Show the input message as output (for testing)
       if (addBotMessageRef.current) {
         addBotMessageRef.current(indexingMessage)
       }
@@ -1044,7 +1680,7 @@ function ExcelApp() {
       console.error('Dependency analysis error:', error)
       alert(`Analysis failed: ${error.message}`)
     }
-  }, [spreadsheetData, dependencyFrames, generateGreenToRedColors, generateIndexingResultsMessage])
+  }, [spreadsheetData, dependencyFrames, generateGreenToRedColors, generateIndexingResultsMessage, excelData?.allSheetsData])
 
 
   // Format selected cells as dates
@@ -1328,6 +1964,8 @@ function ExcelApp() {
                 {spreadsheetData.length > 0 ? (
                   <ReactSpreadsheet 
                     data={spreadsheetData}
+                    allSheetsData={excelData?.allSheetsData || {}}
+                    currentSheetName={excelData?.sheetName || 'Sheet1'}
                     onDataChange={handleSpreadsheetChange}
                     formulaDisplayMode={formulaDisplayMode}
                     selectedCells={selectedCells}
@@ -1344,24 +1982,26 @@ function ExcelApp() {
               </div>
             </div>
 
-            {/* Sheet Navigation */}
+            {/* Sheet Tabs */}
             {excelData.allSheets.length > 1 && (
-              <div className="mt-4 bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-                <h4 className="text-sm font-medium text-gray-700 mb-3">
-                  Available Sheets:
-                </h4>
-                <div className="flex flex-wrap gap-2">
+              <div className="bg-gray-50 px-4 py-0 -mb-px">
+                <div className="flex items-center space-x-0.5">
                   {excelData.allSheets.map((sheet, index) => (
-                    <span
+                    <div
                       key={index}
-                      className={`px-3 py-1 rounded-full text-xs font-medium ${
+                      className={`flex items-center space-x-2 px-3 py-2 rounded-b-lg transition-colors ${
                         sheet === excelData.sheetName
-                          ? 'bg-primary-100 text-primary-800'
-                          : 'bg-gray-100 text-gray-600'
+                          ? 'bg-white text-gray-800'
+                          : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
                       }`}
                     >
-                      {sheet}
-                    </span>
+                      <button
+                        onClick={() => handleSheetChange(sheet)}
+                        className="text-sm font-medium"
+                      >
+                        {sheet}
+                      </button>
+                    </div>
                   ))}
                 </div>
               </div>

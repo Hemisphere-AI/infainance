@@ -33,7 +33,7 @@ export const tools = [
         properties: {
           label: { 
             type: "string", 
-            description: "The label to search for, e.g. 'GP Margin', 'Revenue', 'Total'" 
+            description: "The label to search for, e.g. 'Category', 'Revenue', 'Total'" 
           },
           search_strategy: {
             type: "string",
@@ -42,38 +42,6 @@ export const tools = [
           }
         },
         required: ["label"]
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
-      name: "find_subframe",
-      description: "Find labels and create a sub-frame by: (1) fuzzy matching (>=0.80) the metric label and the entity axis label, (2) locating their likely header/entity positions, (3) EXPANDING the view up/left to headers and right/down across values, and (4) returning a TRACE of the steps (find_value lines, getting A1:Ax, establish sub_frame, subframe found) plus the winning cell address for follow-up read_cell.",
-      parameters: {
-        type: "object",
-        properties: {
-          label1: { 
-            type: "string", 
-            description: "First label to find (e.g., 'Agents', 'Revenue', 'Profit')" 
-          },
-          label2: { 
-            type: "string", 
-            description: "Second label to find (e.g., 'Client', 'Product', 'Month')" 
-          },
-          context_range: {
-            type: "number",
-            default: 2,
-            description: "Number of cells to look back from sub-frame origin for context/titles (default: 2)"
-          },
-          value_type: {
-            type: "string",
-            enum: ["number", "text", "date", "any"],
-            default: "number",
-            description: "Expected value type for comparison (default: 'number')"
-          }
-        },
-        required: ["label1", "label2"]
       }
     }
   },
@@ -158,34 +126,6 @@ export const tools = [
         required: ["address", "newValue"]
       }
     }
-  },
-  {
-    type: "function",
-    function: {
-      name: "recalc",
-      description: "Trigger formula evaluation and dependency-aware recalculation.",
-      parameters: { 
-        type: "object", 
-        properties: {}, 
-        additionalProperties: false 
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
-      name: "read_sheet",
-      description: "Read a small view of the sheet or a named output. Prefer narrow windows max 20 by 20 cells",
-      parameters: {
-        type: "object",
-        properties: {
-          range: { 
-            type: "string", 
-            description: "e.g. 'A1:D20'. If omitted, returns a compact summary." 
-          }
-        }
-      }
-    }
   }
 ];
 
@@ -207,4 +147,31 @@ The spreadsheet data is always organized in a 2D grid:
 4. **CONCLUDE**: Call the 'conclude' tool with your final answer.
 
 
+`;
+
+// System prompt for Dependency Analyzer
+export const DEPENDENCY_ANALYZER_PROMPT = `You are a spreadsheet structure understanding analyzer specialized in identifying the general structure of spreadsheet.
+
+## YOUR TASK
+You have been provided with a dependency analysis framework that shows blocks of spreadsheet coorinates that  :
+- Share the formula in close proximity
+- Share the same reference layer
+- Only contain values of any format or dats
+
+## YOUR GOAL
+We need to label each block with the text. If you see each of these blocks what cell or cell range do you want to check to add context to each of the blocks? 
+So for example: a calculation is happening in B2:D4, then you want to see if there is text data in A2:A4 and B1:B4 (as an example)
+
+## OUTPUT FORMAT
+Give your anser as list for each of the blocks like this:
+- item coordiates (B2:D4) - cordinates to check A2:A4 - what (i.e. categories) 
+
+## AVAILABLE TOOLS
+You have access to all spreadsheet tools:
+- read_cell: Read individual cells
+- read_sheet: Read cell ranges
+- find: Find cells by labels
+- find_label_value: Find labels and their values
+
+**CRITICAL: You MUST use the 'conclude' tool to provide your final labeled analysis.**
 `;

@@ -151,7 +151,7 @@ function* iterCellRefs(formula) {
 // Graph builder for UniverSpreadsheet data
 // -----------------------------
 
-function buildDependencyGraphFromSpreadsheetData(spreadsheetData) {
+function buildDependencyGraphFromSpreadsheetData(spreadsheetData, allSheetsData = {}) {
   const dependents = new Map();
   const precedents = new Map();
   const allNodes = new Set();
@@ -159,6 +159,19 @@ function buildDependencyGraphFromSpreadsheetData(spreadsheetData) {
   const referencedNodes = new Set(); // Track cells that are referenced by formulas
   const dateNodes = new Set(); // Track cells that contain dates
   const nodeMeta = new Map(); // nodeK -> { r, c, formula, refOffsets: [{dr,dc}], adjOffset: {dr,dc}|null, isDate: boolean }
+  
+  // Helper function to get cell data from any sheet
+  const getCellFromSheet = (sheetName, rowIndex, colIndex) => {
+    if (sheetName === "Sheet1") {
+      return spreadsheetData[rowIndex]?.[colIndex];
+    } else {
+      const sheetData = allSheetsData[sheetName];
+      if (sheetData && sheetData.spreadsheetData) {
+        return sheetData.spreadsheetData[rowIndex]?.[colIndex];
+      }
+    }
+    return null;
+  };
 
   // Helper function to detect if a cell is formatted as a date
   const isDateFormatted = (cell) => {
@@ -407,6 +420,12 @@ function buildDependencyGraphFromSpreadsheetData(spreadsheetData) {
             addEdge(srcK, nodeK, dependents, precedents);
             const rc = a1ToRC(srcAddr);
             refOffsets.push({ dr: rc.r - (rowIndex + 1), dc: rc.c - (colIndex + 1) });
+            
+            // Use getCellFromSheet to validate the referenced cell exists
+            const referencedCell = getCellFromSheet(startSheet, rc.r - 1, rc.c - 1);
+            if (referencedCell) {
+              // Cell exists and can be referenced
+            }
           }
         }
 
@@ -564,58 +583,104 @@ function forwardTopoLayers(graph) {
 // Frames (merge contiguous)
 // -----------------------------
 
-function contiguousRangesSameRow(addrs) {
-  const byRow = new Map();
-  for (const a of addrs) {
-    const { r, c } = a1ToRC(a);
-    const arr = byRow.get(r) || [];
-    arr.push(c);
-    byRow.set(r, arr);
-  }
-  const frames = [];
-  for (const [r, cols] of byRow.entries()) {
-    cols.sort((a, b) => a - b);
-    let start = cols[0];
-    let prev = start;
-    for (let i = 1; i < cols.length; i++) {
-      const c = cols[i];
-      if (c === prev + 1) {
-        prev = c;
-      } else {
-        frames.push(start === prev ? rcToA1(r, start) : `${rcToA1(r, start)}:${rcToA1(r, prev)}`);
-        start = prev = c;
-      }
-    }
-    frames.push(start === prev ? rcToA1(r, start) : `${rcToA1(r, start)}:${rcToA1(r, prev)}`);
-  }
-  return frames;
-}
 
-function contiguousRangesSameCol(addrs) {
-  const byCol = new Map();
-  for (const a of addrs) {
-    const { r, c } = a1ToRC(a);
-    const arr = byCol.get(c) || [];
-    arr.push(r);
-    byCol.set(c, arr);
-  }
-  const frames = [];
-  for (const [c, rows] of byCol.entries()) {
-    rows.sort((a, b) => a - b);
-    let start = rows[0];
-    let prev = start;
-    for (let i = 1; i < rows.length; i++) {
-      const r = rows[i];
-      if (r === prev + 1) {
-        prev = r;
-      } else {
-        frames.push(start === prev ? rcToA1(start, c) : `${rcToA1(start, c)}:${rcToA1(prev, c)}`);
-        start = prev = r;
+function createCompactRanges(addrs) {
+  if (addrs.length === 0) return { horizontal: [], vertical: [] };
+  
+  // Convert to RC coordinates
+  const cells = addrs.map(addr => a1ToRC(addr));
+  
+  // Find bounding box
+  const minRow = Math.min(...cells.map(c => c.r));
+  const maxRow = Math.max(...cells.map(c => c.r));
+  const minCol = Math.min(...cells.map(c => c.c));
+  const maxCol = Math.max(...cells.map(c => c.c));
+  
+  // Create a grid to mark which cells are present
+  const grid = new Map();
+  cells.forEach(cell => {
+    grid.set(`${cell.r},${cell.c}`, true);
+  });
+  
+  // Find rectangular blocks
+  const rectangles = [];
+  const processed = new Set();
+  
+  for (let r = minRow; r <= maxRow; r++) {
+    for (let c = minCol; c <= maxCol; c++) {
+      const key = `${r},${c}`;
+      if (!grid.has(key) || processed.has(key)) continue;
+      
+      // Find the largest rectangle starting from this cell
+      let maxHeight = 0;
+      let maxWidth = 0;
+      let bestRect = null;
+      
+      // Try different rectangle sizes
+      for (let height = 1; height <= maxRow - r + 1; height++) {
+        for (let width = 1; width <= maxCol - c + 1; width++) {
+          let valid = true;
+          for (let dr = 0; dr < height && valid; dr++) {
+            for (let dc = 0; dc < width && valid; dc++) {
+              if (!grid.has(`${r + dr},${c + dc}`)) {
+                valid = false;
+              }
+            }
+          }
+          
+          if (valid && (height * width > maxHeight * maxWidth || 
+                      (height * width === maxHeight * maxWidth && height > maxHeight))) {
+            maxHeight = height;
+            maxWidth = width;
+            bestRect = { r, c, height, width };
+          }
+        }
+      }
+      
+      if (bestRect && bestRect.height * bestRect.width > 1) {
+        rectangles.push(bestRect);
+        
+        // Mark all cells in this rectangle as processed
+        for (let dr = 0; dr < bestRect.height; dr++) {
+          for (let dc = 0; dc < bestRect.width; dc++) {
+            processed.add(`${bestRect.r + dr},${bestRect.c + dc}`);
+          }
+        }
       }
     }
-    frames.push(start === prev ? rcToA1(start, c) : `${rcToA1(start, c)}:${rcToA1(prev, c)}`);
   }
-  return frames;
+  
+  // Convert rectangles to A1 ranges
+  const horizontal = [];
+  const vertical = [];
+  
+  rectangles.forEach(rect => {
+    const startCell = rcToA1(rect.r, rect.c);
+    const endCell = rcToA1(rect.r + rect.height - 1, rect.c + rect.width - 1);
+    const range = rect.height === 1 && rect.width === 1 ? startCell : `${startCell}:${endCell}`;
+    
+    if (rect.height === 1) {
+      horizontal.push(range);
+    } else if (rect.width === 1) {
+      vertical.push(range);
+    } else {
+      // For multi-dimensional rectangles, add to both
+      horizontal.push(range);
+      vertical.push(range);
+    }
+  });
+  
+  // Add any remaining single cells
+  cells.forEach(cell => {
+    const key = `${cell.r},${cell.c}`;
+    if (!processed.has(key)) {
+      const addr = rcToA1(cell.r, cell.c);
+      horizontal.push(addr);
+      vertical.push(addr);
+    }
+  });
+  
+  return { horizontal, vertical };
 }
 
 function framesForLayers(layers) {
@@ -624,8 +689,7 @@ function framesForLayers(layers) {
     const addrs = layer.map((k) => parseKey(k).addr);
     return {
       layer: idx,
-      horizontal: contiguousRangesSameRow(addrs),
-      vertical: contiguousRangesSameCol(addrs),
+      ...createCompactRanges(addrs),
     };
   });
 }
@@ -665,23 +729,70 @@ function computeReplicatedFormulaGroups(graph) {
     coordToNode.set(`${meta.r},${meta.c}`, k);
   }
 
-  // Connect adjacent replicated formulas with the same canonical signature
+  // Enhanced grouping: connect cells with same signature in rectangular patterns
+  // First, group by signature
+  const signatureGroups = new Map();
   for (const k of graph.formulaNodes) {
     const meta = graph.nodeMeta?.get(k);
-    if (!meta) continue;
-    const neighbors = [
-      [meta.r + 1, meta.c],
-      [meta.r - 1, meta.c],
-      [meta.r, meta.c + 1],
-      [meta.r, meta.c - 1],
-    ];
-    for (const [nr, nc] of neighbors) {
-      const neighbor = coordToNode.get(`${nr},${nc}`);
-      if (!neighbor) continue;
-      const nmeta = graph.nodeMeta?.get(neighbor);
-      if (!nmeta) continue;
-      if (nmeta.signature && meta.signature && nmeta.signature === meta.signature) {
-        union(k, neighbor);
+    if (!meta || !meta.signature) continue;
+    
+    if (!signatureGroups.has(meta.signature)) {
+      signatureGroups.set(meta.signature, []);
+    }
+    signatureGroups.get(meta.signature).push({ node: k, r: meta.r, c: meta.c });
+  }
+
+  // For each signature group, find rectangular patterns
+  for (const [signature, cells] of signatureGroups) {
+    if (cells.length < 2) continue;
+    
+    // Sort cells by row, then column
+    cells.sort((a, b) => a.r - b.r || a.c - b.c);
+    
+    // Group cells into rectangular blocks
+    const blocks = [];
+    const processed = new Set();
+    
+    for (const cell of cells) {
+      if (processed.has(cell.node)) continue;
+      
+      const block = [cell];
+      processed.add(cell.node);
+      
+      // Find all cells that form a rectangle with this cell
+      const queue = [cell];
+      while (queue.length > 0) {
+        const current = queue.shift();
+        
+        // Check all 8 directions (including diagonals) for cells with same signature
+        for (const [dr, dc] of [[-1,-1], [-1,0], [-1,1], [0,-1], [0,1], [1,-1], [1,0], [1,1]]) {
+          const nr = current.r + dr;
+          const nc = current.c + dc;
+          const neighborKey = coordToNode.get(`${nr},${nc}`);
+          
+          if (neighborKey && !processed.has(neighborKey)) {
+            const neighborMeta = graph.nodeMeta?.get(neighborKey);
+            if (neighborMeta && neighborMeta.signature === signature) {
+              const neighborCell = { node: neighborKey, r: nr, c: nc };
+              block.push(neighborCell);
+              queue.push(neighborCell);
+              processed.add(neighborKey);
+            }
+          }
+        }
+      }
+      
+      if (block.length > 1) {
+        blocks.push(block);
+      }
+    }
+    
+    // Connect all cells within each rectangular block
+    for (const block of blocks) {
+      for (let i = 0; i < block.length; i++) {
+        for (let j = i + 1; j < block.length; j++) {
+          union(block[i].node, block[j].node);
+        }
       }
     }
   }
@@ -809,10 +920,16 @@ class DependencyAnalyzer {
     this.precedents = new Map();
     this.allNodes = new Set();
     this.formulaNodes = new Set();
+    this.textIndexer = new TextLabelIndexer();
   }
 
-  analyzeSpreadsheetData(spreadsheetData) {
-    const graph = buildDependencyGraphFromSpreadsheetData(spreadsheetData);
+  analyzeSpreadsheetData(spreadsheetData, allSheetsData = {}) {
+    // Step 1: Build text/label index
+    this.textIndexer.buildTextIndex(spreadsheetData);
+    this.textIndexer.detectSectionHeaders();
+    this.textIndexer.detectGlobalDateHeader();
+    
+    const graph = buildDependencyGraphFromSpreadsheetData(spreadsheetData, allSheetsData);
 
     // Group adjacent replicated formulas so they share the same depth layer
     const groups = computeReplicatedFormulaGroups(graph);
@@ -823,6 +940,15 @@ class DependencyAnalyzer {
     const groupLayers = forwardTopoLayers(reversed);
     const layers = expandGroupLayersToNodes(groupLayers, groups);
     const frames = framesForLayers(layers);
+    
+    // Step 2: Label frames with text/label information
+    const labeledFrames = frames.map(frame => {
+      const labels = this.textIndexer.labelFrame(frame, spreadsheetData, graph.dateFrames);
+      return {
+        ...frame,
+        labels: labels
+      };
+    });
     
     // Add date patterns as special frames with green color
     const dateFrames = [];
@@ -843,9 +969,15 @@ class DependencyAnalyzer {
     
     return {
       layers,
-      frames,
+      frames: labeledFrames,
       dateFrames,
-      graph
+      graph,
+      spreadsheetData,
+      textIndex: {
+        textCells: this.textIndexer.textCells,
+        sectionHeaders: this.textIndexer.sectionHeaders,
+        globalDateHeader: this.textIndexer.globalDateHeader
+      }
     };
   }
 
@@ -882,7 +1014,659 @@ class DependencyAnalyzer {
   }
 }
 
+// Text/Label Indexing System for Dependency Analyzer
+class TextLabelIndexer {
+  constructor() {
+    this.textCells = [];
+    this.textIndexByRC = new Map();
+    this.sectionHeaders = [];
+    this.globalDateHeader = null;
+    this.maxGapCols = 10; // Increased to allow searching up to 10 columns to the left
+    this.maxGapRows = 30; // Increased to allow searching up to 30 rows (G30 to G3)
+    this.whiteRowTolerance = 3;
+  }
+
+  /**
+   * Convert column letter to number (A=1, B=2, etc.)
+   */
+  colToNum(col) {
+    let n = 0;
+    for (let i = 0; i < col.length; i++) {
+      n = n * 26 + (col.charCodeAt(i) - 64); // A=1 ... Z=26
+    }
+    return n;
+  }
+
+  /**
+   * Check if a cell contains text (non-empty, not formula, not date, not number)
+   */
+  isTextCell(cell) {
+    if (!cell) return false;
+    if (cell.value == null) return false;
+    const s = String(cell.value).trim();
+    if (!s) return false;
+    
+    // Exclude formulas
+    if (String(cell.value).startsWith('=')) return false;
+    
+    // Exclude dates
+    if (this.isDateFormatted(cell)) return false;
+    
+    // Exclude obvious numbers/currency
+    if (!isNaN(Number(s.replace(/[.,\s]/g, '')))) return false;
+    
+    // Exclude cells that look like currency values (€30, $50, etc.)
+    if (/^[€$£¥]\d+/.test(s)) return false;
+    
+    // Exclude cells that are just numbers with currency symbols
+    if (/^\d+[€$£¥]/.test(s)) return false;
+    
+    // Exclude currency values with spaces (€ 37,500, $ 100, etc.)
+    if (/^[€$£¥]\s*[\d,]+/.test(s) || /[\d,]+[€$£¥]/.test(s)) return false;
+    
+    return true;
+  }
+
+  /**
+   * Check if a cell is date formatted
+   */
+  isDateFormatted(cell) {
+    if (!cell) return false;
+    const value = cell.value;
+    if (typeof value === 'string') {
+      // Check for common date patterns
+      const datePatterns = [
+        /^\d{1,2}\/\d{1,2}\/\d{4}$/,
+        /^\d{4}-\d{2}-\d{2}$/,
+        /^\d{1,2}-\d{1,2}-\d{4}$/,
+        /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i,
+        /^(januari|februari|maart|april|mei|juni|juli|augustus|september|oktober|november|december)/i
+      ];
+      return datePatterns.some(pattern => pattern.test(value));
+    }
+    return false;
+  }
+
+  /**
+   * Extract style information from cell
+   */
+  getStyleBits(cell) {
+    return {
+      bold: cell.bold || false,
+      fill: cell.fill || null,
+      merged: cell.merged || false,
+      borderInfo: cell.borderInfo || null,
+      font: cell.font || null
+    };
+  }
+
+  /**
+   * Build text index during first pass
+   */
+  buildTextIndex(spreadsheetData) {
+    this.textCells = [];
+    this.textIndexByRC.clear();
+    
+    for (let rowIndex = 0; rowIndex < spreadsheetData.length; rowIndex++) {
+      const row = spreadsheetData[rowIndex];
+      if (!row) continue;
+      
+      for (let colIndex = 0; colIndex < row.length; colIndex++) {
+        const cell = row[colIndex];
+        if (this.isTextCell(cell)) {
+          const textCell = {
+            r: rowIndex + 1,
+            c: colIndex + 1,
+            text: String(cell.value).trim(),
+            rawText: String(cell.value),
+            normalizedText: String(cell.value).toLowerCase().replace(/\s+/g, ' ').trim(),
+            ...this.getStyleBits(cell),
+            isLeftLabel: colIndex <= 2, // Columns A-C
+            isTopLabel: rowIndex <= 2   // Rows 1-3
+          };
+          
+          this.textCells.push(textCell);
+          this.textIndexByRC.set(`${rowIndex + 1},${colIndex + 1}`, textCell);
+        }
+      }
+    }
+    
+    console.log(`Built text index with ${this.textCells.length} text cells`);
+  }
+
+  /**
+   * Find nearest text cell to the left
+   */
+  nearestLeftText(r, cStart, maxGap = null, spreadsheetData = null) {
+    const gap = maxGap || this.maxGapCols;
+    console.log(`Searching for row label to the left of row ${r}, column ${cStart}, max gap: ${gap}`);
+    
+    for (let c = cStart - 1, step = 1; c >= 1 && step <= gap; c--, step++) {
+      console.log(`Checking row ${r}, column ${c}, step ${step}`);
+      
+      // First check the text index
+      const hit = this.textIndexByRC.get(`${r},${c}`);
+      if (hit) {
+        console.log(`Found in text index: ${hit.text}`);
+        // Check if this is a reference cell (starts with =) or blank
+        const cellValue = String(hit.rawText || hit.text || '');
+        if (cellValue.startsWith('=') || cellValue.trim() === '') {
+          console.log(`Skipping reference/blank: ${cellValue}`);
+          // Skip reference cells and blanks, continue searching
+          continue;
+        }
+        
+        // Additional checks for currency values and numbers
+        if (/^[€$£¥]\d+/.test(cellValue) || /^\d+[€$£¥]/.test(cellValue)) {
+          console.log(`Skipping currency: ${cellValue}`);
+          // Skip currency values, continue searching
+          continue;
+        }
+        
+        // Skip if it's just a number
+        if (!isNaN(Number(cellValue.replace(/[.,\s]/g, '')))) {
+          console.log(`Skipping number: ${cellValue}`);
+          continue;
+        }
+        
+        console.log(`Found valid text label: ${cellValue}`);
+        return { ...hit, gap: step, dir: 'left' };
+      }
+      
+      // If not in text index, check the actual spreadsheet data
+      if (spreadsheetData && spreadsheetData[r-1] && spreadsheetData[r-1][c-1]) {
+        const cell = spreadsheetData[r-1][c-1];
+        const cellValue = String(cell.value || '');
+        console.log(`Found in raw data: ${cellValue}`);
+        
+        // Skip if blank or empty
+        if (!cellValue || cellValue.trim() === '') {
+          console.log(`Skipping blank: ${cellValue}`);
+          continue;
+        }
+        
+        // Skip formulas
+        if (cellValue.startsWith('=')) {
+          console.log(`Skipping formula: ${cellValue}`);
+          continue;
+        }
+        
+        // Skip currency values and numbers
+        if (/^[€$£¥]\d+/.test(cellValue) || /^\d+[€$£¥]/.test(cellValue)) {
+          console.log(`Skipping currency: ${cellValue}`);
+          continue;
+        }
+        
+        // Skip currency values with spaces (€ 37,500, $ 100, etc.)
+        if (/^[€$£¥]\s*[\d,]+/.test(cellValue) || /[\d,]+[€$£¥]/.test(cellValue)) {
+          console.log(`Skipping currency with space: ${cellValue}`);
+          continue;
+        }
+        
+        if (!isNaN(Number(cellValue.replace(/[.,\s]/g, '')))) {
+          console.log(`Skipping number: ${cellValue}`);
+          continue;
+        }
+        
+        // This looks like a valid text label
+        console.log(`Found valid text label in raw data: ${cellValue}`);
+        return {
+          r: r,
+          c: c,
+          text: cellValue,
+          rawText: cellValue,
+          gap: step,
+          dir: 'left',
+          bold: cell.bold || false,
+          merged: cell.merged || false
+        };
+      } else {
+        console.log(`No data found at row ${r}, column ${c}`);
+      }
+    }
+    console.log(`No row label found to the left of row ${r}, column ${cStart}`);
+    return null;
+  }
+
+  /**
+   * Find nearest text cell above
+   */
+  nearestUpText(rStart, c, maxGap = null, spreadsheetData = null, dateFrames = null) {
+    const gap = maxGap || this.maxGapRows;
+    console.log(`Searching for column label above row ${rStart}, column ${c}, max gap: ${gap}`);
+    
+    for (let r = rStart - 1, step = 1; r >= 1 && step <= gap; r--, step++) {
+      console.log(`Checking row ${r}, column ${c}, step ${step}`);
+      
+      // First check the text index
+      const hit = this.textIndexByRC.get(`${r},${c}`);
+      if (hit) {
+        console.log(`Found in text index: ${hit.text}`);
+        // Check if this is a reference cell (starts with =) or blank
+        const cellValue = String(hit.rawText || hit.text || '');
+        if (cellValue.startsWith('=') || cellValue.trim() === '') {
+          console.log(`Skipping reference/blank: ${cellValue}`);
+          // Skip reference cells and blanks, continue searching
+          continue;
+        }
+        
+        // Additional checks for currency values and numbers
+        if (/^[€$£¥]\d+/.test(cellValue) || /^\d+[€$£¥]/.test(cellValue)) {
+          console.log(`Skipping currency: ${cellValue}`);
+          // Skip currency values, continue searching
+          continue;
+        }
+        
+        // Skip if it's just a number
+        if (!isNaN(Number(cellValue.replace(/[.,\s]/g, '')))) {
+          console.log(`Skipping number: ${cellValue}`);
+          continue;
+        }
+        
+        console.log(`Found valid text label: ${cellValue}`);
+        return { ...hit, gap: step, dir: 'up' };
+      }
+      
+      // If not in text index, check the actual spreadsheet data
+      if (spreadsheetData && spreadsheetData[r-1] && spreadsheetData[r-1][c-1]) {
+        const cell = spreadsheetData[r-1][c-1];
+        const cellValue = String(cell.value || '');
+        console.log(`Found in raw data: ${cellValue}`);
+        
+        // Skip if blank or empty
+        if (!cellValue || cellValue.trim() === '') {
+          console.log(`Skipping blank: ${cellValue}`);
+          continue;
+        }
+        
+        // Skip formulas
+        if (cellValue.startsWith('=')) {
+          console.log(`Skipping formula: ${cellValue}`);
+          continue;
+        }
+        
+        // Skip currency values and numbers
+        if (/^[€$£¥]\d+/.test(cellValue) || /^\d+[€$£¥]/.test(cellValue)) {
+          console.log(`Skipping currency: ${cellValue}`);
+          continue;
+        }
+        
+        // Skip currency values with spaces (€ 37,500, $ 100, etc.)
+        if (/^[€$£¥]\s*[\d,]+/.test(cellValue) || /[\d,]+[€$£¥]/.test(cellValue)) {
+          console.log(`Skipping currency with space: ${cellValue}`);
+          continue;
+        }
+        
+        if (!isNaN(Number(cellValue.replace(/[.,\s]/g, '')))) {
+          console.log(`Skipping number: ${cellValue}`);
+          continue;
+        }
+        
+        // Check if this cell is in a date range (date frames)
+        let isInDateRange = false;
+        if (dateFrames) {
+          for (const dateFrame of dateFrames) {
+            if (dateFrame.range) {
+              // Parse the date range (e.g., "G3:J3")
+              const rangeMatch = dateFrame.range.match(/([A-Z]+)(\d+):([A-Z]+)(\d+)/);
+              if (rangeMatch) {
+                const [, startCol, startRow, endCol, endRow] = rangeMatch;
+                const startColNum = this.colToNum(startCol);
+                const endColNum = this.colToNum(endCol);
+                const startRowNum = parseInt(startRow);
+                const endRowNum = parseInt(endRow);
+                
+                if (r >= startRowNum && r <= endRowNum && c >= startColNum && c <= endColNum) {
+                  console.log(`Cell is in date range: ${dateFrame.range}`);
+                  isInDateRange = true;
+                  break;
+                }
+              }
+            }
+          }
+        }
+        
+        // Accept as valid label if it's text OR if it's in a date range
+        if (isInDateRange || cellValue.trim() !== '') {
+          console.log(`Found valid text label in raw data: ${cellValue}${isInDateRange ? ' (in date range)' : ''}`);
+          return {
+            r: r,
+            c: c,
+            text: cellValue,
+            rawText: cellValue,
+            gap: step,
+            dir: 'up',
+            bold: cell.bold || false,
+            merged: cell.merged || false,
+            isDateRange: isInDateRange
+          };
+        }
+      } else {
+        console.log(`No data found at row ${r}, column ${c}`);
+      }
+    }
+    console.log(`No column label found above row ${rStart}, column ${c}`);
+    return null;
+  }
+
+  /**
+   * Detect section headers by scanning columns A and B
+   */
+  detectSectionHeaders() {
+    this.sectionHeaders = [];
+    
+    // Scan column A (index 0)
+    this.scanColumnForSections(0);
+    
+    // Scan column B (index 1) if it has different content
+    this.scanColumnForSections(1);
+    
+    // Sort by row start
+    this.sectionHeaders.sort((a, b) => a.rStart - b.rStart);
+    
+    console.log(`Detected ${this.sectionHeaders.length} section headers`);
+  }
+
+  /**
+   * Scan a specific column for section headers
+   */
+  scanColumnForSections(colIndex) {
+    let currentSection = null;
+    
+    for (let rowIndex = 0; rowIndex < this.textCells.length; rowIndex++) {
+      const cell = this.textCells.find(tc => tc.r === rowIndex + 1 && tc.c === colIndex + 1);
+      
+      if (cell && this.isSectionHeaderCandidate(cell)) {
+        if (currentSection) {
+          // Close previous section
+          currentSection.rEnd = rowIndex;
+          this.sectionHeaders.push(currentSection);
+        }
+        
+        // Start new section
+        currentSection = {
+          label: cell.text,
+          rStart: rowIndex + 1,
+          rEnd: rowIndex + 1,
+          score: this.scoreSectionHeader(cell),
+          col: colIndex + 1,
+          style: this.getStyleBits(cell)
+        };
+      } else if (currentSection && this.isSubsectionCandidate(cell)) {
+        // Extend current section
+        currentSection.rEnd = rowIndex + 1;
+      }
+    }
+    
+    // Close final section
+    if (currentSection) {
+      this.sectionHeaders.push(currentSection);
+    }
+  }
+
+  /**
+   * Check if a cell is a section header candidate
+   */
+  isSectionHeaderCandidate(cell) {
+    if (!cell) return false;
+    
+    // Must be bold and left-aligned
+    if (!cell.bold) return false;
+    
+    // Must not be a number or date
+    if (!isNaN(Number(cell.text))) return false;
+    if (this.isDateFormatted({ value: cell.text })) return false;
+    
+    // Must be in left columns
+    if (cell.c > 3) return false;
+    
+    return true;
+  }
+
+  /**
+   * Check if a cell is a subsection candidate (indented sublabels)
+   */
+  isSubsectionCandidate(cell) {
+    if (!cell) return false;
+    
+    // Must be text
+    if (!this.isTextCell({ value: cell.text })) return false;
+    
+    // Must be in left columns
+    if (cell.c > 3) return false;
+    
+    return true;
+  }
+
+  /**
+   * Score a section header based on styling and position
+   */
+  scoreSectionHeader(cell) {
+    let score = 0.5; // Base score
+    
+    if (cell.bold) score += 0.2;
+    if (cell.merged) score += 0.1;
+    if (cell.c === 1) score += 0.1; // Column A
+    if (cell.r <= 3) score += 0.1; // Top rows
+    
+    return Math.min(score, 1.0);
+  }
+
+  /**
+   * Detect global date header
+   */
+  detectGlobalDateHeader() {
+    this.globalDateHeader = null;
+    
+    // Look for date patterns in top rows
+    for (let rowIndex = 0; rowIndex < 5; rowIndex++) {
+      const dateCells = [];
+      
+      for (let colIndex = 0; colIndex < 20; colIndex++) { // Check first 20 columns
+        const cell = this.textIndexByRC.get(`${rowIndex + 1},${colIndex + 1}`);
+        if (cell && this.isDateFormatted({ value: cell.text })) {
+          dateCells.push(cell);
+        }
+      }
+      
+      if (dateCells.length >= 3) { // At least 3 date cells in a row
+        this.globalDateHeader = {
+          row: rowIndex + 1,
+          cells: dateCells,
+          range: this.getDateRange(dateCells),
+          confidence: this.scoreDateHeader(dateCells)
+        };
+        break;
+      }
+    }
+    
+    if (this.globalDateHeader) {
+      console.log(`Detected global date header at row ${this.globalDateHeader.row}`);
+    }
+  }
+
+  /**
+   * Get date range from date cells
+   */
+  getDateRange(dateCells) {
+    if (dateCells.length === 0) return null;
+    
+    const cols = dateCells.map(cell => cell.c).sort((a, b) => a - b);
+    const startCol = cols[0];
+    const endCol = cols[cols.length - 1];
+    const row = dateCells[0].r;
+    
+    return `${numToCol(startCol)}${row}:${numToCol(endCol)}${row}`;
+  }
+
+  /**
+   * Score date header confidence
+   */
+  scoreDateHeader(dateCells) {
+    let score = 0.5; // Base score
+    
+    // More cells = higher confidence
+    score += Math.min(dateCells.length * 0.1, 0.3);
+    
+    // Check for bold styling
+    const boldCount = dateCells.filter(cell => cell.bold).length;
+    if (boldCount > 0) score += 0.2;
+    
+    // Check for merged cells
+    const mergedCount = dateCells.filter(cell => cell.merged).length;
+    if (mergedCount > 0) score += 0.1;
+    
+    return Math.min(score, 1.0);
+  }
+
+  /**
+   * Score a label based on distance, styling, and position
+   */
+  scoreLabel(hit) {
+    let score = 1 / (1 + hit.gap); // Distance score
+    
+    if (hit.bold) score += 0.2;
+    if (hit.merged) score += 0.1;
+    if (hit.dir === 'up' && hit.r <= 3) score += 0.1; // Top header row
+    if (hit.dir === 'left' && hit.c <= 3) score += 0.1; // Left label column
+    
+    return Math.min(score, 1.0);
+  }
+
+  /**
+   * Find section header for a frame
+   */
+  findSectionForFrame(frame) {
+    const frameStartRow = frame.horizontal[0]?.startRow || frame.vertical[0]?.startRow;
+    const frameEndRow = frame.horizontal[0]?.endRow || frame.vertical[0]?.endRow;
+    
+    if (!frameStartRow || !frameEndRow) return null;
+    
+    // Find section whose range overlaps with frame
+    for (const section of this.sectionHeaders) {
+      if (section.rStart <= frameEndRow && section.rEnd >= frameStartRow) {
+        return {
+          text: section.label,
+          confidence: section.score,
+          source: 'section-header',
+          at: `${numToCol(section.col)}${section.rStart}`,
+          range: `${numToCol(section.col)}${section.rStart}:${numToCol(section.col)}${section.rEnd}`
+        };
+      }
+    }
+    
+    return null;
+  }
+
+  /**
+   * Find date header for a frame
+   */
+  findDateHeaderForFrame(frame) {
+    if (!this.globalDateHeader) return null;
+    
+    const frameStartCol = frame.horizontal[0]?.startCol || frame.vertical[0]?.startCol;
+    const frameEndCol = frame.horizontal[0]?.endCol || frame.vertical[0]?.endCol;
+    
+    if (!frameStartCol || !frameEndCol) return null;
+    
+    // Check if frame columns intersect with date header columns
+    const dateCols = this.globalDateHeader.cells.map(cell => cell.c);
+    const frameCols = [];
+    for (let c = frameStartCol; c <= frameEndCol; c++) {
+      frameCols.push(c);
+    }
+    
+    const intersection = dateCols.filter(col => frameCols.includes(col));
+    if (intersection.length > 0) {
+      return {
+        range: this.globalDateHeader.range,
+        confidence: this.globalDateHeader.confidence,
+        source: 'date-global',
+        at: `Row ${this.globalDateHeader.row}`
+      };
+    }
+    
+    return null;
+  }
+
+  /**
+   * Label a frame with all available information
+   */
+  labelFrame(frame, spreadsheetData = null, dateFrames = null) {
+    const labels = {
+      section: null,
+      row: null,
+      column: null,
+      dateHeader: null
+    };
+    
+    // Find section header
+    labels.section = this.findSectionForFrame(frame);
+    
+    // Find date header
+    labels.dateHeader = this.findDateHeaderForFrame(frame);
+    
+    // Find row and column labels for each span
+    const rowLabels = [];
+    const columnLabels = [];
+    
+    // Process horizontal spans
+    for (const span of frame.horizontal) {
+      for (let r = span.startRow; r <= span.endRow; r++) {
+        const leftLabel = this.nearestLeftText(r, span.startCol, null, spreadsheetData);
+        if (leftLabel) {
+          rowLabels.push({
+            ...leftLabel,
+            score: this.scoreLabel(leftLabel)
+          });
+        }
+      }
+    }
+    
+    // Process vertical spans
+    for (const span of frame.vertical) {
+      for (let c = span.startCol; c <= span.endCol; c++) {
+        const topLabel = this.nearestUpText(span.startRow, c, null, spreadsheetData, dateFrames);
+        if (topLabel) {
+          columnLabels.push({
+            ...topLabel,
+            score: this.scoreLabel(topLabel)
+          });
+        }
+      }
+    }
+    
+    // Choose best row label
+    if (rowLabels.length > 0) {
+      const bestRowLabel = rowLabels.reduce((best, current) => 
+        current.score > best.score ? current : best
+      );
+      labels.row = {
+        text: bestRowLabel.text,
+        confidence: bestRowLabel.score,
+        source: 'left-scan',
+        at: `${numToCol(bestRowLabel.c)}${bestRowLabel.r}`
+      };
+    }
+    
+    // Choose best column label
+    if (columnLabels.length > 0) {
+      const bestColumnLabel = columnLabels.reduce((best, current) => 
+        current.score > best.score ? current : best
+      );
+      labels.column = {
+        text: bestColumnLabel.text,
+        confidence: bestColumnLabel.score,
+        source: 'top-scan',
+        at: `${numToCol(bestColumnLabel.c)}${bestColumnLabel.r}`
+      };
+    }
+    
+    return labels;
+  }
+}
+
 // Export for use in other modules
-export { DependencyAnalyzer };
+export { DependencyAnalyzer, TextLabelIndexer };
 
 
