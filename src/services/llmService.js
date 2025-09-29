@@ -1,5 +1,5 @@
 import OpenAI from 'openai';
-import { tools, SYSTEM_PROMPT, DEPENDENCY_ANALYZER_PROMPT } from '../utils/tools.js';
+import { tools, SYSTEM_PROMPT } from '../utils/tools.js';
 import { addrToRC, rcToAddr, sliceRange, getColumnIndex } from '../utils/a1Helpers.js';
 import { tokenSortJaroWinkler } from '../utils/similarity.js';
 
@@ -178,277 +178,10 @@ export class LLMService {
     this.spreadsheetData = newData;
   }
 
-  /**
-   * Find a cell by hint and also check adjacent cells for values
-   */
-  findCell(hint, strategy = "header_row_first") {
-    console.log(`Searching for: "${hint}" in spreadsheet data:`, this.spreadsheetData);
-    
-    // 1) exact address?
-    if (/^[A-Z]+[0-9]+$/i.test(hint)) {
-      return { address: hint.toUpperCase() };
-    }
 
-    const results = this.fuzzySearch(hint, strategy);
-    console.log(`Found ${results.length} matches:`, results);
 
-    // Return the best match (header row first, then first match)
-    if (results.length > 0) {
-      const headerMatch = results.find(r => r.location.includes('header'));
-      return headerMatch || results[0];
-    }
 
-    return { address: null, message: `No cells found containing "${hint}"` };
-  }
 
-  /**
-   * Enhanced fuzzy search that tries multiple variations of the search term
-   */
-  fuzzySearch(hint, strategy = "header_row_first") {
-    const results = [];
-    
-    // Generate search variations
-    const searchVariations = this.generateSearchVariations(hint);
-    console.log(`Search variations for "${hint}":`, searchVariations);
-    
-    // 2) header row scan
-    const headerRow = 0;
-    if (strategy === "header_row_first" && this.spreadsheetData[headerRow]) {
-      for (let c = 0; c < this.spreadsheetData[headerRow].length; c++) {
-        const cell = this.spreadsheetData[headerRow][c];
-        const cellValue = String(cell?.value ?? "").toLowerCase();
-        
-        for (const variation of searchVariations) {
-          if (cellValue.includes(variation.toLowerCase())) {
-            const result = {
-              address: rcToAddr(1, c + 1),
-              value: cell?.value,
-              match: cellValue,
-              searchTerm: variation,
-              location: `header row, column ${c + 1}`,
-              adjacentCells: this.getAdjacentCells(0, c)
-            };
-            results.push(result);
-            break; // Found a match, no need to check other variations for this cell
-          }
-        }
-      }
-    }
-
-    // 3) anywhere in the spreadsheet
-    for (let r = 0; r < this.spreadsheetData.length; r++) {
-      for (let c = 0; c < (this.spreadsheetData[r]?.length ?? 0); c++) {
-        const cell = this.spreadsheetData[r][c];
-        const cellValue = String(cell?.value ?? "").toLowerCase();
-        
-        for (const variation of searchVariations) {
-          if (cellValue.includes(variation.toLowerCase())) {
-            const result = {
-              address: rcToAddr(r + 1, c + 1),
-              value: cell?.value,
-              match: cellValue,
-              searchTerm: variation,
-              location: `row ${r + 1}, column ${c + 1}`,
-              adjacentCells: this.getAdjacentCells(r, c)
-            };
-            results.push(result);
-            break; // Found a match, no need to check other variations for this cell
-          }
-        }
-      }
-    }
-
-    return results;
-  }
-
-  /**
-   * Generate multiple search variations for fuzzy matching
-   */
-  generateSearchVariations(hint) {
-    const variations = [hint]; // Start with original
-    const lowerHint = hint.toLowerCase();
-    
-    // Split into words and try different combinations
-    const words = lowerHint.split(/\s+/);
-    
-    // Add individual words (only meaningful words)
-    words.forEach(word => {
-      if (word.length > 2 && !['the', 'and', 'for', 'of', 'in', 'at', 'to', 'is', 'are', 'was', 'were'].includes(word)) {
-        variations.push(word);
-      }
-    });
-    
-    // Add singular/plural variations for each word
-    words.forEach(word => {
-      if (word.length > 2) {
-        if (word.endsWith('s') && word.length > 3) {
-          // Remove 's' for singular
-          variations.push(word.slice(0, -1));
-        } else {
-          // Add 's' for plural
-          variations.push(word + 's');
-        }
-      }
-    });
-    
-    // Add trimmed variations (remove common prefixes/suffixes)
-    const trimmed = lowerHint
-      .replace(/^(number of|count of|total|sum of)\s+/i, '') // Remove prefixes
-      .replace(/\s+(number|count|total|sum)$/i, '') // Remove suffixes
-      .trim();
-    
-    if (trimmed && trimmed !== lowerHint) {
-      variations.push(trimmed);
-    }
-    
-    // Add variations with common synonyms (dynamic, not hard-coded)
-    const synonymMap = {
-      'number': ['count', 'total', 'sum', 'amount'],
-      'count': ['number', 'total', 'sum', 'amount'],
-      'total': ['number', 'count', 'sum', 'amount'],
-      'client': ['customer', 'account'],
-      'customer': ['client', 'account'],
-      'agent': ['representative', 'rep', 'staff'],
-      'representative': ['agent', 'rep', 'staff'],
-      'staff': ['agent', 'representative', 'rep']
-    };
-    
-    // Generate synonym variations
-    words.forEach(word => {
-      if (synonymMap[word]) {
-        synonymMap[word].forEach(synonym => {
-          const synonymVariation = lowerHint.replace(word, synonym);
-          variations.push(synonymVariation);
-        });
-      }
-    });
-    
-    // Remove duplicates and return
-    return [...new Set(variations)];
-  }
-
-  /**
-   * Get adjacent cells (right, below, left, above) for a given position
-   */
-  getAdjacentCells(row, col) {
-    const adjacent = {};
-    
-    // Right cell (next column)
-    if (this.spreadsheetData[row] && this.spreadsheetData[row][col + 1]) {
-      adjacent.right = {
-        address: rcToAddr(row + 1, col + 2),
-        value: this.spreadsheetData[row][col + 1]?.value,
-        isFormula: String(this.spreadsheetData[row][col + 1]?.value || '').startsWith('=')
-      };
-    }
-    
-    // Below cell (next row)
-    if (this.spreadsheetData[row + 1] && this.spreadsheetData[row + 1][col]) {
-      adjacent.below = {
-        address: rcToAddr(row + 2, col + 1),
-        value: this.spreadsheetData[row + 1][col]?.value,
-        isFormula: String(this.spreadsheetData[row + 1][col]?.value || '').startsWith('=')
-      };
-    }
-    
-    // Left cell (previous column)
-    if (col > 0 && this.spreadsheetData[row] && this.spreadsheetData[row][col - 1]) {
-      adjacent.left = {
-        address: rcToAddr(row + 1, col),
-        value: this.spreadsheetData[row][col - 1]?.value,
-        isFormula: String(this.spreadsheetData[row][col - 1]?.value || '').startsWith('=')
-      };
-    }
-    
-    // Above cell (previous row)
-    if (row > 0 && this.spreadsheetData[row - 1] && this.spreadsheetData[row - 1][col]) {
-      adjacent.above = {
-        address: rcToAddr(row, col + 1),
-        value: this.spreadsheetData[row - 1][col]?.value,
-        isFormula: String(this.spreadsheetData[row - 1][col]?.value || '').startsWith('=')
-      };
-    }
-    
-    return adjacent;
-  }
-
-  /**
-   * Find a label and return both the label cell and its associated value from adjacent cells
-   */
-  findLabelValue(label) {
-    console.log(`Searching for label-value pair: "${label}"`);
-    
-    const searchLabel = label.toLowerCase();
-    const results = [];
-
-    // Search through the spreadsheet
-    for (let r = 0; r < this.spreadsheetData.length; r++) {
-      for (let c = 0; c < (this.spreadsheetData[r]?.length ?? 0); c++) {
-        const cell = this.spreadsheetData[r][c];
-        const cellValue = String(cell?.value ?? "").toLowerCase();
-        
-        if (cellValue.includes(searchLabel)) {
-          const adjacentCells = this.getAdjacentCells(r, c);
-          
-          // Look for a value in adjacent cells
-          let foundValue = null;
-          let valueLocation = null;
-          
-          // Check right cell first (most common pattern)
-          if (adjacentCells.right && adjacentCells.right.value !== undefined && adjacentCells.right.value !== '') {
-            foundValue = adjacentCells.right;
-            valueLocation = 'right';
-          }
-          // Check below cell
-          else if (adjacentCells.below && adjacentCells.below.value !== undefined && adjacentCells.below.value !== '') {
-            foundValue = adjacentCells.below;
-            valueLocation = 'below';
-          }
-          // Check left cell
-          else if (adjacentCells.left && adjacentCells.left.value !== undefined && adjacentCells.left.value !== '') {
-            foundValue = adjacentCells.left;
-            valueLocation = 'left';
-          }
-          // Check above cell
-          else if (adjacentCells.above && adjacentCells.above.value !== undefined && adjacentCells.above.value !== '') {
-            foundValue = adjacentCells.above;
-            valueLocation = 'above';
-          }
-          
-          const result = {
-            label: {
-              address: rcToAddr(r + 1, c + 1),
-              value: cell?.value,
-              location: `row ${r + 1}, column ${c + 1}`
-            },
-            value: foundValue,
-            valueLocation: valueLocation,
-            allAdjacentCells: adjacentCells
-          };
-          
-          results.push(result);
-        }
-      }
-    }
-
-    console.log(`Found ${results.length} label-value pairs:`, results);
-
-    // Return the best match
-    if (results.length > 0) {
-      // Prefer results that have a value
-      const withValue = results.filter(r => r.value !== null);
-      if (withValue.length > 0) {
-        return withValue[0];
-      }
-      return results[0];
-    }
-
-    return { 
-      label: null, 
-      value: null, 
-      message: `No label-value pair found for "${label}"` 
-    };
-  }
 
   /**
    * Find the intersection of two labels with enhanced axis disambiguation and value type validation
@@ -1137,10 +870,6 @@ export class LLMService {
   async execTool(name, args) {
     try {
       switch (name) {
-        case "find":
-          return this.findCell(args.hint, args.search_strategy);
-        case "find_label_value":
-          return this.findLabelValue(args.label);
         case "find_subframe":
           return this.findSubFrame(args.label1, args.label2);
         case "conclude":
@@ -1342,7 +1071,7 @@ export class LLMService {
             const usedDataRead = () => {
               // Check for direct data reading tools
               const hasDataRead = toolOutputs.some(t => 
-                ["read_cell", "read_sheet", "find_subframe", "find_label_value"].includes(t.tool_name)
+                ["read_cell", "read_sheet", "find_subframe"].includes(t.tool_name)
               );
               
               
@@ -1717,8 +1446,8 @@ export class LLMService {
   }
 
   /**
-   * Handle dependency analysis with specialized system prompt
-   * This method processes dependency analysis results using the DEPENDENCY_ANALYZER_PROMPT
+   * Handle dependency analysis with standard system prompt
+   * This method processes dependency analysis results using the standard SYSTEM_PROMPT
    */
   async dependencyAnalysisChat(analysisMessage) {
     try {
@@ -1753,11 +1482,11 @@ export class LLMService {
       // Add user message to history
       this.addToHistory("user", analysisMessage);
 
-      // Build conversation messages with dependency analyzer system prompt
+      // Build conversation messages with standard system prompt
       const messages = [
         {
           role: "system",
-          content: DEPENDENCY_ANALYZER_PROMPT
+          content: SYSTEM_PROMPT
         },
         ...this.conversationHistory.map(msg => ({
           role: msg.role,
@@ -1818,7 +1547,7 @@ export class LLMService {
             const usedDataRead = () => {
               // Check for direct data reading tools
               const hasDataRead = toolOutputs.some(t => 
-                ["read_cell", "read_sheet", "find_subframe", "find_label_value"].includes(t.tool_name)
+                ["read_cell", "read_sheet", "find_subframe"].includes(t.tool_name)
               );
               return hasDataRead;
             };
