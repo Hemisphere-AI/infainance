@@ -874,24 +874,20 @@ function ExcelApp() {
 
   // Handle chat messages
   const handleChatMessage = useCallback(async (message) => {
-    // TEMPORARILY DISABLED: LLM tool calling
-    // if (!llmServiceRef.current) {
-    //   return "Please upload a spreadsheet first to start chatting with the AI assistant."
-    // }
+    if (!llmServiceRef.current) {
+      return "Please upload a spreadsheet first to start chatting with the AI assistant."
+    }
 
-    // setIsChatLoading(true)
-    // try {
-    //   const response = await llmServiceRef.current.chat(message)
-    //   return response
-    // } catch (error) {
-    //   console.error('Chat error:', error)
-    //   return `Error: ${error.message}. Please check your OpenAI API key in the .env file.`
-    // } finally {
-    //   setIsChatLoading(false)
-    // }
-
-    // TEMPORARY: Return the input message as output (for testing)
-    return `[TESTING MODE] You said: "${message}"`
+    setIsChatLoading(true)
+    try {
+      const response = await llmServiceRef.current.chat(message)
+      return response
+    } catch (error) {
+      console.error('Chat error:', error)
+      return `Error: ${error.message}. Please check your OpenAI API key in the .env file.`
+    } finally {
+      setIsChatLoading(false)
+    }
   }, [])
 
   // Handle cancellation
