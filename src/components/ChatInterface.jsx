@@ -150,12 +150,8 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onToolCall = null, on
   useEffect(() => {
     if (llmService) {
       const quotaStatus = llmService.getTokenQuotaStatus();
-      console.log('Token quota status:', quotaStatus);
-      console.log('Limit is Infinity?', quotaStatus?.limit === Infinity);
-      console.log('Will show progress bar?', quotaStatus?.limit !== Infinity && quotaStatus?.limit > 0);
       setTokenQuotaStatus(quotaStatus);
     } else {
-      console.log('No llmService available');
       setTokenQuotaStatus(null);
     }
   }, [llmService]);

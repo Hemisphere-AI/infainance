@@ -104,6 +104,23 @@ function computeFormulaSignature(formula, baseR, baseC) {
     last = CELL_REF_RE.lastIndex;
   }
   out += formula.slice(last);
+  
+  // ENHANCED: Normalize linear shifts for better grouping
+  // Replace relative references with generic patterns to group linear shifts
+  out = out.replace(/REF\(S:[^,]+,R:([+-]?\d+),C:([+-]?\d+)\)/g, (match, dr, dc) => {
+    // For linear shifts, normalize to generic relative reference
+    const rowOffset = parseInt(dr);
+    const colOffset = parseInt(dc);
+    
+    // If it's a simple linear shift (1 cell in any direction), normalize it
+    if (Math.abs(rowOffset) + Math.abs(colOffset) === 1) {
+      return `REF(RELATIVE_${rowOffset > 0 ? 'DOWN' : rowOffset < 0 ? 'UP' : colOffset > 0 ? 'RIGHT' : 'LEFT'})`;
+    }
+    
+    // For other relative references, keep them as is
+    return match;
+  });
+  
   // Normalize case and whitespace
   return out.replace(/\s+/g, '').toUpperCase();
 }
@@ -566,7 +583,18 @@ function forwardTopoLayers(graph) {
     }
 
     layer.sort(); // stable output
-    layers.push(layer);
+    
+    // ENHANCED: Check if this layer contains linear step patterns
+    // If so, merge with the previous layer instead of creating a new one
+    const hasLinearSteps = detectLinearStepPattern(layer, graph);
+    
+    if (hasLinearSteps && layers.length > 0) {
+      // Merge with previous layer instead of creating new layer
+      layers[layers.length - 1] = [...layers[layers.length - 1], ...layer];
+    } else {
+      // Create new layer
+      layers.push(layer);
+    }
 
     // remove layer
     for (const s of layer) remaining.delete(s);
@@ -576,6 +604,96 @@ function forwardTopoLayers(graph) {
     }
   }
   return layers;
+}
+
+// Helper function to detect linear step patterns within a layer
+function detectLinearStepPattern(layer, graph) {
+  if (layer.length < 2) return false;
+  
+  // Group nodes by their formula signature
+  const signatureGroups = new Map();
+  for (const nodeKey of layer) {
+    const meta = graph.nodeMeta?.get(nodeKey);
+    if (meta && meta.signature) {
+      if (!signatureGroups.has(meta.signature)) {
+        signatureGroups.set(meta.signature, []);
+      }
+      signatureGroups.get(meta.signature).push(nodeKey);
+    }
+  }
+  
+  // Check if any signature group has multiple nodes (indicating linear steps)
+  for (const [signature, nodes] of signatureGroups) {
+    if (nodes.length >= 2) {
+      // Check if these nodes form a linear pattern (adjacent positions)
+      const positions = nodes.map(nodeKey => {
+        const meta = graph.nodeMeta?.get(nodeKey);
+        return meta ? { r: meta.r, c: meta.c } : null;
+      }).filter(p => p !== null);
+      
+      if (positions.length >= 2) {
+        // Sort by row, then column
+        positions.sort((a, b) => a.r - b.r || a.c - b.c);
+        
+        // Check if positions form a linear pattern
+        const isLinear = checkLinearPattern(positions);
+        if (isLinear) {
+          return true;
+        }
+      }
+    }
+  }
+  
+  return false;
+}
+
+// Helper function to check if positions form a linear pattern
+function checkLinearPattern(positions) {
+  if (positions.length < 2) return false;
+  
+  // Check for horizontal linear pattern (same row, consecutive columns)
+  const rowGroups = new Map();
+  for (const pos of positions) {
+    if (!rowGroups.has(pos.r)) rowGroups.set(pos.r, []);
+    rowGroups.get(pos.r).push(pos.c);
+  }
+  
+  for (const [row, cols] of rowGroups) {
+    if (cols.length >= 2) {
+      cols.sort((a, b) => a - b);
+      let consecutive = true;
+      for (let i = 1; i < cols.length; i++) {
+        if (cols[i] - cols[i-1] !== 1) {
+          consecutive = false;
+          break;
+        }
+      }
+      if (consecutive) return true;
+    }
+  }
+  
+  // Check for vertical linear pattern (same column, consecutive rows)
+  const colGroups = new Map();
+  for (const pos of positions) {
+    if (!colGroups.has(pos.c)) colGroups.set(pos.c, []);
+    colGroups.get(pos.c).push(pos.r);
+  }
+  
+  for (const [col, rows] of colGroups) {
+    if (rows.length >= 2) {
+      rows.sort((a, b) => a - b);
+      let consecutive = true;
+      for (let i = 1; i < rows.length; i++) {
+        if (rows[i] - rows[i-1] !== 1) {
+          consecutive = false;
+          break;
+        }
+      }
+      if (consecutive) return true;
+    }
+  }
+  
+  return false;
 }
 
 
@@ -742,6 +860,30 @@ function computeReplicatedFormulaGroups(graph) {
     signatureGroups.get(meta.signature).push({ node: k, r: meta.r, c: meta.c });
   }
 
+  // Pre-calculate dependency depths to avoid grouping cells at different levels
+  const nodeDepths = new Map();
+  const calculateDepth = (nodeK, visited = new Set()) => {
+    if (visited.has(nodeK)) return 0; // Avoid cycles
+    if (nodeDepths.has(nodeK)) return nodeDepths.get(nodeK);
+    
+    visited.add(nodeK);
+    let maxDepth = 0;
+    const dependents = graph.dependents.get(nodeK) || new Set();
+    for (const dep of dependents) {
+      const depDepth = calculateDepth(dep, visited);
+      maxDepth = Math.max(maxDepth, depDepth + 1);
+    }
+    visited.delete(nodeK);
+    
+    nodeDepths.set(nodeK, maxDepth);
+    return maxDepth;
+  };
+  
+  // Calculate depths for all nodes
+  for (const k of graph.allNodes) {
+    calculateDepth(k);
+  }
+
   // For each signature group, find rectangular patterns
   for (const [signature, cells] of signatureGroups) {
     if (cells.length < 2) continue;
@@ -773,10 +915,39 @@ function computeReplicatedFormulaGroups(graph) {
           if (neighborKey && !processed.has(neighborKey)) {
             const neighborMeta = graph.nodeMeta?.get(neighborKey);
             if (neighborMeta && neighborMeta.signature === signature) {
-              const neighborCell = { node: neighborKey, r: nr, c: nc };
-              block.push(neighborCell);
-              queue.push(neighborCell);
-              processed.add(neighborKey);
+              // Check if there's a direct dependency relationship
+              const hasDirectDependency = (
+                graph.dependents.get(current.node)?.has(neighborKey) ||
+                graph.dependents.get(neighborKey)?.has(current.node) ||
+                graph.precedents.get(current.node)?.has(neighborKey) ||
+                graph.precedents.get(neighborKey)?.has(current.node)
+              );
+              
+              // Don't group cells that have direct dependencies between them
+              if (hasDirectDependency) {
+                continue;
+              }
+              
+              // ENHANCED GROUPING LOGIC: Group copy-paste patterns with equal step shifts
+              const currentDepth = nodeDepths.get(current.node) || 0;
+              const neighborDepth = nodeDepths.get(neighborKey) || 0;
+              
+              // Check if either cell has no deeper dependencies (is at the end of its chain)
+              const currentHasNoDeeperDeps = (graph.dependents.get(current.node) || new Set()).size === 0;
+              const neighborHasNoDeeperDeps = (graph.dependents.get(neighborKey) || new Set()).size === 0;
+              
+              // Check if they're at the same dependency depth (copy-paste pattern)
+              const sameDepth = currentDepth === neighborDepth;
+              
+              // Group if:
+              // 1. At least one cell has no deeper dependencies (end of chain), OR
+              // 2. They're at the same depth (copy-paste pattern with equal steps)
+              if (currentHasNoDeeperDeps || neighborHasNoDeeperDeps || sameDepth) {
+                const neighborCell = { node: neighborKey, r: nr, c: nc };
+                block.push(neighborCell);
+                queue.push(neighborCell);
+                processed.add(neighborKey);
+              }
             }
           }
         }
@@ -1131,7 +1302,6 @@ class TextLabelIndexer {
       }
     }
     
-    console.log(`Built text index with ${this.textCells.length} text cells`);
   }
 
   /**
@@ -1139,37 +1309,30 @@ class TextLabelIndexer {
    */
   nearestLeftText(r, cStart, maxGap = null, spreadsheetData = null) {
     const gap = maxGap || this.maxGapCols;
-    console.log(`Searching for row label to the left of row ${r}, column ${cStart}, max gap: ${gap}`);
     
     for (let c = cStart - 1, step = 1; c >= 1 && step <= gap; c--, step++) {
-      console.log(`Checking row ${r}, column ${c}, step ${step}`);
       
       // First check the text index
       const hit = this.textIndexByRC.get(`${r},${c}`);
       if (hit) {
-        console.log(`Found in text index: ${hit.text}`);
         // Check if this is a reference cell (starts with =) or blank
         const cellValue = String(hit.rawText || hit.text || '');
         if (cellValue.startsWith('=') || cellValue.trim() === '') {
-          console.log(`Skipping reference/blank: ${cellValue}`);
           // Skip reference cells and blanks, continue searching
           continue;
         }
         
         // Additional checks for currency values and numbers
         if (/^[€$£¥]\d+/.test(cellValue) || /^\d+[€$£¥]/.test(cellValue)) {
-          console.log(`Skipping currency: ${cellValue}`);
           // Skip currency values, continue searching
           continue;
         }
         
         // Skip if it's just a number
         if (!isNaN(Number(cellValue.replace(/[.,\s]/g, '')))) {
-          console.log(`Skipping number: ${cellValue}`);
           continue;
         }
         
-        console.log(`Found valid text label: ${cellValue}`);
         return { ...hit, gap: step, dir: 'left' };
       }
       
@@ -1177,39 +1340,32 @@ class TextLabelIndexer {
       if (spreadsheetData && spreadsheetData[r-1] && spreadsheetData[r-1][c-1]) {
         const cell = spreadsheetData[r-1][c-1];
         const cellValue = String(cell.value || '');
-        console.log(`Found in raw data: ${cellValue}`);
         
         // Skip if blank or empty
         if (!cellValue || cellValue.trim() === '') {
-          console.log(`Skipping blank: ${cellValue}`);
           continue;
         }
         
         // Skip formulas
         if (cellValue.startsWith('=')) {
-          console.log(`Skipping formula: ${cellValue}`);
           continue;
         }
         
         // Skip currency values and numbers
         if (/^[€$£¥]\d+/.test(cellValue) || /^\d+[€$£¥]/.test(cellValue)) {
-          console.log(`Skipping currency: ${cellValue}`);
           continue;
         }
         
         // Skip currency values with spaces (€ 37,500, $ 100, etc.)
         if (/^[€$£¥]\s*[\d,]+/.test(cellValue) || /[\d,]+[€$£¥]/.test(cellValue)) {
-          console.log(`Skipping currency with space: ${cellValue}`);
           continue;
         }
         
         if (!isNaN(Number(cellValue.replace(/[.,\s]/g, '')))) {
-          console.log(`Skipping number: ${cellValue}`);
           continue;
         }
         
         // This looks like a valid text label
-        console.log(`Found valid text label in raw data: ${cellValue}`);
         return {
           r: r,
           c: c,
@@ -1221,10 +1377,8 @@ class TextLabelIndexer {
           merged: cell.merged || false
         };
       } else {
-        console.log(`No data found at row ${r}, column ${c}`);
       }
     }
-    console.log(`No row label found to the left of row ${r}, column ${cStart}`);
     return null;
   }
 
@@ -1233,37 +1387,30 @@ class TextLabelIndexer {
    */
   nearestUpText(rStart, c, maxGap = null, spreadsheetData = null, dateFrames = null) {
     const gap = maxGap || this.maxGapRows;
-    console.log(`Searching for column label above row ${rStart}, column ${c}, max gap: ${gap}`);
     
     for (let r = rStart - 1, step = 1; r >= 1 && step <= gap; r--, step++) {
-      console.log(`Checking row ${r}, column ${c}, step ${step}`);
       
       // First check the text index
       const hit = this.textIndexByRC.get(`${r},${c}`);
       if (hit) {
-        console.log(`Found in text index: ${hit.text}`);
         // Check if this is a reference cell (starts with =) or blank
         const cellValue = String(hit.rawText || hit.text || '');
         if (cellValue.startsWith('=') || cellValue.trim() === '') {
-          console.log(`Skipping reference/blank: ${cellValue}`);
           // Skip reference cells and blanks, continue searching
           continue;
         }
         
         // Additional checks for currency values and numbers
         if (/^[€$£¥]\d+/.test(cellValue) || /^\d+[€$£¥]/.test(cellValue)) {
-          console.log(`Skipping currency: ${cellValue}`);
           // Skip currency values, continue searching
           continue;
         }
         
         // Skip if it's just a number
         if (!isNaN(Number(cellValue.replace(/[.,\s]/g, '')))) {
-          console.log(`Skipping number: ${cellValue}`);
           continue;
         }
         
-        console.log(`Found valid text label: ${cellValue}`);
         return { ...hit, gap: step, dir: 'up' };
       }
       
@@ -1271,34 +1418,28 @@ class TextLabelIndexer {
       if (spreadsheetData && spreadsheetData[r-1] && spreadsheetData[r-1][c-1]) {
         const cell = spreadsheetData[r-1][c-1];
         const cellValue = String(cell.value || '');
-        console.log(`Found in raw data: ${cellValue}`);
         
         // Skip if blank or empty
         if (!cellValue || cellValue.trim() === '') {
-          console.log(`Skipping blank: ${cellValue}`);
           continue;
         }
         
         // Skip formulas
         if (cellValue.startsWith('=')) {
-          console.log(`Skipping formula: ${cellValue}`);
           continue;
         }
         
         // Skip currency values and numbers
         if (/^[€$£¥]\d+/.test(cellValue) || /^\d+[€$£¥]/.test(cellValue)) {
-          console.log(`Skipping currency: ${cellValue}`);
           continue;
         }
         
         // Skip currency values with spaces (€ 37,500, $ 100, etc.)
         if (/^[€$£¥]\s*[\d,]+/.test(cellValue) || /[\d,]+[€$£¥]/.test(cellValue)) {
-          console.log(`Skipping currency with space: ${cellValue}`);
           continue;
         }
         
         if (!isNaN(Number(cellValue.replace(/[.,\s]/g, '')))) {
-          console.log(`Skipping number: ${cellValue}`);
           continue;
         }
         
@@ -1317,7 +1458,6 @@ class TextLabelIndexer {
                 const endRowNum = parseInt(endRow);
                 
                 if (r >= startRowNum && r <= endRowNum && c >= startColNum && c <= endColNum) {
-                  console.log(`Cell is in date range: ${dateFrame.range}`);
                   isInDateRange = true;
                   break;
                 }
@@ -1328,7 +1468,6 @@ class TextLabelIndexer {
         
         // Accept as valid label if it's text OR if it's in a date range
         if (isInDateRange || cellValue.trim() !== '') {
-          console.log(`Found valid text label in raw data: ${cellValue}${isInDateRange ? ' (in date range)' : ''}`);
           return {
             r: r,
             c: c,
@@ -1342,10 +1481,8 @@ class TextLabelIndexer {
           };
         }
       } else {
-        console.log(`No data found at row ${r}, column ${c}`);
       }
     }
-    console.log(`No column label found above row ${rStart}, column ${c}`);
     return null;
   }
 
@@ -1364,7 +1501,6 @@ class TextLabelIndexer {
     // Sort by row start
     this.sectionHeaders.sort((a, b) => a.rStart - b.rStart);
     
-    console.log(`Detected ${this.sectionHeaders.length} section headers`);
   }
 
   /**
@@ -1481,7 +1617,6 @@ class TextLabelIndexer {
     }
     
     if (this.globalDateHeader) {
-      console.log(`Detected global date header at row ${this.globalDateHeader.row}`);
     }
   }
 
