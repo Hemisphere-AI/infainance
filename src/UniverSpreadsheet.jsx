@@ -2,7 +2,7 @@ import React, { useMemo, useState, useCallback, useRef, useEffect } from 'react'
 import PropTypes from 'prop-types'
 import * as XLSX from 'xlsx'
 
-const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCells = [], onSelectedCellsChange, highlightedBlock = null, dependencyFrames = null }) => {
+const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1', onDataChange, formulaDisplayMode, selectedCells = [], onSelectedCellsChange, highlightedBlock = null, dependencyFrames = null }) => {
   const [selectedCell, setSelectedCell] = useState(null)
   const [editingCell, setEditingCell] = useState(null)
   const [visibleRange, setVisibleRange] = useState({ startRow: 0, endRow: 50, startCol: 0, endCol: 10 })
@@ -727,6 +727,14 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
     return args
   }, [])
 
+  // Helper function to process percentage values in expressions
+  const processPercentageValues = useCallback((expression) => {
+    // Handle percentage values (e.g., 2% -> 0.02)
+    return expression.replace(/(\d+(?:\.\d+)?)%/g, (match, number) => {
+      return (parseFloat(number) / 100).toString()
+    })
+  }, [])
+
   // Enhanced formula evaluator with Excel functions and caching
   const evaluateFormula = useCallback((formula, rowIndex, colIndex, visitedCells = new Set()) => {
     const stringFormula = String(formula || '')
@@ -820,7 +828,20 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
       }
 
       // Helper function to get cell value (recursively evaluates formulas)
-      const getCellValue = (cellRef, visitedCells = new Set()) => {
+      // Now supports inter-sheet references like 'Sheet2'!A1
+      const getCellValue = (cellRef, visitedCells = new Set(), targetSheet = currentSheetName) => {
+        // Handle inter-sheet references like 'Sheet2'!A1 or Sheet2!A1
+        const quotedSheetMatch = cellRef.match(/^'([^']+)'!(.+)$/)
+        const unquotedSheetMatch = cellRef.match(/^([A-Za-z][A-Za-z0-9_]*[A-Za-z0-9]|[A-Za-z])!(.+)$/)
+        
+        if (quotedSheetMatch) {
+          const [, sheetName, cellAddress] = quotedSheetMatch
+          return getCellValue(cellAddress, visitedCells, sheetName)
+        } else if (unquotedSheetMatch) {
+          const [, sheetName, cellAddress] = unquotedSheetMatch
+          return getCellValue(cellAddress, visitedCells, sheetName)
+        }
+        
         // Remove $ symbols from absolute references (e.g., $E$7 -> E7)
         const cleanRef = cellRef.replace(/\$/g, '')
         const cellRefRegex = /([A-Z]+)(\d+)/
@@ -832,7 +853,7 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
         const rowIndex = parseInt(row) - 1
         
         // Prevent circular references
-        const referencedCellKey = `${rowIndex}-${colIndex}`
+        const referencedCellKey = `${targetSheet}-${rowIndex}-${colIndex}`
         if (visitedCells.has(referencedCellKey)) {
           return 0 // Return 0 for circular references
         }
@@ -853,14 +874,23 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
           }
         }
         
-        const cell = data[rowIndex]?.[colIndex]
+        // Get cell data from the appropriate sheet
+        let cell = null
+        if (targetSheet === currentSheetName) {
+          // Current sheet - use the main data
+          cell = data[rowIndex]?.[colIndex]
+        } else {
+          // Other sheet - get from allSheetsData
+          const sheetData = allSheetsData[targetSheet]
+          if (sheetData && sheetData.spreadsheetData) {
+            cell = sheetData.spreadsheetData[rowIndex]?.[colIndex]
+          }
+        }
         
         // If cell doesn't exist, return 0
         if (!cell) {
           return 0
         }
-        
-        
         
         // SIMPLIFIED: Only 3 cases to handle
         
@@ -887,7 +917,15 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
       }
       
       // Helper function to parse range (e.g., A1:A10 or $A$1:$A$10)
-      const parseRange = (range) => {
+      // Now supports inter-sheet references like 'Sheet2'!A1:B10
+      const parseRange = (range, targetSheet = currentSheetName) => {
+        // Handle inter-sheet references like 'Sheet2'!A1:B10
+        const interSheetMatch = range.match(/^'([^']+)'!(.+)$/)
+        if (interSheetMatch) {
+          const [, sheetName, cellRange] = interSheetMatch
+          return parseRange(cellRange, sheetName)
+        }
+        
         const [start, end] = range.split(':')
         // Remove $ symbols from absolute references
         const cleanStart = start.replace(/\$/g, '')
@@ -905,18 +943,29 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
         const startRowIndex = parseInt(startRow) - 1
         const endRowIndex = parseInt(endRow) - 1
         
+        // Get the appropriate data source
+        let dataSource = data
+        if (targetSheet !== currentSheetName) {
+          const sheetData = allSheetsData[targetSheet]
+          if (sheetData && sheetData.spreadsheetData) {
+            dataSource = sheetData.spreadsheetData
+          } else {
+            return [] // Sheet not found
+          }
+        }
+        
         const values = []
         for (let r = startRowIndex; r <= endRowIndex; r++) {
           for (let c = startColIndex; c <= endColIndex; c++) {
             // SIMPLIFIED: Use the same 3-case logic as getCellValue
-            const cell = data[r]?.[c]
+            const cell = dataSource[r]?.[c]
             if (!cell) continue // Skip empty cells
             
             let numValue = 0
             
             // CASE 1: FORMULA - Return the calculated result
             if (cell.value && String(cell.value).startsWith('=')) {
-              const cellKey = `${r}-${c}`
+              const cellKey = `${targetSheet}-${r}-${c}`
               if (!visitedCells.has(cellKey)) {
                 visitedCells.add(cellKey)
                 const result = evaluateFormula(cell.value, r, c, visitedCells)
@@ -1138,9 +1187,9 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
       if (expression.startsWith('DATE(') && expression.endsWith(')')) {
         const args = parseFunctionArgs(expression.slice(5, -1))
         if (args.length >= 3) {
-          const year = parseInt(getCellValue(args[0], visitedCells))
-          const month = parseInt(getCellValue(args[1], visitedCells))
-          const day = parseInt(getCellValue(args[2], visitedCells))
+          const year = parseInt(getCellValue(processPercentageValues(args[0]), visitedCells))
+          const month = parseInt(getCellValue(processPercentageValues(args[1]), visitedCells))
+          const day = parseInt(getCellValue(processPercentageValues(args[2]), visitedCells))
           
           if (!isNaN(year) && !isNaN(month) && !isNaN(day)) {
             const date = new Date(year, month - 1, day) // month is 0-indexed in JS
@@ -1341,7 +1390,8 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
       
       // Handle ABS function
       if (expression.startsWith('ABS(') && expression.endsWith(')')) {
-        const value = parseFloat(getCellValue(expression.slice(4, -1), visitedCells))
+        const processedArg = processPercentageValues(expression.slice(4, -1))
+        const value = parseFloat(getCellValue(processedArg, visitedCells))
         if (!isNaN(value)) {
           const result = Math.abs(value)
           formulaCacheRef.current.set(cacheKey, result)
@@ -1351,7 +1401,8 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
       
       // Handle SQRT function
       if (expression.startsWith('SQRT(') && expression.endsWith(')')) {
-        const value = parseFloat(getCellValue(expression.slice(5, -1), visitedCells))
+        const processedArg = processPercentageValues(expression.slice(5, -1))
+        const value = parseFloat(getCellValue(processedArg, visitedCells))
         if (!isNaN(value) && value >= 0) {
           const result = Math.sqrt(value)
           formulaCacheRef.current.set(cacheKey, result)
@@ -1500,11 +1551,23 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
       // Handle basic arithmetic
       if (expression.includes('+') || expression.includes('-') || expression.includes('*') || expression.includes('/')) {
         let processedExpression = expression
+        
+        // First, handle percentage values (e.g., 2% -> 0.02)
+        processedExpression = processPercentageValues(processedExpression)
+        
         // Updated regex to handle absolute references with $ symbols
-        const cellRefRegex = /\$?([A-Z]+)\$?(\d+)/g
-        processedExpression = processedExpression.replace(cellRefRegex, (match) => {
-          const cellValue = getCellValue(match, visitedCells)
-          return cellValue
+        // Handle both simple cell references (A1, $B$2) and inter-sheet references ('Sheet'!A1 or Sheet!A1)
+        const cellRefRegex = /(?:'([^']+)'!|([A-Za-z][A-Za-z0-9_]*[A-Za-z0-9]|[A-Za-z])!)?(\$?[A-Z]+\$?\d+)/g
+        processedExpression = processedExpression.replace(cellRefRegex, (match, quotedSheetName, unquotedSheetName, cellRef) => {
+          // If it's an inter-sheet reference (either quoted or unquoted), pass the full match to getCellValue
+          if (quotedSheetName || unquotedSheetName) {
+            const cellValue = getCellValue(match, visitedCells)
+            return cellValue
+          } else {
+            // Simple cell reference
+            const cellValue = getCellValue(cellRef, visitedCells)
+            return cellValue
+          }
         })
         
         const result = Function('"use strict"; return (' + processedExpression + ')')()
@@ -1523,7 +1586,7 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
       formulaCacheRef.current.set(cacheKey, stringFormula)
       return stringFormula
     }
-  }, [data, parseFunctionArgs])
+  }, [data, parseFunctionArgs, processPercentageValues, allSheetsData, currentSheetName])
 
 
   // Helper function to format date values
@@ -1542,11 +1605,22 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
   const formatCellValueWithProperties = useCallback((value, cell) => {
     if (!value && value !== 0) return ''
     
-    
-    
-    // If it's a formula result, return as-is
+    // If it's a formula string, return it as-is (should be evaluated before reaching here)
     if (typeof value === 'string' && value.startsWith('=')) {
       return value
+    }
+    
+    // Handle date objects returned by formula evaluator
+    if (value && typeof value === 'object' && value.type) {
+      if (value.type === 'date') {
+        return value.value.toLocaleDateString()
+      } else if (value.type === 'datetime') {
+        return value.value.toLocaleString()
+      } else if (value.type === 'number') {
+        return value.value.toString()
+      }
+      // For other object types, try to extract a meaningful value
+      return String(value.value || value)
     }
     
     // Debug: Log all currency cells
@@ -1728,7 +1802,10 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
         
         const result = evaluateFormula(cellValue, rowIndex, colIndex)
         
-        // Debug logging removed to prevent console spam
+        // Debug: Log inter-sheet formula evaluation
+        if (cellValue.includes('!') && import.meta.env.DEV) {
+          console.log(`Evaluating inter-sheet formula: ${cellValue} -> ${result}`)
+        }
         
         // Apply enhanced formatting based on cell properties
         const formattedResult = formatCellValueWithProperties(result, cell)
@@ -2114,6 +2191,8 @@ ReactSpreadsheet.propTypes = {
     decimalPlaces: PropTypes.number,
     isDate: PropTypes.bool
   }))).isRequired,
+  allSheetsData: PropTypes.object,
+  currentSheetName: PropTypes.string,
   onDataChange: PropTypes.func.isRequired,
   formulaDisplayMode: PropTypes.number,
   selectedCells: PropTypes.arrayOf(PropTypes.shape({

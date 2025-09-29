@@ -105,6 +105,9 @@ function ExcelApp() {
 
     setFileName(file.name)
     
+    // Reset formula display mode when new file is uploaded
+    setFormulaDisplayMode(0)
+    
     const reader = new FileReader()
     reader.onload = (e) => {
       try {
@@ -539,12 +542,114 @@ function ExcelApp() {
         }
         // Format examples processed
         
+        // Store all sheets data
+        const allSheetsData = {}
+        workbook.SheetNames.forEach(sheetName => {
+          const sheet = workbook.Sheets[sheetName]
+          const sheetJsonData = XLSX.utils.sheet_to_json(sheet, { 
+            header: 1, 
+            defval: '',
+            raw: true
+          })
+          
+          // Process formatting for this sheet
+          const sheetCellFormats = {}
+          if (sheet['!ref']) {
+            const range = XLSX.utils.decode_range(sheet['!ref'])
+            for (let row = range.s.r; row <= range.e.r; row++) {
+              for (let col = range.s.c; col <= range.e.c; col++) {
+                const cellAddress = XLSX.utils.encode_cell({ r: row, c: col })
+                const cell = sheet[cellAddress]
+                if (cell) {
+                  const formatInfo = {
+                    numberFormat: cell.z || null,
+                    cellType: cell.t || null,
+                    isFormula: !!cell.f,
+                    formula: cell.f || null,
+                    style: cell.s || null,
+                    rawValue: cell.v || null,
+                    displayValue: cell.w || null,
+                    isDate: false,
+                    isCurrency: false,
+                    isPercentage: false,
+                    decimalPlaces: null,
+                    currencySymbol: null
+                  }
+                  
+                  // Analyze number format
+                  if (formatInfo.numberFormat) {
+                    const format = formatInfo.numberFormat.toLowerCase()
+                    if (format.includes('mm') || format.includes('dd') || format.includes('yyyy')) {
+                      formatInfo.isDate = true
+                    }
+                    if (format.includes('$') || format.includes('€') || format.includes('£')) {
+                      formatInfo.isCurrency = true
+                      if (format.includes('$')) formatInfo.currencySymbol = '$'
+                      if (format.includes('€')) formatInfo.currencySymbol = '€'
+                      if (format.includes('£')) formatInfo.currencySymbol = '£'
+                    }
+                    if (format.includes('%')) {
+                      formatInfo.isPercentage = true
+                    }
+                    const decimalMatch = format.match(/\.(\d+)/)
+                    if (decimalMatch) {
+                      formatInfo.decimalPlaces = parseInt(decimalMatch[1])
+                    }
+                  }
+                  
+                  if (!sheetCellFormats[row]) sheetCellFormats[row] = {}
+                  sheetCellFormats[row][col] = formatInfo
+                }
+              }
+            }
+          }
+          
+          // Convert to spreadsheet format with proper formula handling
+          const sheetSpreadsheetFormat = sheetJsonData.map((row, rowIndex) => 
+            row.map((cell, colIndex) => {
+              const formatInfo = sheetCellFormats[rowIndex]?.[colIndex] || {}
+              
+              // For formulas, use the formula string as the value, otherwise use the cell value
+              let cellValue = cell || '';
+              if (formatInfo.isFormula && formatInfo.formula) {
+                cellValue = '=' + formatInfo.formula; // Add = prefix for formulas
+              }
+              
+              return {
+                value: cellValue,
+                className: '',
+                cellType: formatInfo.cellType || 'text',
+                isFormula: formatInfo.isFormula || false,
+                formula: formatInfo.formula || null,
+                rawValue: formatInfo.rawValue !== null ? formatInfo.rawValue : cell,
+                displayValue: formatInfo.displayValue || cell,
+                numberFormat: formatInfo.numberFormat || null,
+                isDate: formatInfo.isDate || false,
+                isCurrency: formatInfo.isCurrency || false,
+                isPercentage: formatInfo.isPercentage || false,
+                decimalPlaces: formatInfo.decimalPlaces || null,
+                currencySymbol: formatInfo.currencySymbol || null,
+                style: formatInfo.style || null
+              }
+            })
+          )
+          
+          allSheetsData[sheetName] = {
+            sheetName: sheetName,
+            data: sheetJsonData,
+            worksheet: sheet,
+            cellFormats: sheetCellFormats,
+            spreadsheetData: sheetSpreadsheetFormat
+          }
+        })
+        
         setExcelData({
           sheetName: firstSheetName,
           data: jsonData,
           allSheets: workbook.SheetNames,
           worksheet: worksheet,
-          cellFormats: cellFormats // Include formatting information
+          cellFormats: cellFormats,
+          allSheetsData: allSheetsData // Store all sheets data
         })
         
         
@@ -616,6 +721,32 @@ function ExcelApp() {
     setError('')
     setSpreadsheetData([])
   }, [])
+
+  // Handle sheet switching
+  const handleSheetChange = useCallback((sheetName) => {
+    if (excelData && excelData.allSheetsData && excelData.allSheetsData[sheetName]) {
+      const sheetData = excelData.allSheetsData[sheetName];
+      
+      // Reset formula display mode when switching sheets
+      setFormulaDisplayMode(0)
+      
+      // Update the current sheet data
+      setExcelData(prev => ({
+        ...prev,
+        sheetName: sheetName,
+        data: sheetData.data,
+        worksheet: sheetData.worksheet,
+        cellFormats: sheetData.cellFormats
+      }));
+      
+      setSpreadsheetData(sheetData.spreadsheetData);
+      
+      // Update LLM service with new sheet data
+      if (llmServiceRef.current) {
+        llmServiceRef.current.updateSpreadsheetData(sheetData.spreadsheetData);
+      }
+    }
+  }, [excelData])
 
 
 
@@ -987,7 +1118,7 @@ function ExcelApp() {
     try {
       // Use the proper DependencyAnalyzer from indexService
       const analyzer = new DependencyAnalyzer()
-      const result = analyzer.analyzeSpreadsheetData(spreadsheetData)
+      const result = analyzer.analyzeSpreadsheetData(spreadsheetData, excelData?.allSheetsData || {})
       
       // Calculate max depth from outputs to inputs (output-centric layering)
       const maxDepth = Math.max(0, result.layers.length - 1)
@@ -1044,7 +1175,7 @@ function ExcelApp() {
       console.error('Dependency analysis error:', error)
       alert(`Analysis failed: ${error.message}`)
     }
-  }, [spreadsheetData, dependencyFrames, generateGreenToRedColors, generateIndexingResultsMessage])
+  }, [spreadsheetData, dependencyFrames, generateGreenToRedColors, generateIndexingResultsMessage, excelData?.allSheetsData])
 
 
   // Format selected cells as dates
@@ -1328,6 +1459,8 @@ function ExcelApp() {
                 {spreadsheetData.length > 0 ? (
                   <ReactSpreadsheet 
                     data={spreadsheetData}
+                    allSheetsData={excelData?.allSheetsData || {}}
+                    currentSheetName={excelData?.sheetName || 'Sheet1'}
                     onDataChange={handleSpreadsheetChange}
                     formulaDisplayMode={formulaDisplayMode}
                     selectedCells={selectedCells}
@@ -1344,24 +1477,26 @@ function ExcelApp() {
               </div>
             </div>
 
-            {/* Sheet Navigation */}
+            {/* Sheet Tabs */}
             {excelData.allSheets.length > 1 && (
-              <div className="mt-4 bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-                <h4 className="text-sm font-medium text-gray-700 mb-3">
-                  Available Sheets:
-                </h4>
-                <div className="flex flex-wrap gap-2">
+              <div className="bg-gray-50 px-4 py-0 -mb-px">
+                <div className="flex items-center space-x-0.5">
                   {excelData.allSheets.map((sheet, index) => (
-                    <span
+                    <div
                       key={index}
-                      className={`px-3 py-1 rounded-full text-xs font-medium ${
+                      className={`flex items-center space-x-2 px-3 py-2 rounded-b-lg transition-colors ${
                         sheet === excelData.sheetName
-                          ? 'bg-primary-100 text-primary-800'
-                          : 'bg-gray-100 text-gray-600'
+                          ? 'bg-white text-gray-800'
+                          : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
                       }`}
                     >
-                      {sheet}
-                    </span>
+                      <button
+                        onClick={() => handleSheetChange(sheet)}
+                        className="text-sm font-medium"
+                      >
+                        {sheet}
+                      </button>
+                    </div>
                   ))}
                 </div>
               </div>

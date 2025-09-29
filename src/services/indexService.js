@@ -151,7 +151,7 @@ function* iterCellRefs(formula) {
 // Graph builder for UniverSpreadsheet data
 // -----------------------------
 
-function buildDependencyGraphFromSpreadsheetData(spreadsheetData) {
+function buildDependencyGraphFromSpreadsheetData(spreadsheetData, allSheetsData = {}) {
   const dependents = new Map();
   const precedents = new Map();
   const allNodes = new Set();
@@ -159,6 +159,19 @@ function buildDependencyGraphFromSpreadsheetData(spreadsheetData) {
   const referencedNodes = new Set(); // Track cells that are referenced by formulas
   const dateNodes = new Set(); // Track cells that contain dates
   const nodeMeta = new Map(); // nodeK -> { r, c, formula, refOffsets: [{dr,dc}], adjOffset: {dr,dc}|null, isDate: boolean }
+  
+  // Helper function to get cell data from any sheet
+  const getCellFromSheet = (sheetName, rowIndex, colIndex) => {
+    if (sheetName === "Sheet1") {
+      return spreadsheetData[rowIndex]?.[colIndex];
+    } else {
+      const sheetData = allSheetsData[sheetName];
+      if (sheetData && sheetData.spreadsheetData) {
+        return sheetData.spreadsheetData[rowIndex]?.[colIndex];
+      }
+    }
+    return null;
+  };
 
   // Helper function to detect if a cell is formatted as a date
   const isDateFormatted = (cell) => {
@@ -407,6 +420,12 @@ function buildDependencyGraphFromSpreadsheetData(spreadsheetData) {
             addEdge(srcK, nodeK, dependents, precedents);
             const rc = a1ToRC(srcAddr);
             refOffsets.push({ dr: rc.r - (rowIndex + 1), dc: rc.c - (colIndex + 1) });
+            
+            // Use getCellFromSheet to validate the referenced cell exists
+            const referencedCell = getCellFromSheet(startSheet, rc.r - 1, rc.c - 1);
+            if (referencedCell) {
+              // Cell exists and can be referenced
+            }
           }
         }
 
@@ -811,8 +830,8 @@ class DependencyAnalyzer {
     this.formulaNodes = new Set();
   }
 
-  analyzeSpreadsheetData(spreadsheetData) {
-    const graph = buildDependencyGraphFromSpreadsheetData(spreadsheetData);
+  analyzeSpreadsheetData(spreadsheetData, allSheetsData = {}) {
+    const graph = buildDependencyGraphFromSpreadsheetData(spreadsheetData, allSheetsData);
 
     // Group adjacent replicated formulas so they share the same depth layer
     const groups = computeReplicatedFormulaGroups(graph);
