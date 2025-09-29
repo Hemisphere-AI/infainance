@@ -1,5 +1,5 @@
 import OpenAI from 'openai';
-import { tools, SYSTEM_PROMPT } from '../utils/tools.js';
+import { tools, SYSTEM_PROMPT, DEPENDENCY_ANALYZER_PROMPT } from '../utils/tools.js';
 import { addrToRC, rcToAddr, sliceRange, getColumnIndex } from '../utils/a1Helpers.js';
 import { tokenSortJaroWinkler } from '../utils/similarity.js';
 
@@ -1714,5 +1714,242 @@ export class LLMService {
       metricColA1: rcToAddr(headerRow + 1, bestCol + 1),
       entityColA1: rcToAddr(headerRow + 1, entityCol + 1)
     };
+  }
+
+  /**
+   * Handle dependency analysis with specialized system prompt
+   * This method processes dependency analysis results using the DEPENDENCY_ANALYZER_PROMPT
+   */
+  async dependencyAnalysisChat(analysisMessage) {
+    try {
+      // Reset cancellation flag for new request
+      this.isCancelled = false;
+      
+      // Create abort controller for this request
+      this.abortController = new AbortController();
+      
+      // Use environment API key
+      const apiKeyToUse = import.meta.env.VITE_OPENAI_KEY;
+
+      // Check if API key is properly configured
+      if (!apiKeyToUse || apiKeyToUse === 'your_openai_api_key_here') {
+        throw new Error('OpenAI API key not configured.');
+      }
+
+      // Check token quota before making API call (skip for test user)
+      const isTestUser = this.isTestUser();
+      
+      if (!isTestUser && this.tokenCache.hasReachedQuota(apiKeyToUse)) {
+        const quotaStatus = this.tokenCache.getQuotaStatus(apiKeyToUse);
+        throw new Error(`OpenAI API key: token limit reached, number of tokens used: ${quotaStatus.used}. <a href="https://calendly.com/hemisphere/30min" target="_blank" rel="noopener noreferrer" class="underline hover:text-blue-800 transition-colors">Click here to increase your limit</a>`);
+      }
+
+      // Create OpenAI client with the appropriate API key
+      const openaiClient = new OpenAI({
+        apiKey: apiKeyToUse,
+        dangerouslyAllowBrowser: true
+      });
+
+      // Add user message to history
+      this.addToHistory("user", analysisMessage);
+
+      // Build conversation messages with dependency analyzer system prompt
+      const messages = [
+        {
+          role: "system",
+          content: DEPENDENCY_ANALYZER_PROMPT
+        },
+        ...this.conversationHistory.map(msg => ({
+          role: msg.role,
+          content: msg.content
+        }))
+      ];
+
+      // 1) Ask model with tools
+      let response = await openaiClient.chat.completions.create({
+        model: "gpt-4o",
+        messages: messages,
+        tools: tools,
+        tool_choice: "auto", // Let model choose appropriate tools
+        temperature: 0.1 // Lower temperature for more consistent behavior
+      });
+
+      // Track tokens from the response
+      if (response.usage && response.usage.total_tokens) {
+        this.tokenCache.addTokens(apiKeyToUse, response.usage.total_tokens);
+      }
+
+      // 2) Handle tool calls in a loop
+      let finalResponse = response;
+      let iterationCount = 0;
+      const maxIterations = 20; // Allow more iterations for complex operations
+      let toolOutputs = []; // Track tool outputs for protocol validation
+
+      while (response.choices[0]?.message?.tool_calls?.length > 0 && iterationCount < maxIterations) {
+        // Check if request was cancelled
+        if (this.isCancelled || this.abortController?.signal?.aborted) {
+          console.log('Request cancelled during tool call processing');
+          throw new Error('Request cancelled by user');
+        }
+        iterationCount++;
+        const toolCalls = response.choices[0].message.tool_calls;
+        
+        console.log(`Dependency analysis tool call iteration ${iterationCount}:`, toolCalls.map(call => ({
+          id: call.id,
+          function: call.function.name,
+          arguments: call.function.arguments
+        })));
+        
+        // Add the assistant's message with tool calls to the conversation
+        messages.push(response.choices[0].message);
+        
+        // Execute all tool calls
+        for (const call of toolCalls) {
+          // Check if request was cancelled before each tool call
+          if (this.isCancelled || this.abortController?.signal?.aborted) {
+            console.log('Request cancelled before tool call execution');
+            throw new Error('Request cancelled by user');
+          }
+          
+          const toolArgs = JSON.parse(call.function.arguments);
+          
+          // Protocol guard: Check if conclude is being called without data read
+          if (call.function.name === 'conclude') {
+            const usedDataRead = () => {
+              // Check for direct data reading tools
+              const hasDataRead = toolOutputs.some(t => 
+                ["read_cell", "read_sheet", "find_subframe", "find_label_value"].includes(t.tool_name)
+              );
+              return hasDataRead;
+            };
+
+            if (!usedDataRead()) {
+              console.warn('Protocol violation: conclude called without data read. Adding read_sheet call.');
+              // Add a read_sheet call to get some data first
+              const readSheetCall = {
+                id: `call_${Date.now()}_read_sheet`,
+                type: "function",
+                function: {
+                  name: "read_sheet",
+                  arguments: JSON.stringify({ range: "A1:Z50" })
+                }
+              };
+              toolCalls.push(readSheetCall);
+              
+              // Add a tool response for the skipped conclude call
+              messages.push({
+                role: "tool",
+                tool_call_id: call.id,
+                content: JSON.stringify({ 
+                  error: "Protocol violation: conclude called without data read. Adding read_sheet call first." 
+                })
+              });
+              continue; // Skip the conclude call for now
+            }
+          }
+          
+          try {
+            const result = await this.execTool(call.function.name, toolArgs);
+            
+            // Track tool outputs for protocol validation
+            toolOutputs.push({
+              tool_name: call.function.name,
+              success: !result.error
+            });
+            
+            // Add tool result to conversation
+            messages.push({
+              role: "tool",
+              tool_call_id: call.id,
+              content: JSON.stringify(result)
+            });
+            
+            // Emit tool call event for UI
+            if (this.toolCallHandler) {
+              this.toolCallHandler({
+                type: 'tool_call',
+                id: call.id,
+                tool: call.function.name,
+                arguments: toolArgs,
+                timestamp: new Date()
+              });
+              
+              // Emit tool result event
+              setTimeout(() => {
+                this.toolCallHandler({
+                  type: 'tool_result',
+                  id: call.id,
+                  tool: call.function.name,
+                  result: result,
+                  timestamp: new Date()
+                });
+              }, 100);
+            }
+            
+          } catch (error) {
+            console.error(`Error executing tool ${call.function.name}:`, error);
+            
+            // Add error result to conversation
+            messages.push({
+              role: "tool",
+              tool_call_id: call.id,
+              content: JSON.stringify({ error: error.message })
+            });
+            
+            // Emit tool call event for UI
+            if (this.toolCallHandler) {
+              this.toolCallHandler({
+                type: 'tool_call',
+                id: call.id,
+                tool: call.function.name,
+                arguments: toolArgs,
+                timestamp: new Date()
+              });
+              
+              // Emit tool result event with error
+              setTimeout(() => {
+                this.toolCallHandler({
+                  type: 'tool_result',
+                  id: call.id,
+                  tool: call.function.name,
+                  result: { error: error.message },
+                  timestamp: new Date()
+                });
+              }, 100);
+            }
+          }
+        }
+        
+        // Get next response from model
+        response = await openaiClient.chat.completions.create({
+          model: "gpt-4o",
+          messages: messages,
+          tools: tools,
+          tool_choice: "auto",
+          temperature: 0.1
+        });
+        
+        // Track tokens from the response
+        if (response.usage && response.usage.total_tokens) {
+          this.tokenCache.addTokens(apiKeyToUse, response.usage.total_tokens);
+        }
+        
+        finalResponse = response;
+      }
+
+      // Add assistant response to history
+      const assistantMessage = finalResponse.choices[0].message.content;
+      this.addToHistory("assistant", assistantMessage);
+
+      return assistantMessage;
+
+    } catch (error) {
+      console.error('Dependency analysis chat error:', error);
+      
+      // Add error to history
+      this.addToHistory("assistant", `Error: ${error.message}`);
+      
+      throw error;
+    }
   }
 }
