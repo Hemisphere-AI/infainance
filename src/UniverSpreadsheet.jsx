@@ -40,7 +40,10 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
         decimalPlaces: cell?.decimalPlaces,
         isCurrency: cell?.isCurrency,
         isPercentage: cell?.isPercentage,
-        currencySymbol: cell?.currencySymbol
+        currencySymbol: cell?.currencySymbol,
+        isFormula: cell?.isFormula,
+        cellType: cell?.cellType,
+        rawValue: cell?.rawValue
       }))
     ))
   }, [])
@@ -125,7 +128,6 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
     if (recalculationQueueRef.current.size === 0) return
     
     const cellsToRecalc = Array.from(recalculationQueueRef.current)
-    console.log('Processing recalculation queue:', cellsToRecalc)
     
     // Force multiple re-renders to ensure the component updates
     setRecalcTrigger(prev => prev + 1)
@@ -198,7 +200,6 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
   useEffect(() => {
     const currentHash = generateDataHash(data)
     if (currentHash !== lastDataHashRef.current) {
-      console.log('Data change detected, clearing cache and establishing dependencies')
       clearFormulaCache()
       lastDataHashRef.current = currentHash
       
@@ -223,7 +224,6 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       
       // Trigger recalculation for all formula cells
       if (changedCells.size > 0) {
-        console.log('Triggering recalculation for changed cells:', Array.from(changedCells))
         changedCells.forEach(cellKey => {
           triggerRecalculation(cellKey)
         })
@@ -482,30 +482,14 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
 
   // Handle cell value change (without triggering recalculation during typing)
   const handleCellChange = useCallback((rowIndex, colIndex, value, shouldRecalculate = false) => {
-    console.log('handleCellChange called:', { rowIndex, colIndex, value, shouldRecalculate })
     if (onDataChange) {
       const cellKey = `${rowIndex}-${colIndex}`
       const oldValue = data[rowIndex]?.[colIndex]?.value
       const newValue = value
       
-      console.log('Data structure check:', {
-        rowExists: !!data[rowIndex],
-        cellExists: !!data[rowIndex]?.[colIndex],
-        cellData: data[rowIndex]?.[colIndex],
-        rowData: data[rowIndex]
-      })
       
       // Check if the value actually changed
       const valueChanged = oldValue !== newValue
-      console.log('Value comparison:', {
-        oldValue: oldValue,
-        newValue: newValue,
-        oldType: typeof oldValue,
-        newType: typeof newValue,
-        oldString: String(oldValue),
-        newString: String(newValue),
-        valueChanged: valueChanged
-      })
       
       const newData = [...data]
       if (!newData[rowIndex]) newData[rowIndex] = []
@@ -554,7 +538,6 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
 
       // Only trigger recalculation if explicitly requested (e.g., on Enter key)
       if (shouldRecalculate && valueChanged) {
-        console.log('Triggering recalculation for cell:', cellKey)
         triggerRecalculation(cellKey)
         // Process recalculation queue immediately
         processRecalculationQueue()
@@ -563,7 +546,6 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
         setRecalcTrigger(prev => prev + 1)
         setForceUpdate(prev => prev + 1)
       } else {
-        console.log('Not triggering recalculation:', { shouldRecalculate, valueChanged })
       }
 
       // Trigger autocomplete
@@ -1808,7 +1790,6 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
         
         // Debug: Log inter-sheet formula evaluation
         if (cellValue.includes('!') && import.meta.env.DEV) {
-          console.log(`Evaluating inter-sheet formula: ${cellValue} -> ${result}`)
         }
         
         // Apply enhanced formatting based on cell properties
@@ -1867,7 +1848,6 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
           
           // Get the current value directly from the input element
           const currentValue = e.target.value
-          console.log('Enter pressed, inputValue:', inputValue, 'currentValue:', currentValue)
           // Trigger recalculation when Enter is pressed
           handleCellChange(rowIndex, colIndex, currentValue, true) // true = shouldRecalculate
           
@@ -1889,7 +1869,6 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
           
           // Get the current value directly from the input element
           const currentValue = e.target.value
-          console.log('Tab pressed, inputValue:', inputValue, 'currentValue:', currentValue)
           // Trigger recalculation when Tab is pressed
           handleCellChange(rowIndex, colIndex, currentValue, true) // true = shouldRecalculate
           

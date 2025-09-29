@@ -75,7 +75,6 @@ class TokenCache {
     this.cache = {};
     this.lastReset = new Date();
     this.saveCache();
-    console.log('Token cache reset for new month');
   }
 
   /**
@@ -93,7 +92,6 @@ class TokenCache {
     const keyHash = this.hashApiKey(apiKey);
     const current = this.getTokenUsage(apiKey);
     
-    console.log(`Before adding tokens: ${current.totalTokens}, adding: ${tokens}`);
     
     this.cache[keyHash] = {
       totalTokens: current.totalTokens + tokens,
@@ -102,8 +100,6 @@ class TokenCache {
     
     this.saveCache();
     
-    console.log(`Added ${tokens} tokens for API key. Total: ${this.cache[keyHash].totalTokens}/${this.quotaLimit}`);
-    console.log('Cache after update:', this.cache);
   }
 
   /**
@@ -126,7 +122,6 @@ class TokenCache {
       hasReachedQuota: usage.totalTokens >= this.quotaLimit,
       lastUsed: usage.lastUsed
     };
-    console.log('getQuotaStatus called:', { apiKey: apiKey.substring(0, 10) + '...', usage, quotaStatus });
     return quotaStatus;
   }
 
@@ -911,6 +906,15 @@ export class LLMService {
   }
 
   /**
+   * Trim conversation history to keep only the last N messages
+   */
+  trimHistory(maxMessages = 20) {
+    if (this.conversationHistory.length > maxMessages) {
+      this.conversationHistory = this.conversationHistory.slice(-maxMessages);
+    }
+  }
+
+  /**
    * Cancel current request
    */
   cancel() {
@@ -938,11 +942,6 @@ export class LLMService {
     // Check if this is a test user (demo user or demo key)
     const isTestUser = this.isTestUser();
     
-    console.log('Token quota check:', { 
-      apiKeyToUse, 
-      isTestUser, 
-      quotaStatus 
-    });
     
     if (isTestUser) {
       return {
@@ -1006,13 +1005,14 @@ export class LLMService {
       // Add user message to history
       this.addToHistory("user", userText);
 
-      // Build conversation messages with full history
+      // Build conversation messages with limited history (last 10 messages)
+      const recentHistory = this.conversationHistory.slice(-10);
       const messages = [
         {
           role: "system",
           content: SYSTEM_PROMPT
         },
-        ...this.conversationHistory.map(msg => ({
+        ...recentHistory.map(msg => ({
           role: msg.role,
           content: msg.content
         }))
@@ -1035,7 +1035,7 @@ export class LLMService {
       // 2) Handle tool calls in a loop
       let finalResponse = response;
       let iterationCount = 0;
-      const maxIterations = 20; // Allow more iterations for complex operations like indexing
+      const maxIterations = 10; // Limit iterations to prevent excessive token usage
       let toolOutputs = []; // Track tool outputs for protocol validation
 
       while (response.choices[0]?.message?.tool_calls?.length > 0 && iterationCount < maxIterations) {
@@ -1196,9 +1196,17 @@ export class LLMService {
         finalResponse = response;
       }
 
+      // Check if we hit the iteration limit
+      if (iterationCount >= maxIterations) {
+        console.warn(`Reached maximum tool call iterations (${maxIterations}). This may indicate an infinite loop or excessive tool usage.`);
+      }
+
       // 3) Add assistant response to history and return
       const assistantResponse = finalResponse.choices[0]?.message?.content || "No response generated.";
       this.addToHistory("assistant", assistantResponse);
+      
+      // Trim history to prevent excessive token usage
+      this.trimHistory(20);
       
       return assistantResponse;
 
