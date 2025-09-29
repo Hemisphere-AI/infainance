@@ -40,6 +40,59 @@ function numToCol(n) {
   return s;
 }
 
+function rcToA1(r, c) {
+  return `${numToCol(c)}${r}`;
+}
+
+// Helper function to create compact ranges for a list of cells
+function createCompactRangesForCells(cells) {
+  if (cells.length === 0) return [];
+  
+  // Convert to RC coordinates and sort
+  const cellCoords = cells.map(addr => a1ToRC(addr)).sort((a, b) => a.r - b.r || a.c - b.c);
+  
+  // Group by row first
+  const byRow = new Map();
+  cellCoords.forEach(coord => {
+    if (!byRow.has(coord.r)) byRow.set(coord.r, []);
+    byRow.get(coord.r).push(coord.c);
+  });
+  
+  const ranges = [];
+  
+  // Process each row
+  for (const [row, cols] of byRow.entries()) {
+    cols.sort((a, b) => a - b);
+    
+    // Create ranges within this row
+    let start = cols[0];
+    let end = cols[0];
+    
+    for (let i = 1; i < cols.length; i++) {
+      if (cols[i] === end + 1) {
+        end = cols[i];
+      } else {
+        // End current range and start new one
+        if (start === end) {
+          ranges.push(rcToA1(row, start));
+        } else {
+          ranges.push(`${rcToA1(row, start)}:${rcToA1(row, end)}`);
+        }
+        start = end = cols[i];
+      }
+    }
+    
+    // Add the last range for this row
+    if (start === end) {
+      ranges.push(rcToA1(row, start));
+    } else {
+      ranges.push(`${rcToA1(row, start)}:${rcToA1(row, end)}`);
+    }
+  }
+  
+  return ranges;
+}
+
 
 // Helper function to check if user is a test user
 function isTestUser(user) {
@@ -1362,83 +1415,67 @@ function ExcelApp() {
     // Use the merged groups for display
     const finalGroups = mergedGroups;
     
-    // Display grouped relationships
-    Object.values(finalGroups).forEach(group => {
-      // Sort cells to show ranges when possible
-      group.cells.sort((a, b) => {
-        const aRC = a1ToRC(a);
-        const bRC = a1ToRC(b);
-        if (aRC.r !== bRC.r) return aRC.r - bRC.r;
-        return aRC.c - bRC.c;
-      });
+    // Display grouped relationships using the compact frames from the analysis
+    // Instead of using the complex group mapping, use the frames directly
+    const processedGroups = new Set();
+    result.frames.forEach((frame) => {
+      // Get all cells in this frame
+      const frameCells = new Set();
       
-      // Create cell range display - group by rows first
-      const cellRanges = [];
-      const cellsByRow = {};
-      
-      // Group cells by row
-      group.cells.forEach(cell => {
-        const rc = a1ToRC(cell);
-        if (!cellsByRow[rc.r]) cellsByRow[rc.r] = [];
-        cellsByRow[rc.r].push(cell);
-      });
-      
-      // Process each row to create ranges
-      Object.keys(cellsByRow).sort((a, b) => parseInt(a) - parseInt(b)).forEach(row => {
-        const rowCells = cellsByRow[row].sort((a, b) => {
-          const aRC = a1ToRC(a);
-          const bRC = a1ToRC(b);
-          return aRC.c - bRC.c;
-        });
-        
-        // Debug logging for main blocks
-        console.log(`Main block processing row ${row}, cells:`, rowCells);
-        
-        // If only one cell in row, just add it
-        if (rowCells.length === 1) {
-          cellRanges.push(rowCells[0]);
-          return;
-        }
-        
-        // Create ranges within this row
-        let currentRange = { start: rowCells[0], end: rowCells[0] };
-        
-        for (let i = 1; i < rowCells.length; i++) {
-          const current = a1ToRC(rowCells[i]);
-          const prev = a1ToRC(rowCells[i-1]);
-          
-          console.log(`Main block comparing ${rowCells[i-1]} (c=${prev.c}) with ${rowCells[i]} (c=${current.c}), adjacent: ${current.c === prev.c + 1}`);
-          
-          // Check if cells are adjacent (consecutive columns)
-          if (current.c === prev.c + 1) {
-            currentRange.end = rowCells[i];
-          } else {
-            // End current range and start new one
-            if (currentRange.start === currentRange.end) {
-              cellRanges.push(currentRange.start);
-            } else {
-              cellRanges.push(`${currentRange.start}:${currentRange.end}`);
+      // Collect all cells from horizontal ranges
+      frame.horizontal.forEach(range => {
+        if (range.includes(':')) {
+          const [start, end] = range.split(':');
+          const startRC = a1ToRC(start);
+          const endRC = a1ToRC(end);
+          for (let r = startRC.r; r <= endRC.r; r++) {
+            for (let c = startRC.c; c <= endRC.c; c++) {
+              frameCells.add(rcToA1(r, c));
             }
-            currentRange = { start: rowCells[i], end: rowCells[i] };
           }
-        }
-        
-        // Add the last range for this row
-        if (currentRange.start === currentRange.end) {
-          cellRanges.push(currentRange.start);
         } else {
-          cellRanges.push(`${currentRange.start}:${currentRange.end}`);
+          frameCells.add(range);
         }
       });
       
-      const cellDisplay = cellRanges.join(', ');
+      // Collect all cells from vertical ranges
+      frame.vertical.forEach(range => {
+        if (range.includes(':')) {
+          const [start, end] = range.split(':');
+          const startRC = a1ToRC(start);
+          const endRC = a1ToRC(end);
+          for (let r = startRC.r; r <= endRC.r; r++) {
+            for (let c = startRC.c; c <= endRC.c; c++) {
+              frameCells.add(rcToA1(r, c));
+            }
+          }
+        } else {
+          frameCells.add(range);
+        }
+      });
+      
+      // Find the group that matches this frame
+      const matchingGroup = Object.values(finalGroups).find(group => {
+        return group.cells.some(cell => frameCells.has(cell));
+      });
+      
+      if (!matchingGroup) return;
+      
+      // Skip if we've already processed this group
+      const groupKey = matchingGroup.cells.sort().join(',');
+      if (processedGroups.has(groupKey)) return;
+      processedGroups.add(groupKey);
+      
+      // Use the compact ranges from the frame, removing duplicates
+      const allRanges = [...new Set([...frame.horizontal, ...frame.vertical])];
+      const cellDisplay = allRanges.join(', ');
       
       // Detect labels for this group
       console.log(`Detecting labels for group: ${cellDisplay}`);
-      const labels = detectLabelsForGroup(group.cells, result);
+      const labels = detectLabelsForGroup(matchingGroup.cells, result);
       console.log(`Labels found:`, labels);
       
-      message += `\n**${cellDisplay}** (${group.description}):\n`;
+      message += `\n**${cellDisplay}** (${matchingGroup.description}):\n`;
       
       // Add label information if available
       if (labels) {
@@ -1458,12 +1495,12 @@ function ExcelApp() {
         console.log(`No labels found for group: ${cellDisplay}`);
       }
       
-      message += `  Formula: ${group.formula}\n`;
+      message += `  Formula: ${matchingGroup.formula}\n`;
       message += `  Depends on:\n`;
       
       // Group source dependencies by their relative position and normalized formula pattern
       const sourceGroups = {};
-      group.relationships.forEach(rel => {
+      matchingGroup.relationships.forEach(rel => {
         const sourceMeta = result.graph.nodeMeta?.get(
           Array.from(result.graph.allNodes).find(nodeKey => {
             const { addr } = parseKey(nodeKey);
@@ -1473,21 +1510,25 @@ function ExcelApp() {
         const sourceFormula = sourceMeta ? sourceMeta.formula : 'Data';
         const sourceDesc = getFormulaDescription(sourceFormula);
         
-        // Get the relative position of the source cell
-        const targetRC = a1ToRC(group.cells[0]); // Use first cell in group as reference
-        const sourceRC = a1ToRC(rel.from);
-        const relativeRow = sourceRC.r - targetRC.r;
-        const relativeCol = sourceRC.c - targetRC.c;
-        
-        // Create a normalized formula signature for the source
+        // Create a normalized formula signature for the source (without relative position)
         let normalizedSourceFormula = sourceFormula;
         if (sourceFormula && sourceFormula.startsWith('=')) {
+          // More aggressive normalization to group similar patterns
           normalizedSourceFormula = sourceFormula
             .replace(/\$?[A-Z]+\$?\d+/g, 'CELL') // Replace A1, $B$2, etc. with CELL
             .replace(/\$?[A-Z]+\$?\d+:\$?[A-Z]+\$?\d+/g, 'RANGE'); // Replace A1:B2 with RANGE
         }
         
-        const sourceKey = `${relativeRow},${relativeCol}:${normalizedSourceFormula}|${sourceDesc}`;
+        // For formulas that are just cell references (like =E13, =E14), group them together
+        if (normalizedSourceFormula === '=CELL' && sourceFormula && sourceFormula.startsWith('=')) {
+          normalizedSourceFormula = '=CELL_REF'; // Group all single cell references together
+        }
+        
+        // Debug: log the formula normalization
+        console.log(`Source formula: ${sourceFormula} -> normalized: ${normalizedSourceFormula}`);
+        
+        // Group by formula pattern and description only, not by relative position
+        const sourceKey = `${normalizedSourceFormula}|${sourceDesc}`;
         if (!sourceGroups[sourceKey]) {
           sourceGroups[sourceKey] = {
             formula: sourceFormula,
@@ -1498,73 +1539,17 @@ function ExcelApp() {
         sourceGroups[sourceKey].cells.push(rel.from);
       });
       
-      // Display grouped source dependencies with ranges
+      // Display grouped source dependencies with compact ranges
       Object.values(sourceGroups).forEach(sourceGroup => {
-        sourceGroup.cells.sort((a, b) => {
-          const aRC = a1ToRC(a);
-          const bRC = a1ToRC(b);
-          if (aRC.r !== bRC.r) return aRC.r - bRC.r;
-          return aRC.c - bRC.c;
-        });
+        // Debug: log the cells being processed
+        console.log(`Source group cells:`, sourceGroup.cells);
         
-        // Create source cell range display - group by rows
-        const sourceCellRanges = [];
-        const sourceCellsByRow = {};
+        // Use the compact range algorithm for source cells
+        const compactRanges = createCompactRangesForCells(sourceGroup.cells);
+        console.log(`Compact ranges:`, compactRanges);
         
-        // Group source cells by row
-        sourceGroup.cells.forEach(cell => {
-          const rc = a1ToRC(cell);
-          if (!sourceCellsByRow[rc.r]) sourceCellsByRow[rc.r] = [];
-          sourceCellsByRow[rc.r].push(cell);
-        });
+        const sourceCellDisplay = compactRanges.join(', ');
         
-        // Process each row to create ranges
-        Object.keys(sourceCellsByRow).sort((a, b) => parseInt(a) - parseInt(b)).forEach(row => {
-          const rowCells = sourceCellsByRow[row].sort((a, b) => {
-            const aRC = a1ToRC(a);
-            const bRC = a1ToRC(b);
-            return aRC.c - bRC.c;
-          });
-          
-          // Debug logging
-          console.log(`Processing row ${row}, cells:`, rowCells);
-          
-          // If only one cell in row, just add it
-          if (rowCells.length === 1) {
-            sourceCellRanges.push(rowCells[0]);
-            return;
-          }
-          
-          // Create ranges within this row
-          let currentSourceRange = { start: rowCells[0], end: rowCells[0] };
-          
-          for (let i = 1; i < rowCells.length; i++) {
-            const current = a1ToRC(rowCells[i]);
-            const prev = a1ToRC(rowCells[i-1]);
-            
-            console.log(`Comparing ${rowCells[i-1]} (c=${prev.c}) with ${rowCells[i]} (c=${current.c}), adjacent: ${current.c === prev.c + 1}`);
-            
-            if (current.c === prev.c + 1) {
-              currentSourceRange.end = rowCells[i];
-            } else {
-              if (currentSourceRange.start === currentSourceRange.end) {
-                sourceCellRanges.push(currentSourceRange.start);
-              } else {
-                sourceCellRanges.push(`${currentSourceRange.start}:${currentSourceRange.end}`);
-              }
-              currentSourceRange = { start: rowCells[i], end: rowCells[i] };
-            }
-          }
-          
-          // Add the last range for this row
-          if (currentSourceRange.start === currentSourceRange.end) {
-            sourceCellRanges.push(currentSourceRange.start);
-          } else {
-            sourceCellRanges.push(`${currentSourceRange.start}:${currentSourceRange.end}`);
-          }
-        });
-        
-        const sourceCellDisplay = sourceCellRanges.join(', ');
         message += `    • ${sourceCellDisplay} (${sourceGroup.description})\n`;
         if (sourceGroup.formula !== 'Data') {
           message += `      Source formula: ${sourceGroup.formula}\n`;

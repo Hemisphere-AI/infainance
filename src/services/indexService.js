@@ -583,58 +583,104 @@ function forwardTopoLayers(graph) {
 // Frames (merge contiguous)
 // -----------------------------
 
-function contiguousRangesSameRow(addrs) {
-  const byRow = new Map();
-  for (const a of addrs) {
-    const { r, c } = a1ToRC(a);
-    const arr = byRow.get(r) || [];
-    arr.push(c);
-    byRow.set(r, arr);
-  }
-  const frames = [];
-  for (const [r, cols] of byRow.entries()) {
-    cols.sort((a, b) => a - b);
-    let start = cols[0];
-    let prev = start;
-    for (let i = 1; i < cols.length; i++) {
-      const c = cols[i];
-      if (c === prev + 1) {
-        prev = c;
-      } else {
-        frames.push(start === prev ? rcToA1(r, start) : `${rcToA1(r, start)}:${rcToA1(r, prev)}`);
-        start = prev = c;
-      }
-    }
-    frames.push(start === prev ? rcToA1(r, start) : `${rcToA1(r, start)}:${rcToA1(r, prev)}`);
-  }
-  return frames;
-}
 
-function contiguousRangesSameCol(addrs) {
-  const byCol = new Map();
-  for (const a of addrs) {
-    const { r, c } = a1ToRC(a);
-    const arr = byCol.get(c) || [];
-    arr.push(r);
-    byCol.set(c, arr);
-  }
-  const frames = [];
-  for (const [c, rows] of byCol.entries()) {
-    rows.sort((a, b) => a - b);
-    let start = rows[0];
-    let prev = start;
-    for (let i = 1; i < rows.length; i++) {
-      const r = rows[i];
-      if (r === prev + 1) {
-        prev = r;
-      } else {
-        frames.push(start === prev ? rcToA1(start, c) : `${rcToA1(start, c)}:${rcToA1(prev, c)}`);
-        start = prev = r;
+function createCompactRanges(addrs) {
+  if (addrs.length === 0) return { horizontal: [], vertical: [] };
+  
+  // Convert to RC coordinates
+  const cells = addrs.map(addr => a1ToRC(addr));
+  
+  // Find bounding box
+  const minRow = Math.min(...cells.map(c => c.r));
+  const maxRow = Math.max(...cells.map(c => c.r));
+  const minCol = Math.min(...cells.map(c => c.c));
+  const maxCol = Math.max(...cells.map(c => c.c));
+  
+  // Create a grid to mark which cells are present
+  const grid = new Map();
+  cells.forEach(cell => {
+    grid.set(`${cell.r},${cell.c}`, true);
+  });
+  
+  // Find rectangular blocks
+  const rectangles = [];
+  const processed = new Set();
+  
+  for (let r = minRow; r <= maxRow; r++) {
+    for (let c = minCol; c <= maxCol; c++) {
+      const key = `${r},${c}`;
+      if (!grid.has(key) || processed.has(key)) continue;
+      
+      // Find the largest rectangle starting from this cell
+      let maxHeight = 0;
+      let maxWidth = 0;
+      let bestRect = null;
+      
+      // Try different rectangle sizes
+      for (let height = 1; height <= maxRow - r + 1; height++) {
+        for (let width = 1; width <= maxCol - c + 1; width++) {
+          let valid = true;
+          for (let dr = 0; dr < height && valid; dr++) {
+            for (let dc = 0; dc < width && valid; dc++) {
+              if (!grid.has(`${r + dr},${c + dc}`)) {
+                valid = false;
+              }
+            }
+          }
+          
+          if (valid && (height * width > maxHeight * maxWidth || 
+                      (height * width === maxHeight * maxWidth && height > maxHeight))) {
+            maxHeight = height;
+            maxWidth = width;
+            bestRect = { r, c, height, width };
+          }
+        }
+      }
+      
+      if (bestRect && bestRect.height * bestRect.width > 1) {
+        rectangles.push(bestRect);
+        
+        // Mark all cells in this rectangle as processed
+        for (let dr = 0; dr < bestRect.height; dr++) {
+          for (let dc = 0; dc < bestRect.width; dc++) {
+            processed.add(`${bestRect.r + dr},${bestRect.c + dc}`);
+          }
+        }
       }
     }
-    frames.push(start === prev ? rcToA1(start, c) : `${rcToA1(start, c)}:${rcToA1(prev, c)}`);
   }
-  return frames;
+  
+  // Convert rectangles to A1 ranges
+  const horizontal = [];
+  const vertical = [];
+  
+  rectangles.forEach(rect => {
+    const startCell = rcToA1(rect.r, rect.c);
+    const endCell = rcToA1(rect.r + rect.height - 1, rect.c + rect.width - 1);
+    const range = rect.height === 1 && rect.width === 1 ? startCell : `${startCell}:${endCell}`;
+    
+    if (rect.height === 1) {
+      horizontal.push(range);
+    } else if (rect.width === 1) {
+      vertical.push(range);
+    } else {
+      // For multi-dimensional rectangles, add to both
+      horizontal.push(range);
+      vertical.push(range);
+    }
+  });
+  
+  // Add any remaining single cells
+  cells.forEach(cell => {
+    const key = `${cell.r},${cell.c}`;
+    if (!processed.has(key)) {
+      const addr = rcToA1(cell.r, cell.c);
+      horizontal.push(addr);
+      vertical.push(addr);
+    }
+  });
+  
+  return { horizontal, vertical };
 }
 
 function framesForLayers(layers) {
@@ -643,8 +689,7 @@ function framesForLayers(layers) {
     const addrs = layer.map((k) => parseKey(k).addr);
     return {
       layer: idx,
-      horizontal: contiguousRangesSameRow(addrs),
-      vertical: contiguousRangesSameCol(addrs),
+      ...createCompactRanges(addrs),
     };
   });
 }
@@ -684,23 +729,70 @@ function computeReplicatedFormulaGroups(graph) {
     coordToNode.set(`${meta.r},${meta.c}`, k);
   }
 
-  // Connect adjacent replicated formulas with the same canonical signature
+  // Enhanced grouping: connect cells with same signature in rectangular patterns
+  // First, group by signature
+  const signatureGroups = new Map();
   for (const k of graph.formulaNodes) {
     const meta = graph.nodeMeta?.get(k);
-    if (!meta) continue;
-    const neighbors = [
-      [meta.r + 1, meta.c],
-      [meta.r - 1, meta.c],
-      [meta.r, meta.c + 1],
-      [meta.r, meta.c - 1],
-    ];
-    for (const [nr, nc] of neighbors) {
-      const neighbor = coordToNode.get(`${nr},${nc}`);
-      if (!neighbor) continue;
-      const nmeta = graph.nodeMeta?.get(neighbor);
-      if (!nmeta) continue;
-      if (nmeta.signature && meta.signature && nmeta.signature === meta.signature) {
-        union(k, neighbor);
+    if (!meta || !meta.signature) continue;
+    
+    if (!signatureGroups.has(meta.signature)) {
+      signatureGroups.set(meta.signature, []);
+    }
+    signatureGroups.get(meta.signature).push({ node: k, r: meta.r, c: meta.c });
+  }
+
+  // For each signature group, find rectangular patterns
+  for (const [signature, cells] of signatureGroups) {
+    if (cells.length < 2) continue;
+    
+    // Sort cells by row, then column
+    cells.sort((a, b) => a.r - b.r || a.c - b.c);
+    
+    // Group cells into rectangular blocks
+    const blocks = [];
+    const processed = new Set();
+    
+    for (const cell of cells) {
+      if (processed.has(cell.node)) continue;
+      
+      const block = [cell];
+      processed.add(cell.node);
+      
+      // Find all cells that form a rectangle with this cell
+      const queue = [cell];
+      while (queue.length > 0) {
+        const current = queue.shift();
+        
+        // Check all 8 directions (including diagonals) for cells with same signature
+        for (const [dr, dc] of [[-1,-1], [-1,0], [-1,1], [0,-1], [0,1], [1,-1], [1,0], [1,1]]) {
+          const nr = current.r + dr;
+          const nc = current.c + dc;
+          const neighborKey = coordToNode.get(`${nr},${nc}`);
+          
+          if (neighborKey && !processed.has(neighborKey)) {
+            const neighborMeta = graph.nodeMeta?.get(neighborKey);
+            if (neighborMeta && neighborMeta.signature === signature) {
+              const neighborCell = { node: neighborKey, r: nr, c: nc };
+              block.push(neighborCell);
+              queue.push(neighborCell);
+              processed.add(neighborKey);
+            }
+          }
+        }
+      }
+      
+      if (block.length > 1) {
+        blocks.push(block);
+      }
+    }
+    
+    // Connect all cells within each rectangular block
+    for (const block of blocks) {
+      for (let i = 0; i < block.length; i++) {
+        for (let j = i + 1; j < block.length; j++) {
+          union(block[i].node, block[j].node);
+        }
       }
     }
   }
