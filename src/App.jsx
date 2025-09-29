@@ -837,57 +837,136 @@ function ExcelApp() {
       return meta && meta.formula
     }).length
     
-    let message = `📊 **Dependency Analysis Complete!**\n\n`
-    message += `🔍 **Analysis Summary:**\n`
+    let message = `**Analysis Summary:**\n`
     message += `• **${totalLayers}** dependency layers identified\n`
     message += `• **${totalCells}** total cells analyzed\n`
     message += `• **${formulaCells}** formula cells found\n\n`
     
-    message += `📋 **Layer Breakdown:**\n`
-    result.layers.forEach((layer, index) => {
-      const layerCells = layer.length
-      const layerFormulas = layer.filter(nodeKey => {
-        const meta = result.graph.nodeMeta?.get(nodeKey)
-        return meta && meta.formula
-      }).length
+
+
+    // Extract formula information and dependencies
+    const getFormulaDescription = (formula) => {
+      if (!formula || !formula.startsWith('=')) return 'Data';
       
-      message += `**Layer ${index}:** ${layerCells} cells (${layerFormulas} formulas)\n`
+      const cleanFormula = formula.replace(/[=]/g, '').toUpperCase();
       
-      // Show some example cells from this layer
-      const exampleCells = layer.slice(0, 5).map(nodeKey => {
-        const { addr } = parseKey(nodeKey)
-        return addr
-      }).join(', ')
+      if (cleanFormula.includes('SUM(')) return 'Sum calculation';
+      if (cleanFormula.includes('AVERAGE(')) return 'Average calculation';
+      if (cleanFormula.includes('COUNT(')) return 'Count calculation';
+      if (cleanFormula.includes('MAX(')) return 'Maximum calculation';
+      if (cleanFormula.includes('MIN(')) return 'Minimum calculation';
+      if (cleanFormula.includes('+')) return 'Addition';
+      if (cleanFormula.includes('-')) return 'Subtraction';
+      if (cleanFormula.includes('*')) return 'Multiplication';
+      if (cleanFormula.includes('/')) return 'Division';
       
-      if (layer.length > 5) {
-        message += `  └─ Examples: ${exampleCells}... (+${layer.length - 5} more)\n`
-      } else {
-        message += `  └─ Cells: ${exampleCells}\n`
+      return 'Formula calculation';
+    };
+
+    // Build dependency relationships
+    message += `**Dependency Relationships:**\n`
+    
+    // Collect all dependency relationships
+    const allRelationships = [];
+    const processedPairs = new Set();
+    
+    // Go through all layers to find relationships
+    result.layers.forEach((layer, layerIndex) => {
+      layer.forEach(nodeKey => {
+        const { addr } = parseKey(nodeKey);
+        const meta = result.graph.nodeMeta?.get(nodeKey);
+        
+        if (meta && meta.formula) {
+          // Find what this cell depends on
+          const precedents = result.graph.precedents.get(nodeKey);
+          if (precedents) {
+            precedents.forEach(precNodeKey => {
+              const { addr: precAddr } = parseKey(precNodeKey);
+              const relationshipKey = `${precAddr} → ${addr}`;
+              
+              if (!processedPairs.has(relationshipKey)) {
+                processedPairs.add(relationshipKey);
+                
+                // Get the exact formula
+                const formula = meta.formula;
+                const formulaDesc = getFormulaDescription(formula);
+                
+                allRelationships.push({
+                  from: precAddr,
+                  to: addr,
+                  formula: formula,
+                  description: formulaDesc,
+                  layer: layerIndex
+                });
+              }
+            });
+          }
+        }
+      });
+    });
+    
+    // Group relationships by target cell (what they feed into)
+    const relationshipsByTarget = {};
+    allRelationships.forEach(rel => {
+      if (!relationshipsByTarget[rel.to]) {
+        relationshipsByTarget[rel.to] = [];
       }
-    })
+      relationshipsByTarget[rel.to].push(rel);
+    });
     
-    message += `\n🎯 **Key Insights:**\n`
-    if (totalLayers > 1) {
-      message += `• Your spreadsheet has a ${totalLayers}-layer dependency structure\n`
-      message += `• Layer 0 contains the final outputs/results\n`
-      message += `• Higher layers contain the input data and intermediate calculations\n`
-    } else {
-      message += `• All formulas are at the same dependency level\n`
+    // Display all relationships
+    Object.keys(relationshipsByTarget).forEach(targetCell => {
+      const relationships = relationshipsByTarget[targetCell];
+      const targetMeta = result.graph.nodeMeta?.get(
+        Array.from(result.graph.allNodes).find(nodeKey => {
+          const { addr } = parseKey(nodeKey);
+          return addr === targetCell;
+        })
+      );
+      
+      const targetFormula = targetMeta ? targetMeta.formula : 'Data';
+      const targetDesc = getFormulaDescription(targetFormula);
+      
+      message += `\n**${targetCell}** (${targetDesc}):\n`;
+      message += `  Formula: ${targetFormula}\n`;
+      message += `  Depends on:\n`;
+      
+      relationships.forEach(rel => {
+        const sourceMeta = result.graph.nodeMeta?.get(
+          Array.from(result.graph.allNodes).find(nodeKey => {
+            const { addr } = parseKey(nodeKey);
+            return addr === rel.from;
+          })
+        );
+        const sourceFormula = sourceMeta ? sourceMeta.formula : 'Data';
+        const sourceDesc = getFormulaDescription(sourceFormula);
+        
+        message += `    • ${rel.from} (${sourceDesc}) → ${rel.to}\n`;
+        if (sourceFormula !== 'Data') {
+          message += `      Source formula: ${sourceFormula}\n`;
+        }
+      });
+    });
+
+    // Add date patterns information
+    if (result.dateFrames && result.dateFrames.length > 0) {
+      message += `\n**📅 Date Patterns Detected:**\n`;
+      
+      const datePatternsByType = {};
+      result.dateFrames.forEach(frame => {
+        if (!datePatternsByType[frame.type]) {
+          datePatternsByType[frame.type] = [];
+        }
+        datePatternsByType[frame.type].push(frame.range);
+      });
+      
+      Object.keys(datePatternsByType).forEach(type => {
+        const ranges = datePatternsByType[type];
+        message += `  • ${type.charAt(0).toUpperCase() + type.slice(1)} date ranges: ${ranges.join(', ')}\n`;
+      });
+      
+      message += `  • Date patterns are highlighted in green on the spreadsheet\n`;
     }
-    
-    if (formulaCells > 0) {
-      message += `• ${formulaCells} cells contain formulas that create dependencies\n`
-    }
-    
-    // Add frame information
-    const totalFrames = result.frames.reduce((sum, frame) => sum + frame.horizontal.length + frame.vertical.length, 0)
-    if (totalFrames > 0) {
-      message += `\n🔗 **Contiguous Formula Groups:**\n`
-      message += `• ${totalFrames} contiguous formula ranges identified\n`
-      message += `• These represent areas where similar formulas are replicated\n`
-    }
-    
-    message += `\n💡 **Visual Highlighting:** The spreadsheet is now color-coded to show the dependency layers. Green areas are inputs, red areas are outputs, with gradients showing the flow of dependencies.`
     
     return message
   }, [])
@@ -949,7 +1028,9 @@ function ExcelApp() {
         })
       })
       
-      setDependencyFrames(frames)
+      // Combine regular frames with date frames
+      const allFrames = [...frames, ...(result.dateFrames || [])];
+      setDependencyFrames(allFrames)
       
       // Generate and send AI bot message with indexing results
       const indexingMessage = generateIndexingResultsMessage(result)
@@ -1039,13 +1120,6 @@ function ExcelApp() {
       return newData
     })
   }, [selectedCells])
-
-
-
-
-
-
-
 
   // Debug effect to log spreadsheet data changes (reduced logging)
   useEffect(() => {

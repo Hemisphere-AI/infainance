@@ -157,9 +157,196 @@ function buildDependencyGraphFromSpreadsheetData(spreadsheetData) {
   const allNodes = new Set();
   const formulaNodes = new Set();
   const referencedNodes = new Set(); // Track cells that are referenced by formulas
-  const nodeMeta = new Map(); // nodeK -> { r, c, formula, refOffsets: [{dr,dc}], adjOffset: {dr,dc}|null }
+  const dateNodes = new Set(); // Track cells that contain dates
+  const nodeMeta = new Map(); // nodeK -> { r, c, formula, refOffsets: [{dr,dc}], adjOffset: {dr,dc}|null, isDate: boolean }
 
-  // First pass: identify formula cells and their references
+  // Helper function to detect if a cell is formatted as a date
+  const isDateFormatted = (cell) => {
+    if (!cell) return false;
+    
+    // First check if the cell has a value (not empty, null, or undefined)
+    const hasValue = cell.value !== null && 
+                    cell.value !== undefined && 
+                    cell.value !== '' && 
+                    String(cell.value).trim() !== '';
+    
+    if (!hasValue) return false;
+    
+    // Check if the cell has explicit date formatting properties
+    if (cell.isDate === true) return true;
+    if (cell.cellType === 'date') return true;
+    
+    // Check for specific date number formats (not currency)
+    if (cell.numberFormat) {
+      const format = cell.numberFormat.toLowerCase();
+      // Look for specific date format patterns, not just any 'd', 'm', 'y'
+      if (format.includes('mm/dd/yyyy') || 
+          format.includes('dd/mm/yyyy') || 
+          format.includes('yyyy-mm-dd') ||
+          format.includes('mm/dd/yy') ||
+          format.includes('dd/mm/yy') ||
+          format.includes('m/d/yyyy') ||
+          format.includes('d/m/yyyy') ||
+          format.includes('mmm dd, yyyy') ||
+          format.includes('mmmm dd, yyyy') ||
+          format.includes('dd-mmm-yy') ||
+          format.includes('dd-mmm-yyyy') ||
+          format.includes('date')) {
+        return true;
+      }
+      
+      // Exclude currency formats that might contain 'd', 'm', 'y'
+      if (format.includes('€') || 
+          format.includes('$') || 
+          format.includes('currency') ||
+          format.includes('money') ||
+          format.includes('euro') ||
+          format.includes('dollar')) {
+        return false;
+      }
+    }
+    
+    // Check if the display value looks like a date (strict patterns only)
+    const displayValue = cell.displayValue || cell.value;
+    if (typeof displayValue === 'string') {
+      const trimmed = displayValue.trim();
+      // Only check for clear date patterns, not currency symbols
+      if (trimmed.includes('€') || trimmed.includes('$') || trimmed.includes('currency')) {
+        return false;
+      }
+      
+      // Check for common date display patterns
+      if (/^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(trimmed) || // MM/DD/YYYY
+          /^\d{4}-\d{1,2}-\d{1,2}$/.test(trimmed) || // YYYY-MM-DD
+          /^\d{1,2}-\d{1,2}-\d{2,4}$/.test(trimmed) || // MM-DD-YYYY
+          /^\d{1,2}\.\d{1,2}\.\d{2,4}$/.test(trimmed) || // MM.DD.YYYY
+          /^\d{1,2}\/\d{1,2}$/.test(trimmed) || // MM/DD
+          /^\d{1,2}-\d{1,2}$/.test(trimmed)) { // MM-DD
+        return true;
+      }
+    }
+    
+    // Check if it's a Date object
+    if (displayValue instanceof Date) return !isNaN(displayValue.getTime());
+    
+    return false;
+  };
+
+  // Additional validation: check if values in a pattern actually look like dates
+  const validateDatePattern = (startRow, endRow, startCol, endCol, spreadsheetData) => {
+    let dateCount = 0;
+    let totalCount = 0;
+    
+    for (let r = startRow; r <= endRow; r++) {
+      for (let c = startCol; c <= endCol; c++) {
+        const cell = spreadsheetData[r]?.[c];
+        if (!cell) continue;
+        
+        totalCount++;
+        
+        // Check if the cell is formatted as a date
+        if (isDateFormatted(cell)) {
+          dateCount++;
+        }
+      }
+    }
+    
+    // At least 50% of cells should be formatted as dates, and we need at least 2 cells
+    return totalCount >= 2 && (dateCount / totalCount) >= 0.5;
+  };
+
+  // Enhanced function to detect date patterns with more flexible criteria
+  const detectDatePatternEnhanced = (rowIndex, colIndex, spreadsheetData) => {
+    const patterns = [];
+    const cell = spreadsheetData[rowIndex]?.[colIndex];
+    if (!cell) return patterns;
+    
+    // Check if this cell is formatted as a date
+    if (!isDateFormatted(cell)) return patterns;
+    
+    // Check horizontal patterns (same row)
+    let startCol = colIndex;
+    let endCol = colIndex;
+    
+    // Expand left
+    while (startCol > 0) {
+      const leftCell = spreadsheetData[rowIndex]?.[startCol - 1];
+      const leftValue = leftCell?.value;
+      if (leftValue === null || leftValue === undefined || leftValue === '') break;
+      
+      const couldBeDateLeft = isDateFormatted(leftCell);
+      
+      if (!couldBeDateLeft) break;
+      startCol--;
+    }
+    
+    // Expand right
+    while (endCol < (spreadsheetData[rowIndex]?.length || 0) - 1) {
+      const rightCell = spreadsheetData[rowIndex]?.[endCol + 1];
+      const rightValue = rightCell?.value;
+      if (rightValue === null || rightValue === undefined || rightValue === '') break;
+      
+      const couldBeDateRight = isDateFormatted(rightCell);
+      
+      if (!couldBeDateRight) break;
+      endCol++;
+    }
+    
+    if (endCol > startCol && validateDatePattern(rowIndex, rowIndex, startCol, endCol, spreadsheetData)) {
+      patterns.push({
+        type: 'horizontal',
+        startRow: rowIndex,
+        endRow: rowIndex,
+        startCol: startCol,
+        endCol: endCol,
+        range: `${rcToA1(rowIndex + 1, startCol + 1)}:${rcToA1(rowIndex + 1, endCol + 1)}`
+      });
+    }
+    
+    // Check vertical patterns (same column)
+    let startRow = rowIndex;
+    let endRow = rowIndex;
+    
+    // Expand up
+    while (startRow > 0) {
+      const upCell = spreadsheetData[startRow - 1]?.[colIndex];
+      const upValue = upCell?.value;
+      if (upValue === null || upValue === undefined || upValue === '') break;
+      
+      const couldBeDateUp = isDateFormatted(upCell);
+      
+      if (!couldBeDateUp) break;
+      startRow--;
+    }
+    
+    // Expand down
+    while (endRow < spreadsheetData.length - 1) {
+      const downCell = spreadsheetData[endRow + 1]?.[colIndex];
+      const downValue = downCell?.value;
+      if (downValue === null || downValue === undefined || downValue === '') break;
+      
+      const couldBeDateDown = isDateFormatted(downCell);
+      
+      if (!couldBeDateDown) break;
+      endRow++;
+    }
+    
+    if (endRow > startRow && validateDatePattern(startRow, endRow, colIndex, colIndex, spreadsheetData)) {
+      patterns.push({
+        type: 'vertical',
+        startRow: startRow,
+        endRow: endRow,
+        startCol: colIndex,
+        endCol: colIndex,
+        range: `${rcToA1(startRow + 1, colIndex + 1)}:${rcToA1(endRow + 1, colIndex + 1)}`
+      });
+    }
+    
+    return patterns;
+  };
+
+
+  // First pass: identify formula cells, date cells, and their references
   for (let rowIndex = 0; rowIndex < spreadsheetData.length; rowIndex++) {
     const row = spreadsheetData[rowIndex];
     if (!row) continue;
@@ -170,9 +357,17 @@ function buildDependencyGraphFromSpreadsheetData(spreadsheetData) {
 
       const cellAddr = rcToA1(rowIndex + 1, colIndex + 1);
       const nodeK = keyOf({ sheet: "Sheet1", addr: cellAddr });
+      const cellValue = String(cell?.value || '');
+      
+      // Check if this cell is formatted as a date
+      const isDate = isDateFormatted(cell);
+      
+      if (isDate) {
+        dateNodes.add(nodeK);
+        allNodes.add(nodeK);
+      }
 
       // Check if this cell contains a formula
-      const cellValue = String(cell?.value || '');
       if (cellValue.startsWith('=')) {
         formulaNodes.add(nodeK);
         allNodes.add(nodeK);
@@ -230,6 +425,59 @@ function buildDependencyGraphFromSpreadsheetData(spreadsheetData) {
           refOffsets,
           adjOffset,
           signature: computeFormulaSignature(cellValue, rowIndex + 1, colIndex + 1),
+          isDate: false
+        });
+      } else if (isDate) {
+        // Store metadata for date cells
+        nodeMeta.set(nodeK, {
+          r: rowIndex + 1,
+          c: colIndex + 1,
+          formula: null,
+          refOffsets: [],
+          adjOffset: null,
+          signature: null,
+          isDate: true,
+          dateValue: cell?.value
+        });
+      }
+    }
+  }
+
+  // Second pass: detect date patterns and group them
+  const datePatterns = new Map(); // patternId -> { ranges: [], type: 'horizontal'|'vertical', layer: number }
+  const processedCells = new Set();
+  
+  for (let rowIndex = 0; rowIndex < spreadsheetData.length; rowIndex++) {
+    const row = spreadsheetData[rowIndex];
+    if (!row) continue;
+
+    for (let colIndex = 0; colIndex < row.length; colIndex++) {
+      const cell = row[colIndex];
+      if (!cell) continue;
+
+      const cellAddr = rcToA1(rowIndex + 1, colIndex + 1);
+      const nodeK = keyOf({ sheet: "Sheet1", addr: cellAddr });
+      
+      if (isDateFormatted(cell) && !processedCells.has(nodeK)) {
+        const patterns = detectDatePatternEnhanced(rowIndex, colIndex, spreadsheetData);
+        
+        patterns.forEach((pattern) => {
+          // Mark all cells in this pattern as processed
+          for (let r = pattern.startRow; r <= pattern.endRow; r++) {
+            for (let c = pattern.startCol; c <= pattern.endCol; c++) {
+              const patternCellAddr = rcToA1(r + 1, c + 1);
+              const patternNodeK = keyOf({ sheet: "Sheet1", addr: patternCellAddr });
+              processedCells.add(patternNodeK);
+            }
+          }
+          
+          const patternId = `date_${rowIndex}_${colIndex}_${Math.random()}`;
+          datePatterns.set(patternId, {
+            ranges: [pattern.range],
+            type: pattern.type,
+            layer: 0, // Date patterns get layer 0 (highest priority, green color)
+            cells: []
+          });
         });
       }
     }
@@ -250,7 +498,15 @@ function buildDependencyGraphFromSpreadsheetData(spreadsheetData) {
     if (!precedents.has(k)) precedents.set(k, new Set());
   }
 
-  return { dependents, precedents, allNodes: finalNodes, formulaNodes, nodeMeta };
+  return { 
+    dependents, 
+    precedents, 
+    allNodes: finalNodes, 
+    formulaNodes, 
+    dateNodes,
+    datePatterns,
+    nodeMeta 
+  };
 }
 
 function addEdge(srcK, dstK, dependents, precedents) {
@@ -568,9 +824,27 @@ class DependencyAnalyzer {
     const layers = expandGroupLayersToNodes(groupLayers, groups);
     const frames = framesForLayers(layers);
     
+    // Add date patterns as special frames with green color
+    const dateFrames = [];
+    if (graph.datePatterns) {
+      graph.datePatterns.forEach((pattern) => {
+        pattern.ranges.forEach(range => {
+          dateFrames.push({
+            range: range,
+            color: '#22c55e', // Green color for dates
+            type: pattern.type,
+            layer: 0, // Date patterns are layer 0 (highest priority)
+            depthFromInput: 0,
+            isDatePattern: true
+          });
+        });
+      });
+    }
+    
     return {
       layers,
       frames,
+      dateFrames,
       graph
     };
   }

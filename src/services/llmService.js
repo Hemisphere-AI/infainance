@@ -995,6 +995,10 @@ export class LLMService {
     // Get the existing cell to preserve formatting properties
     const existingCell = this.spreadsheetData[r-1][c-1];
     
+    // Determine if this is a formula
+    const stringValue = String(newValue || '');
+    const isFormula = stringValue.startsWith('=');
+    
     // If the cell is a percentage and the new value contains a % symbol, strip it and convert to decimal
     let processedValue = newValue;
     if (existingCell.isPercentage && typeof newValue === 'string' && newValue.includes('%')) {
@@ -1012,13 +1016,17 @@ export class LLMService {
       processedValue: processedValue,
       newValueType: typeof newValue,
       isPercentage: existingCell.isPercentage,
-      decimalPlaces: existingCell.decimalPlaces
+      decimalPlaces: existingCell.decimalPlaces,
+      isFormula: isFormula
     });
     
-    // Update the value while preserving all formatting properties
+    // Update the cell with proper type and rawValue handling
     this.spreadsheetData[r-1][c-1] = {
       ...existingCell,
-      value: processedValue
+      value: processedValue,
+      cellType: isFormula ? 'formula' : 'text',
+      rawValue: isFormula ? processedValue : undefined, // For formulas, rawValue should be the formula string
+      isFormula: isFormula
     };
     
     console.log(`After update:`, this.spreadsheetData[r-1][c-1]);
@@ -1028,6 +1036,14 @@ export class LLMService {
       const newData = JSON.parse(JSON.stringify(this.spreadsheetData));
       console.log('Triggering data change with new reference:', newData[r-1][c-1]);
       this.onDataChange(newData);
+      
+      // If this is a formula, we need to trigger recalculation
+      // The spreadsheet component will handle the recalculation queue
+      if (isFormula) {
+        console.log('Formula detected, triggering recalculation for cell:', address);
+        // The spreadsheet component will detect the data change and trigger recalculation
+        // We don't need to do anything special here as the component handles it
+      }
     }
     
     return { address, newValue };
@@ -1049,6 +1065,7 @@ export class LLMService {
       message: "Recalculation triggered - all formulas will be re-evaluated" 
     };
   }
+
 
   /**
    * Read a range of cells

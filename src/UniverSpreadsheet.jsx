@@ -124,8 +124,8 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
   const processRecalculationQueue = useCallback(() => {
     if (recalculationQueueRef.current.size === 0) return
     
-    Array.from(recalculationQueueRef.current)
-    // Debug logging removed to prevent console spam
+    const cellsToRecalc = Array.from(recalculationQueueRef.current)
+    console.log('Processing recalculation queue:', cellsToRecalc)
     
     // Force multiple re-renders to ensure the component updates
     setRecalcTrigger(prev => prev + 1)
@@ -198,8 +198,12 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
   useEffect(() => {
     const currentHash = generateDataHash(data)
     if (currentHash !== lastDataHashRef.current) {
+      console.log('Data change detected, clearing cache and establishing dependencies')
       clearFormulaCache()
       lastDataHashRef.current = currentHash
+      
+      // Track changed cells for recalculation
+      const changedCells = new Set()
       
       // Establish dependencies for all formulas in the data
       data.forEach((row, rowIndex) => {
@@ -210,11 +214,24 @@ const ReactSpreadsheet = ({ data, onDataChange, formulaDisplayMode, selectedCell
             const references = extractCellReferences(cell.value)
             const dependencyKeys = references.map(ref => `${ref.row}-${ref.col}`)
             trackDependencies(cellKey, dependencyKeys)
+            
+            // Add this formula cell to recalculation queue
+            changedCells.add(cellKey)
           }
         })
       })
+      
+      // Trigger recalculation for all formula cells
+      if (changedCells.size > 0) {
+        console.log('Triggering recalculation for changed cells:', Array.from(changedCells))
+        changedCells.forEach(cellKey => {
+          triggerRecalculation(cellKey)
+        })
+        // Process the recalculation queue
+        processRecalculationQueue()
+      }
     }
-  }, [data, generateDataHash, clearFormulaCache, extractCellReferences, trackDependencies])
+  }, [data, generateDataHash, clearFormulaCache, extractCellReferences, trackDependencies, triggerRecalculation, processRecalculationQueue])
 
   // Available formulas for autocomplete
   const availableFormulas = useMemo(() => [

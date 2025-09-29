@@ -340,6 +340,71 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onToolCall = null, on
 
 
 
+  // Utility functions for cell range merging
+  const parseCellAddress = (address) => {
+    const match = address.match(/^([A-Z]+)(\d+)$/);
+    if (!match) return null;
+    const [, colStr, rowStr] = match;
+    
+    // Convert column letters to number (A=1, B=2, ..., Z=26, AA=27, etc.)
+    let colNum = 0;
+    for (let i = 0; i < colStr.length; i++) {
+      colNum = colNum * 26 + (colStr.charCodeAt(i) - 64);
+    }
+    
+    return {
+      row: parseInt(rowStr),
+      col: colNum,
+      address: address
+    };
+  };
+
+
+  const mergeCellRanges = (addresses) => {
+    if (!addresses || addresses.length === 0) return [];
+    
+    // Parse all addresses
+    const parsed = addresses
+      .map(parseCellAddress)
+      .filter(addr => addr !== null)
+      .sort((a, b) => a.row - b.row || a.col - b.col);
+    
+    if (parsed.length === 0) return addresses;
+    
+    const ranges = [];
+    let currentRange = { start: parsed[0], end: parsed[0] };
+    
+    for (let i = 1; i < parsed.length; i++) {
+      const current = parsed[i];
+      const prev = parsed[i - 1];
+      
+      // Check if cells are adjacent (same row and consecutive columns, or same column and consecutive rows)
+      const isAdjacent = (current.row === prev.row && current.col === prev.col + 1) ||
+                        (current.col === prev.col && current.row === prev.row + 1);
+      
+      if (isAdjacent) {
+        currentRange.end = current;
+      } else {
+        // Add current range and start new one
+        if (currentRange.start.address === currentRange.end.address) {
+          ranges.push(currentRange.start.address);
+        } else {
+          ranges.push(`${currentRange.start.address}:${currentRange.end.address}`);
+        }
+        currentRange = { start: current, end: current };
+      }
+    }
+    
+    // Add the last range
+    if (currentRange.start.address === currentRange.end.address) {
+      ranges.push(currentRange.start.address);
+    } else {
+      ranges.push(`${currentRange.start.address}:${currentRange.end.address}`);
+    }
+    
+    return ranges;
+  };
+
   const formatParameters = (toolCall) => {
     if (toolCall.type === 'tool_call') {
       if (toolCall.tool === 'find') {
@@ -380,9 +445,11 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onToolCall = null, on
           `Purpose: Getting data from multiple cells`
         ];
       } else if (toolCall.tool === 'dependency_analysis') {
+        const cells = toolCall.arguments?.cells || [];
+        const mergedCells = mergeCellRanges(cells);
         return [
           `Layer ${toolCall.arguments?.layer || 'N/A'}: ${toolCall.arguments?.layerType || 'Unknown'}`,
-          `Cells: ${toolCall.arguments?.cells?.join(', ') || 'N/A'}`,
+          `Cells: ${mergedCells.join(', ') || 'N/A'}`,
           `Frames: ${toolCall.arguments?.horizontalFrames?.join(', ') || 'None'} | ${toolCall.arguments?.verticalFrames?.join(', ') || 'None'}`
         ];
       } else {
@@ -459,9 +526,12 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onToolCall = null, on
         const layer = toolCall.result?.layer || 'N/A';
         const cellCount = toolCall.result?.cellCount || 0;
         const frames = toolCall.result?.frames;
+        const cells = toolCall.result?.cells || [];
+        const mergedCells = mergeCellRanges(cells);
         return [
           `📊 Layer ${layer} analyzed`,
           `📈 Cells: ${cellCount} cells in this layer`,
+          ...(mergedCells.length > 0 ? [`📍 Cell ranges: ${mergedCells.join(', ')}`] : []),
           ...(frames ? [
             `🔗 Horizontal frames: ${frames.horizontal?.join(', ') || 'None'}`,
             `🔗 Vertical frames: ${frames.vertical?.join(', ') || 'None'}`
