@@ -330,43 +330,51 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
     )
   }, [data, visibleRange])
 
-  // Handle scroll to update visible range with debouncing
+  // Handle scroll to update visible range with improved debouncing
   const handleScroll = useCallback((e) => {
     // Clear previous debounce timeout
     if (scrollDebounceRef.current) {
       clearTimeout(scrollDebounceRef.current)
     }
     
-    // Debounce scroll events to prevent excessive updates
-    scrollDebounceRef.current = setTimeout(() => {
-      const container = e.target
-      const scrollTop = container.scrollTop
-      const scrollLeft = container.scrollLeft
-      
-      const rowHeight = 32 // height of each row
-      const avgColWidth = 120 // average width of columns
-      
-      // Larger buffer to ensure we load enough data
-      const buffer = 50
-      
-      const startRow = Math.max(0, Math.floor(scrollTop / rowHeight) - buffer)
-      const endRow = Math.min(startRow + Math.ceil(container.clientHeight / rowHeight) + buffer, data.length)
-      
-      // Simplified column calculation using average width
-      const startCol = Math.max(0, Math.floor(scrollLeft / avgColWidth) - buffer)
-      const endCol = Math.min(startCol + Math.ceil(container.clientWidth / avgColWidth) + buffer, data[0]?.length || 0)
-      
-      // Only update if the range has changed significantly to prevent flickering
-      setVisibleRange(prevRange => {
-        if (Math.abs(prevRange.startRow - startRow) > 5 || 
-            Math.abs(prevRange.endRow - endRow) > 5 ||
-            Math.abs(prevRange.startCol - startCol) > 3 || 
-            Math.abs(prevRange.endCol - endCol) > 3) {
-          return { startRow, endRow, startCol, endCol }
-        }
-        return prevRange
-      })
-    }, 8) // 8ms debounce for more responsive scrolling
+    // Use requestAnimationFrame for smoother scrolling
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current)
+    }
+    
+    rafRef.current = requestAnimationFrame(() => {
+      // Debounce scroll events to prevent excessive updates
+      scrollDebounceRef.current = setTimeout(() => {
+        const container = e.target
+        const scrollTop = container.scrollTop
+        const scrollLeft = container.scrollLeft
+        
+        const rowHeight = 32 // height of each row
+        const avgColWidth = 120 // average width of columns
+        
+        // Larger buffer to ensure we load enough data
+        const buffer = 100 // Increased buffer for smoother scrolling
+        
+        const startRow = Math.max(0, Math.floor(scrollTop / rowHeight) - buffer)
+        const endRow = Math.min(startRow + Math.ceil(container.clientHeight / rowHeight) + buffer, data.length)
+        
+        // Simplified column calculation using average width
+        const startCol = Math.max(0, Math.floor(scrollLeft / avgColWidth) - buffer)
+        const endCol = Math.min(startCol + Math.ceil(container.clientWidth / avgColWidth) + buffer, data[0]?.length || 0)
+        
+        // Only update if the range has changed significantly to prevent flickering
+        setVisibleRange(prevRange => {
+          // Increased thresholds to reduce update frequency
+          if (Math.abs(prevRange.startRow - startRow) > 10 || 
+              Math.abs(prevRange.endRow - endRow) > 10 ||
+              Math.abs(prevRange.startCol - startCol) > 5 || 
+              Math.abs(prevRange.endCol - endCol) > 5) {
+            return { startRow, endRow, startCol, endCol }
+          }
+          return prevRange
+        })
+      }, 16) // Increased debounce time for more stable scrolling
+    })
   }, [data])
 
   // Helper function to get column letter from index
@@ -691,7 +699,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
     onSelectedCellsChange?.(newSelection)
   }, [data, onSelectedCellsChange])
 
-  // Add mouse event listeners
+  // Add mouse event listeners and optimize scroll handling
   useEffect(() => {
     const handleGlobalMouseMove = (e) => handleMouseMove(e)
     const handleGlobalMouseUp = () => handleMouseUp()
@@ -706,6 +714,24 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       document.removeEventListener('mouseup', handleGlobalMouseUp)
     }
   }, [isDragging, handleMouseMove, handleMouseUp])
+
+  // Add optimized scroll event listener
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+
+    // Use passive listener for better performance
+    const optimizedScrollHandler = (e) => {
+      e.preventDefault = () => {} // Prevent default to avoid conflicts
+      handleScroll(e)
+    }
+
+    container.addEventListener('scroll', optimizedScrollHandler, { passive: true })
+
+    return () => {
+      container.removeEventListener('scroll', optimizedScrollHandler)
+    }
+  }, [handleScroll])
 
   // Helper function to parse function arguments (handles nested parentheses)
   const parseFunctionArgs = useCallback((argsString) => {
@@ -1970,9 +1996,9 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
         width: '100%',
         height: '100%',
         overflow: 'auto',
-        position: 'relative'
+        position: 'relative',
+        scrollBehavior: 'auto' // Disable smooth scrolling to prevent conflicts
       }}
-      onScroll={handleScroll}
     >
       {/* Virtual table with only visible cells */}
       <table key={`spreadsheet-${recalcTrigger}-${forceUpdate}`} className="excel-grid w-full border-collapse">

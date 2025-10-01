@@ -10,6 +10,29 @@
   to = "/index.html"
   status = 200
 
+# Force HTTPS redirects
+[[redirects]]
+  from = "http://getzenith.ai/*"
+  to = "https://getzenith.ai/:splat"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "http://www.getzenith.ai/*"
+  to = "https://getzenith.ai/:splat"
+  status = 301
+  force = true
+
+# Security headers
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-XSS-Protection = "1; mode=block"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Strict-Transport-Security = "max-age=31536000; includeSubDomains"
+
 # Environment variables needed for the app:
 # VITE_OPENAI_KEY - Your OpenAI API key
 # VITE_DEMO_KEY - Secret demo key (users enter this to use VITE_OPENAI_KEY)

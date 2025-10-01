@@ -1603,11 +1603,11 @@ function ExcelApp() {
       
       const frames = []
       result.frames.forEach((frame) => {
-        // Output-based layer indexing: outputs (layer 0) should be red, inputs green
-        const depthFromOutput = frame.layer
-        let colorIndex = greenToRedColors.length - 1
+        // Input-based layer indexing: inputs (layer 0) should be green, outputs red
+        const depthFromInput = frame.layer
+        let colorIndex = 0
         if (maxDepth > 0) {
-          colorIndex = Math.floor(((maxDepth - depthFromOutput) / maxDepth) * (greenToRedColors.length - 1))
+          colorIndex = Math.floor((depthFromInput / maxDepth) * (greenToRedColors.length - 1))
         }
         const color = greenToRedColors[colorIndex]
         
@@ -1618,7 +1618,7 @@ function ExcelApp() {
             color: color,
             type: 'horizontal',
             layer: frame.layer,
-            depthFromInput: depthFromOutput
+            depthFromInput: depthFromInput
           })
         })
         
@@ -1629,7 +1629,7 @@ function ExcelApp() {
             color: color,
             type: 'vertical', 
             layer: frame.layer,
-            depthFromInput: depthFromOutput
+            depthFromInput: depthFromInput
           })
         })
       })

@@ -105,19 +105,53 @@ function computeFormulaSignature(formula, baseR, baseC) {
   }
   out += formula.slice(last);
   
-  // ENHANCED: Normalize linear shifts for better grouping
-  // Replace relative references with generic patterns to group linear shifts
-  out = out.replace(/REF\(S:[^,]+,R:([+-]?\d+),C:([+-]?\d+)\)/g, (match, dr, dc) => {
-    // For linear shifts, normalize to generic relative reference
+  // ENHANCED: Comprehensive normalization for all reference types
+  // This handles both single and multi-reference patterns
+  
+  // First normalize relative references - fix the regex to match the actual pattern
+  out = out.replace(/REF\(S:[^,]+,RREL:([+-]?\d+),CREL:([+-]?\d+)\)/g, (match, dr, dc) => {
     const rowOffset = parseInt(dr);
     const colOffset = parseInt(dc);
     
-    // If it's a simple linear shift (1 cell in any direction), normalize it
-    if (Math.abs(rowOffset) + Math.abs(colOffset) === 1) {
+    // Normalize relative references to generic patterns for better grouping
+    if (Math.abs(rowOffset) <= 3 && Math.abs(colOffset) <= 3) {
       return `REF(RELATIVE_${rowOffset > 0 ? 'DOWN' : rowOffset < 0 ? 'UP' : colOffset > 0 ? 'RIGHT' : 'LEFT'})`;
     }
     
-    // For other relative references, keep them as is
+    return match;
+  });
+  
+  // Then normalize absolute references
+  out = out.replace(/REF\(S:[^,]+,RABS:(\d+),CABS:(\d+)\)/g, (match, r, c) => {
+    // For absolute references, create a pattern based on the relative position
+    const rowOffset = parseInt(r) - baseR;
+    const colOffset = parseInt(c) - baseC;
+    
+    // If it's a reasonable offset, normalize it
+    if (Math.abs(rowOffset) <= 3 && Math.abs(colOffset) <= 3) {
+      return `REF(RELATIVE_${rowOffset > 0 ? 'DOWN' : rowOffset < 0 ? 'UP' : colOffset > 0 ? 'RIGHT' : 'LEFT'})`;
+    }
+    
+    return match;
+  });
+  
+  // ENHANCED: Additional normalization for multi-reference patterns
+  // Handle patterns like =AA11+AA39-AA64 by normalizing the column references
+  out = out.replace(/REF\(S:[^,]+,RREL:([+-]?\d+),CREL:([+-]?\d+)\)/g, (match, dr, dc) => {
+    const rowOffset = parseInt(dr);
+    const colOffset = parseInt(dc);
+    
+    // For multi-reference patterns, normalize based on row offset primarily
+    if (Math.abs(rowOffset) <= 3) {
+      if (rowOffset === -3) return 'REF(RELATIVE_UP_3)';
+      if (rowOffset === -2) return 'REF(RELATIVE_UP_2)';
+      if (rowOffset === -1) return 'REF(RELATIVE_UP_1)';
+      if (rowOffset === 0) return 'REF(RELATIVE_SAME)';
+      if (rowOffset === 1) return 'REF(RELATIVE_DOWN_1)';
+      if (rowOffset === 2) return 'REF(RELATIVE_DOWN_2)';
+      if (rowOffset === 3) return 'REF(RELATIVE_DOWN_3)';
+    }
+    
     return match;
   });
   
@@ -454,6 +488,35 @@ function buildDependencyGraphFromSpreadsheetData(spreadsheetData, allSheetsData 
           if (manhattan === 1) adjOffset = off; // up/down/left/right
         }
 
+        // ENHANCED: Detect if this is part of a linear pattern
+        let isLinearPattern = false;
+        if (refOffsets.length === 1) {
+          const off = refOffsets[0];
+          // Check if this is a simple linear shift (1 cell in any direction)
+          const manhattan = Math.abs(off.dr) + Math.abs(off.dc);
+          isLinearPattern = manhattan === 1;
+        } else if (refOffsets.length === 0) {
+          // If no references, it might still be part of a pattern if it has the same signature as neighbors
+          isLinearPattern = true;
+        }
+        
+        // ENHANCED: Also check if this formula has the same signature as adjacent cells
+        // This helps detect patterns like =A2, =B2, =C2 which have the same relative reference pattern
+        if (!isLinearPattern && refOffsets.length === 1) {
+          const off = refOffsets[0];
+          // For formulas that reference cells in a consistent relative pattern (like =A2, =B2, =C2)
+          // we should consider them as linear patterns if they have the same signature
+          isLinearPattern = true; // We'll let the signature matching handle the grouping
+        }
+        
+        // ENHANCED: Also detect multi-reference patterns like =AA11+AA39-AA64, =AB11+AB39-AB64
+        // These should be considered linear patterns if they have the same signature
+        if (!isLinearPattern && refOffsets.length > 1) {
+          // Check if this is a multi-reference pattern that could be part of a series
+          // (like =AA11+AA39-AA64, =AB11+AB39-AB64, =AC11+AC39-AC64)
+          isLinearPattern = true; // Let signature matching handle the grouping
+        }
+
         nodeMeta.set(nodeK, {
           r: rowIndex + 1,
           c: colIndex + 1,
@@ -461,7 +524,8 @@ function buildDependencyGraphFromSpreadsheetData(spreadsheetData, allSheetsData 
           refOffsets,
           adjOffset,
           signature: computeFormulaSignature(cellValue, rowIndex + 1, colIndex + 1),
-          isDate: false
+          isDate: false,
+          isLinearPattern: isLinearPattern
         });
       } else if (isDate) {
         // Store metadata for date cells
@@ -524,7 +588,23 @@ function buildDependencyGraphFromSpreadsheetData(spreadsheetData, allSheetsData 
   const finalNodes = new Set();
   for (const node of allNodes) {
     if (formulaNodes.has(node) || referencedNodes.has(node)) {
-      finalNodes.add(node);
+      // ENHANCED: Strict filtering to exclude all blank/empty cells
+      const { sheet, addr } = parseKey(node);
+      const rc = a1ToRC(addr);
+      const cell = getCellFromSheet(sheet, rc.r - 1, rc.c - 1);
+      
+      // Only include if:
+      // 1. It's a formula cell, OR
+      // 2. It has meaningful content (not null, undefined, empty string, or just whitespace)
+      const hasMeaningfulContent = cell && 
+        cell.value !== null && 
+        cell.value !== undefined && 
+        cell.value !== '' && 
+        String(cell.value).trim() !== '';
+      
+      if (formulaNodes.has(node) || hasMeaningfulContent) {
+        finalNodes.add(node);
+      }
     }
   }
 
@@ -584,15 +664,40 @@ function forwardTopoLayers(graph) {
 
     layer.sort(); // stable output
     
-    // ENHANCED: Check if this layer contains linear step patterns
-    // If so, merge with the previous layer instead of creating a new one
+    // ENHANCED: Smart layer merging to keep layers manageable (5-7 max)
     const hasLinearSteps = detectLinearStepPattern(layer, graph);
+    const prevLayerHasLinearSteps = layers.length > 0 ? detectLinearStepPattern(layers[layers.length - 1], graph) : false;
     
-    if (hasLinearSteps && layers.length > 0) {
-      // Merge with previous layer instead of creating new layer
-      layers[layers.length - 1] = [...layers[layers.length - 1], ...layer];
+    // Merge layers if:
+    // 1. Both have linear steps AND share similar signatures, OR
+    // 2. We have too many layers (more than 7) and can safely merge
+    const shouldMerge = (hasLinearSteps && prevLayerHasLinearSteps && layers.length > 0) ||
+                       (layers.length > 7 && hasLinearSteps);
+    
+    if (shouldMerge && layers.length > 0) {
+      // Check if they have similar formula signatures
+      const currentSignatures = new Set();
+      const prevSignatures = new Set();
+      
+      for (const nodeKey of layer) {
+        const meta = graph.nodeMeta?.get(nodeKey);
+        if (meta?.signature) currentSignatures.add(meta.signature);
+      }
+      
+      for (const nodeKey of layers[layers.length - 1]) {
+        const meta = graph.nodeMeta?.get(nodeKey);
+        if (meta?.signature) prevSignatures.add(meta.signature);
+      }
+      
+      // Merge if they share at least one signature or if we need to reduce layers
+      const hasSharedSignatures = [...currentSignatures].some(sig => prevSignatures.has(sig));
+      
+      if (hasSharedSignatures || layers.length > 7) {
+        layers[layers.length - 1] = [...layers[layers.length - 1], ...layer];
+      } else {
+        layers.push(layer);
+      }
     } else {
-      // Create new layer
       layers.push(layer);
     }
 
@@ -628,7 +733,7 @@ function detectLinearStepPattern(layer, graph) {
       // Check if these nodes form a linear pattern (adjacent positions)
       const positions = nodes.map(nodeKey => {
         const meta = graph.nodeMeta?.get(nodeKey);
-        return meta ? { r: meta.r, c: meta.c } : null;
+        return meta ? { r: meta.r, c: meta.c, nodeKey, meta } : null;
       }).filter(p => p !== null);
       
       if (positions.length >= 2) {
@@ -638,6 +743,20 @@ function detectLinearStepPattern(layer, graph) {
         // Check if positions form a linear pattern
         const isLinear = checkLinearPattern(positions);
         if (isLinear) {
+          return true;
+        }
+        
+        // ENHANCED: Also check if all nodes in this group are linear patterns
+        // This handles the case where =A1, =B1, =C1 should be grouped together
+        const allLinearPatterns = positions.every(pos => pos.meta?.isLinearPattern);
+        if (allLinearPatterns && positions.length >= 2) {
+          return true;
+        }
+        
+        // ENHANCED: Also check if nodes have the same signature (same formula pattern)
+        const signatures = positions.map(pos => pos.meta?.signature).filter(sig => sig);
+        const uniqueSignatures = [...new Set(signatures)];
+        if (uniqueSignatures.length === 1 && positions.length >= 2) {
           return true;
         }
       }
@@ -696,6 +815,67 @@ function checkLinearPattern(positions) {
   return false;
 }
 
+// ENHANCED: Function to detect adjacent cells with same formula pattern
+function detectAdjacentFormulaPatterns(graph) {
+  const patterns = new Map(); // patternId -> { cells: [], type: 'horizontal'|'vertical' }
+  
+  // Build coordinate index for formula nodes
+  const coordToNode = new Map();
+  for (const k of graph.formulaNodes) {
+    const meta = graph.nodeMeta?.get(k);
+    if (!meta) continue;
+    coordToNode.set(`${meta.r},${meta.c}`, k);
+  }
+  
+  // Find horizontal patterns (same row, adjacent columns)
+  for (const k of graph.formulaNodes) {
+    const meta = graph.nodeMeta?.get(k);
+    if (!meta || !meta.isLinearPattern) continue;
+    
+    const { r, c } = meta;
+    
+    // Check right neighbor
+    const rightNeighbor = coordToNode.get(`${r},${c + 1}`);
+    if (rightNeighbor) {
+      const rightMeta = graph.nodeMeta?.get(rightNeighbor);
+      if (rightMeta && rightMeta.isLinearPattern && rightMeta.signature === meta.signature) {
+        // Found horizontal pattern
+        const patternId = `h_${r}_${c}`;
+        if (!patterns.has(patternId)) {
+          patterns.set(patternId, {
+            cells: [k],
+            type: 'horizontal',
+            startRow: r,
+            startCol: c
+          });
+        }
+        patterns.get(patternId).cells.push(rightNeighbor);
+      }
+    }
+    
+    // Check down neighbor
+    const downNeighbor = coordToNode.get(`${r + 1},${c}`);
+    if (downNeighbor) {
+      const downMeta = graph.nodeMeta?.get(downNeighbor);
+      if (downMeta && downMeta.isLinearPattern && downMeta.signature === meta.signature) {
+        // Found vertical pattern
+        const patternId = `v_${r}_${c}`;
+        if (!patterns.has(patternId)) {
+          patterns.set(patternId, {
+            cells: [k],
+            type: 'vertical',
+            startRow: r,
+            startCol: c
+          });
+        }
+        patterns.get(patternId).cells.push(downNeighbor);
+      }
+    }
+  }
+  
+  return patterns;
+}
+
 
 // -----------------------------
 // Frames (merge contiguous)
@@ -708,15 +888,20 @@ function createCompactRanges(addrs) {
   // Convert to RC coordinates
   const cells = addrs.map(addr => a1ToRC(addr));
   
+  // ENHANCED: Filter out any invalid or empty cells
+  const validCells = cells.filter(cell => cell && cell.r > 0 && cell.c > 0);
+  
+  if (validCells.length === 0) return { horizontal: [], vertical: [] };
+  
   // Find bounding box
-  const minRow = Math.min(...cells.map(c => c.r));
-  const maxRow = Math.max(...cells.map(c => c.r));
-  const minCol = Math.min(...cells.map(c => c.c));
-  const maxCol = Math.max(...cells.map(c => c.c));
+  const minRow = Math.min(...validCells.map(c => c.r));
+  const maxRow = Math.max(...validCells.map(c => c.r));
+  const minCol = Math.min(...validCells.map(c => c.c));
+  const maxCol = Math.max(...validCells.map(c => c.c));
   
   // Create a grid to mark which cells are present
   const grid = new Map();
-  cells.forEach(cell => {
+  validCells.forEach(cell => {
     grid.set(`${cell.r},${cell.c}`, true);
   });
   
@@ -805,9 +990,18 @@ function framesForLayers(layers) {
   // Return: [{ layer, horizontal: [...], vertical: [...] }, ...]
   return layers.map((layer, idx) => {
     const addrs = layer.map((k) => parseKey(k).addr);
+    
+    // ENHANCED: Filter out empty cells from frame creation
+    const validAddrs = addrs.filter(addr => {
+      // Only include addresses that have meaningful content
+      const rc = a1ToRC(addr);
+      // We'll let the createCompactRanges function handle the filtering
+      return true; // The filtering is already done in finalNodes
+    });
+    
     return {
       layer: idx,
-      ...createCompactRanges(addrs),
+      ...createCompactRanges(validAddrs),
     };
   });
 }
@@ -879,9 +1073,29 @@ function computeReplicatedFormulaGroups(graph) {
     return maxDepth;
   };
   
+  // ENHANCED: Also calculate dependency distance from inputs (not just outputs)
+  const nodeInputDepths = new Map();
+  const calculateInputDepth = (nodeK, visited = new Set()) => {
+    if (visited.has(nodeK)) return 0; // Avoid cycles
+    if (nodeInputDepths.has(nodeK)) return nodeInputDepths.get(nodeK);
+    
+    visited.add(nodeK);
+    let maxInputDepth = 0;
+    const precedents = graph.precedents.get(nodeK) || new Set();
+    for (const prec of precedents) {
+      const precDepth = calculateInputDepth(prec, visited);
+      maxInputDepth = Math.max(maxInputDepth, precDepth + 1);
+    }
+    visited.delete(nodeK);
+    
+    nodeInputDepths.set(nodeK, maxInputDepth);
+    return maxInputDepth;
+  };
+  
   // Calculate depths for all nodes
   for (const k of graph.allNodes) {
     calculateDepth(k);
+    calculateInputDepth(k);
   }
 
   // For each signature group, find rectangular patterns
@@ -931,6 +1145,8 @@ function computeReplicatedFormulaGroups(graph) {
               // ENHANCED GROUPING LOGIC: Group copy-paste patterns with equal step shifts
               const currentDepth = nodeDepths.get(current.node) || 0;
               const neighborDepth = nodeDepths.get(neighborKey) || 0;
+              const currentInputDepth = nodeInputDepths.get(current.node) || 0;
+              const neighborInputDepth = nodeInputDepths.get(neighborKey) || 0;
               
               // Check if either cell has no deeper dependencies (is at the end of its chain)
               const currentHasNoDeeperDeps = (graph.dependents.get(current.node) || new Set()).size === 0;
@@ -938,11 +1154,25 @@ function computeReplicatedFormulaGroups(graph) {
               
               // Check if they're at the same dependency depth (copy-paste pattern)
               const sameDepth = currentDepth === neighborDepth;
+              const sameInputDepth = currentInputDepth === neighborInputDepth;
               
+              // ENHANCED: Check if both cells are part of linear patterns
+              const currentMeta = graph.nodeMeta?.get(current.node);
+              const neighborMeta = graph.nodeMeta?.get(neighborKey);
+              const bothLinearPatterns = currentMeta?.isLinearPattern && neighborMeta?.isLinearPattern;
+              
+              // ENHANCED: Restore clustering for adjacent cells with same formula pattern
               // Group if:
-              // 1. At least one cell has no deeper dependencies (end of chain), OR
-              // 2. They're at the same depth (copy-paste pattern with equal steps)
-              if (currentHasNoDeeperDeps || neighborHasNoDeeperDeps || sameDepth) {
+              // 1. Same input depth AND same output depth (true copy-paste pattern), OR
+              // 2. Both are linear patterns with same signature (B1=A1, C1=B1, etc.), OR
+              // 3. Same input depth AND at least one has no deeper dependencies
+              const shouldGroup = (
+                (sameInputDepth && sameDepth) || 
+                (bothLinearPatterns && currentMeta?.signature === neighborMeta?.signature) ||
+                (sameInputDepth && (currentHasNoDeeperDeps || neighborHasNoDeeperDeps))
+              );
+              
+              if (shouldGroup) {
                 const neighborCell = { node: neighborKey, r: nr, c: nc };
                 block.push(neighborCell);
                 queue.push(neighborCell);
@@ -1102,13 +1332,15 @@ class DependencyAnalyzer {
     
     const graph = buildDependencyGraphFromSpreadsheetData(spreadsheetData, allSheetsData);
 
+    // ENHANCED: Detect adjacent formula patterns before grouping
+    const adjacentPatterns = detectAdjacentFormulaPatterns(graph);
+    
     // Group adjacent replicated formulas so they share the same depth layer
     const groups = computeReplicatedFormulaGroups(graph);
     const compressed = compressGraphByGroups(graph, groups);
 
-    // Compute layers from outputs backward: nodes feeding same outputs share distance from outputs
-    const reversed = reverseGraph(compressed);
-    const groupLayers = forwardTopoLayers(reversed);
+    // Compute layers from inputs forward: nodes at same dependency level share same layer
+    const groupLayers = forwardTopoLayers(compressed);
     const layers = expandGroupLayersToNodes(groupLayers, groups);
     const frames = framesForLayers(layers);
     
@@ -1142,6 +1374,7 @@ class DependencyAnalyzer {
       layers,
       frames: labeledFrames,
       dateFrames,
+      adjacentPatterns,
       graph,
       spreadsheetData,
       textIndex: {
