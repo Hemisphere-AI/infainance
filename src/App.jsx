@@ -30,6 +30,29 @@ function colToNum(col) {
   return n;
 }
 
+// Function to normalize Excel formulas by converting function names to uppercase
+function normalizeFormula(formula) {
+  if (!formula || typeof formula !== 'string') return formula;
+  
+  // List of Excel functions to normalize
+  const excelFunctions = [
+    'sum', 'average', 'count', 'max', 'min', 'if', 'eomonth', 'edate', 'date', 
+    'year', 'month', 'day', 'round', 'roundup', 'rounddown', 'abs', 'sqrt', 
+    'power', 'concatenate', 'len', 'upper', 'lower', 'left', 'right', 'mid', 
+    'find', 'isnumber', 'istext', 'isblank'
+  ];
+  
+  let normalizedFormula = formula;
+  
+  // Convert each function to uppercase
+  excelFunctions.forEach(func => {
+    const regex = new RegExp(`\\b${func}\\b`, 'gi');
+    normalizedFormula = normalizedFormula.replace(regex, func.toUpperCase());
+  });
+  
+  return normalizedFormula;
+}
+
 function numToCol(n) {
   let s = "";
   while (n > 0) {
@@ -554,8 +577,9 @@ function ExcelApp() {
             // For formulas, we need to store the formula string but also preserve the calculated result
             let cellValue
             if (formatInfo.isFormula) {
-              // Store the formula string (with = prefix)
-              cellValue = cell
+              // Store the formula string (with = prefix) and normalize functions to uppercase
+              const normalizedFormula = normalizeFormula(formatInfo.formula);
+              cellValue = '=' + normalizedFormula;
               // For formula cells, we need to ensure they get the proper cellType for formatting
               // If the original cell had a numeric type, preserve it for formula formatting
               if (formatInfo.cellType === 'n' || formatInfo.cellType === 'number') {
@@ -693,7 +717,9 @@ function ExcelApp() {
               // For formulas, use the formula string as the value, otherwise use the cell value
               let cellValue = cell || '';
               if (formatInfo.isFormula && formatInfo.formula) {
-                cellValue = '=' + formatInfo.formula; // Add = prefix for formulas
+                // Normalize formula to uppercase functions
+                const normalizedFormula = normalizeFormula(formatInfo.formula);
+                cellValue = '=' + normalizedFormula; // Add = prefix for formulas
               }
               
               return {

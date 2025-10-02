@@ -1042,7 +1042,8 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle SUM function - but only if it's the entire expression (not part of arithmetic)
-      if (expression.startsWith('SUM(') && expression.endsWith(')') && !expression.includes('+') && !expression.includes('-') && !expression.includes('*') && !expression.includes('/')) {
+      // Case-insensitive detection for sum, Sum, SUM, etc.
+      if (/^sum\(/i.test(expression) && expression.endsWith(')') && !expression.includes('+') && !expression.includes('-') && !expression.includes('*') && !expression.includes('/')) {
         const range = expression.slice(4, -1)
         let result
         if (range.includes(':')) {
@@ -1059,8 +1060,8 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
         return result
       }
       
-      // Handle AVERAGE function
-      if (expression.startsWith('AVERAGE(') && expression.endsWith(')')) {
+      // Handle AVERAGE function - case-insensitive
+      if (/^average\(/i.test(expression) && expression.endsWith(')')) {
         const range = expression.slice(8, -1)
         let result
         if (range.includes(':')) {
@@ -1075,8 +1076,8 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
         return result
       }
       
-      // Handle COUNT function
-      if (expression.startsWith('COUNT(') && expression.endsWith(')')) {
+      // Handle COUNT function - case-insensitive
+      if (/^count\(/i.test(expression) && expression.endsWith(')')) {
         const range = expression.slice(6, -1)
         let result
         if (range.includes(':')) {
@@ -1091,8 +1092,8 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
         return result
       }
       
-      // Handle MAX function
-      if (expression.startsWith('MAX(') && expression.endsWith(')')) {
+      // Handle MAX function - case-insensitive
+      if (/^max\(/i.test(expression) && expression.endsWith(')')) {
         const range = expression.slice(4, -1)
         let result
         if (range.includes(':')) {
@@ -1107,8 +1108,8 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
         return result
       }
       
-      // Handle MIN function
-      if (expression.startsWith('MIN(') && expression.endsWith(')')) {
+      // Handle MIN function - case-insensitive
+      if (/^min\(/i.test(expression) && expression.endsWith(')')) {
         const range = expression.slice(4, -1)
         let result
         if (range.includes(':')) {
@@ -1123,8 +1124,8 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
         return result
       }
       
-      // Handle IF function
-      if (expression.startsWith('IF(') && expression.endsWith(')')) {
+      // Handle IF function - case-insensitive
+      if (/^if\(/i.test(expression) && expression.endsWith(')')) {
         const args = parseFunctionArgs(expression.slice(3, -1))
         if (args.length >= 2) {
           const condition = getCellValue(args[0], visitedCells)
@@ -1138,7 +1139,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle EOMONTH function
-      if (expression.startsWith('EOMONTH(') && expression.endsWith(')')) {
+      if (/^eomonth\(/i.test(expression) && expression.endsWith(')')) {
         const args = parseFunctionArgs(expression.slice(8, -1))
         if (args.length >= 2) {
           const startDateValue = getCellValue(args[0], visitedCells)
@@ -1180,7 +1181,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle EDATE function (same day in target month)
-      if (expression.startsWith('EDATE(') && expression.endsWith(')')) {
+      if (/^edate\(/i.test(expression) && expression.endsWith(')')) {
         const args = parseFunctionArgs(expression.slice(6, -1))
         if (args.length >= 2) {
           const startDateValue = getCellValue(args[0], visitedCells)
@@ -1236,7 +1237,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle DATE function
-      if (expression.startsWith('DATE(') && expression.endsWith(')')) {
+      if (/^date\(/i.test(expression) && expression.endsWith(')')) {
         const args = parseFunctionArgs(expression.slice(5, -1))
         if (args.length >= 3) {
           const year = parseInt(getCellValue(processPercentageValues(args[0]), visitedCells))
@@ -1253,7 +1254,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle YEAR function
-      if (expression.startsWith('YEAR(') && expression.endsWith(')')) {
+      if (/^year\(/i.test(expression) && expression.endsWith(')')) {
         const dateValue = getCellValue(expression.slice(5, -1), visitedCells)
         let date
         
@@ -1300,7 +1301,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle MONTH function
-      if (expression.startsWith('MONTH(') && expression.endsWith(')')) {
+      if (/^month\(/i.test(expression) && expression.endsWith(')')) {
         const dateValue = getCellValue(expression.slice(6, -1), visitedCells)
         let date
         
@@ -1347,7 +1348,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle DAY function
-      if (expression.startsWith('DAY(') && expression.endsWith(')')) {
+      if (/^day\(/i.test(expression) && expression.endsWith(')')) {
         const dateValue = getCellValue(expression.slice(4, -1), visitedCells)
         let date
         
@@ -1394,7 +1395,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle ROUND function
-      if (expression.startsWith('ROUND(') && expression.endsWith(')')) {
+      if (/^round\(/i.test(expression) && expression.endsWith(')')) {
         const args = parseFunctionArgs(expression.slice(6, -1))
         if (args.length >= 2) {
           const number = parseFloat(getCellValue(args[0], visitedCells))
@@ -1409,7 +1410,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle ROUNDUP function
-      if (expression.startsWith('ROUNDUP(') && expression.endsWith(')')) {
+      if (/^roundup\(/i.test(expression) && expression.endsWith(')')) {
         const args = parseFunctionArgs(expression.slice(8, -1))
         if (args.length >= 2) {
           const number = parseFloat(getCellValue(args[0], visitedCells))
@@ -1425,7 +1426,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle ROUNDDOWN function
-      if (expression.startsWith('ROUNDDOWN(') && expression.endsWith(')')) {
+      if (/^rounddown\(/i.test(expression) && expression.endsWith(')')) {
         const args = parseFunctionArgs(expression.slice(10, -1))
         if (args.length >= 2) {
           const number = parseFloat(getCellValue(args[0], visitedCells))
@@ -1441,7 +1442,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle ABS function
-      if (expression.startsWith('ABS(') && expression.endsWith(')')) {
+      if (/^abs\(/i.test(expression) && expression.endsWith(')')) {
         const processedArg = processPercentageValues(expression.slice(4, -1))
         const value = parseFloat(getCellValue(processedArg, visitedCells))
         if (!isNaN(value)) {
@@ -1452,7 +1453,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle SQRT function
-      if (expression.startsWith('SQRT(') && expression.endsWith(')')) {
+      if (/^sqrt\(/i.test(expression) && expression.endsWith(')')) {
         const processedArg = processPercentageValues(expression.slice(5, -1))
         const value = parseFloat(getCellValue(processedArg, visitedCells))
         if (!isNaN(value) && value >= 0) {
@@ -1463,7 +1464,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle POWER function
-      if (expression.startsWith('POWER(') && expression.endsWith(')')) {
+      if (/^power\(/i.test(expression) && expression.endsWith(')')) {
         const args = parseFunctionArgs(expression.slice(6, -1))
         if (args.length >= 2) {
           const base = parseFloat(getCellValue(args[0], visitedCells))
@@ -1478,7 +1479,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle CONCATENATE function
-      if (expression.startsWith('CONCATENATE(') && expression.endsWith(')')) {
+      if (/^concatenate\(/i.test(expression) && expression.endsWith(')')) {
         const args = parseFunctionArgs(expression.slice(12, -1))
         const result = args.map(arg => String(getCellValue(arg, visitedCells))).join('')
         formulaCacheRef.current.set(cacheKey, result)
@@ -1486,7 +1487,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle LEN function
-      if (expression.startsWith('LEN(') && expression.endsWith(')')) {
+      if (/^len\(/i.test(expression) && expression.endsWith(')')) {
         const value = String(getCellValue(expression.slice(4, -1), visitedCells))
         const result = value.length
         formulaCacheRef.current.set(cacheKey, result)
@@ -1494,7 +1495,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle UPPER function
-      if (expression.startsWith('UPPER(') && expression.endsWith(')')) {
+      if (/^upper\(/i.test(expression) && expression.endsWith(')')) {
         const value = String(getCellValue(expression.slice(6, -1), visitedCells))
         const result = value.toUpperCase()
         formulaCacheRef.current.set(cacheKey, result)
@@ -1502,7 +1503,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle LOWER function
-      if (expression.startsWith('LOWER(') && expression.endsWith(')')) {
+      if (/^lower\(/i.test(expression) && expression.endsWith(')')) {
         const value = String(getCellValue(expression.slice(6, -1), visitedCells))
         const result = value.toLowerCase()
         formulaCacheRef.current.set(cacheKey, result)
@@ -1510,7 +1511,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle LEFT function
-      if (expression.startsWith('LEFT(') && expression.endsWith(')')) {
+      if (/^left\(/i.test(expression) && expression.endsWith(')')) {
         const args = parseFunctionArgs(expression.slice(5, -1))
         if (args.length >= 1) {
           const text = String(getCellValue(args[0], visitedCells))
@@ -1522,7 +1523,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle RIGHT function
-      if (expression.startsWith('RIGHT(') && expression.endsWith(')')) {
+      if (/^right\(/i.test(expression) && expression.endsWith(')')) {
         const args = parseFunctionArgs(expression.slice(6, -1))
         if (args.length >= 1) {
           const text = String(getCellValue(args[0], visitedCells))
@@ -1534,7 +1535,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle MID function
-      if (expression.startsWith('MID(') && expression.endsWith(')')) {
+      if (/^mid\(/i.test(expression) && expression.endsWith(')')) {
         const args = parseFunctionArgs(expression.slice(4, -1))
         if (args.length >= 3) {
           const text = String(getCellValue(args[0], visitedCells))
@@ -1550,7 +1551,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle FIND function
-      if (expression.startsWith('FIND(') && expression.endsWith(')')) {
+      if (/^find\(/i.test(expression) && expression.endsWith(')')) {
         const args = parseFunctionArgs(expression.slice(5, -1))
         if (args.length >= 2) {
           const findText = String(getCellValue(args[0], visitedCells))
@@ -1567,7 +1568,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle ISNUMBER function
-      if (expression.startsWith('ISNUMBER(') && expression.endsWith(')')) {
+      if (/^isnumber\(/i.test(expression) && expression.endsWith(')')) {
         const value = getCellValue(expression.slice(9, -1), visitedCells)
         const result = !isNaN(parseFloat(value)) && isFinite(value)
         formulaCacheRef.current.set(cacheKey, result)
@@ -1575,7 +1576,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle ISTEXT function
-      if (expression.startsWith('ISTEXT(') && expression.endsWith(')')) {
+      if (/^istext\(/i.test(expression) && expression.endsWith(')')) {
         const value = getCellValue(expression.slice(7, -1), visitedCells)
         const result = typeof value === 'string' && isNaN(parseFloat(value))
         formulaCacheRef.current.set(cacheKey, result)
@@ -1583,18 +1584,29 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle ISBLANK function
-      if (expression.startsWith('ISBLANK(') && expression.endsWith(')')) {
+      if (/^isblank\(/i.test(expression) && expression.endsWith(')')) {
         const value = getCellValue(expression.slice(8, -1), visitedCells)
         const result = value === '' || value === null || value === undefined
         formulaCacheRef.current.set(cacheKey, result)
         return result
       }
       
-      // Handle simple cell reference (e.g., =M59, =$E$7)
+      // Handle simple cell reference (e.g., =M59, =$E$7, =(A1))
       const simpleCellRefRegex = /^\$?([A-Z]+)\$?(\d+)$/
       const simpleMatch = expression.match(simpleCellRefRegex)
       if (simpleMatch) {
         const result = getCellValue(expression, visitedCells)
+        // Cache the result
+        formulaCacheRef.current.set(cacheKey, result)
+        return result
+      }
+      
+      // Handle cell reference with parentheses (e.g., =(A1), =($E$7))
+      const parenCellRefRegex = /^\(\$?([A-Z]+)\$?(\d+)\)$/
+      const parenMatch = expression.match(parenCellRefRegex)
+      if (parenMatch) {
+        const cellRef = parenMatch[1] + parenMatch[2] // Reconstruct cell reference without parentheses
+        const result = getCellValue(cellRef, visitedCells)
         // Cache the result
         formulaCacheRef.current.set(cacheKey, result)
         return result
