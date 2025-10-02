@@ -5,29 +5,15 @@ import * as XLSX from 'xlsx'
 import ReactSpreadsheet from './UniverSpreadsheet'
 import ChatInterface from './components/ChatInterface'
 import { LLMService } from './services/llmService'
+import { AuthProvider } from './contexts/AuthContext.jsx'
+import { useAuth } from './hooks/useAuth'
+import LoginPage from './components/LoginPage'
+import LandingPage from './components/LandingPage'
+import TermsOfService from './components/TermsOfService'
+import PrivacyPolicy from './components/PrivacyPolicy'
+import UserProfile from './components/UserProfile'
+import { addrToRC as a1ToRC, rcToAddr as rcToA1, getColumnLetter as numToCol } from './utils/a1Helpers'
 
-// Helper function to parse node keys (from indexService.js)
-function parseKey(k) {
-  const idx = k.indexOf("!");
-  return { sheet: k.slice(0, idx), addr: k.slice(idx + 1) };
-}
-
-// Helper functions for A1 to RC conversion
-function a1ToRC(a1) {
-  const clean = a1.replace(/\$/g, '');
-  const m = clean.match(/^([A-Z]{1,3})(\d+)$/);
-  if (!m) throw new Error(`Bad A1: ${a1}`);
-  const [, col, rowStr] = m;
-  return { r: parseInt(rowStr, 10), c: colToNum(col) };
-}
-
-function colToNum(col) {
-  let n = 0;
-  for (let i = 0; i < col.length; i++) {
-    n = n * 26 + (col.charCodeAt(i) - 64); // A=1 ... Z=26
-  }
-  return n;
-}
 
 // Function to normalize Excel formulas by converting function names to uppercase
 function normalizeFormula(formula) {
@@ -52,19 +38,7 @@ function normalizeFormula(formula) {
   return normalizedFormula;
 }
 
-function numToCol(n) {
-  let s = "";
-  while (n > 0) {
-    const r = (n - 1) % 26;
-    s = String.fromCharCode(65 + r) + s;
-    n = Math.floor((n - 1) / 26);
-  }
-  return s;
-}
 
-function rcToA1(r, c) {
-  return `${numToCol(c)}${r}`;
-}
 
 // Helper function to create compact ranges for a list of cells
 function createCompactRangesForCells(cells) {
@@ -122,14 +96,6 @@ function isTestUser(user) {
   const demoUser = import.meta.env.VITE_DEMO_USER;
   return demoUser && user.email === demoUser;
 }
-import { AuthProvider } from './contexts/AuthContext.jsx'
-import { useAuth } from './hooks/useAuth'
-import LoginPage from './components/LoginPage'
-import LandingPage from './components/LandingPage'
-import TermsOfService from './components/TermsOfService'
-import PrivacyPolicy from './components/PrivacyPolicy'
-import UserProfile from './components/UserProfile'
-
 function MainApp() {
   const { user, loading } = useAuth()
 
@@ -174,7 +140,6 @@ function ExcelApp() {
   const [isChatLoading, setIsChatLoading] = useState(false)
   const [decimalButtonClicked, setDecimalButtonClicked] = useState(false)
   const [averageDecimals, setAverageDecimals] = useState(0)
-  const [dependencyFrames, setDependencyFrames] = useState(null)
   const toolCallHandlerRef = useRef(null)
   const llmServiceRef = useRef(null)
   const addBotMessageRef = useRef(null)
@@ -1065,31 +1030,16 @@ function ExcelApp() {
     return colors
   }, [])
 
-  // Helper function to detect labels for a group of cells
-  const detectLabelsForGroup = useCallback((cells, result) => {
-    console.log(`detectLabelsForGroup called with ${cells.length} cells:`, cells);
-    if (!result.textIndex) {
-      console.log('No textIndex available');
-      return null;
-    }
+  // Format selected cells as dates
+  const formatAsDate = useCallback(() => {
+    if (selectedCells.length === 0) return
     
-    const textIndexer = new TextLabelIndexer();
-    textIndexer.textCells = result.textIndex.textCells || [];
-    textIndexer.textIndexByRC = new Map();
-    textIndexer.sectionHeaders = result.textIndex.sectionHeaders || [];
-    textIndexer.globalDateHeader = result.textIndex.globalDateHeader;
-    
-    // Build the RC index
-    textIndexer.textCells.forEach(cell => {
-      textIndexer.textIndexByRC.set(`${cell.r},${cell.c}`, cell);
-    });
-    
-    const labels = {
-      section: null,
-      row: null,
-      column: null,
-      dateHeader: null
-    };
+    setSpreadsheetData(prevData => {
+      const newData = [...prevData]
+      selectedCells.forEach(({ row, col }) => {
+        if (newData[row] && newData[row][col]) {
+          const cell = newData[row][col]
+          const value = cell.value
     
     // Get the range of cells for this group
     const cellRanges = [];
@@ -1227,23 +1177,7 @@ function ExcelApp() {
       console.log('No column labels found');
     }
     
-    console.log('Final labels:', labels);
-    return labels;
-  }, []);
 
-  // Generate AI bot message with indexing results
-  const generateIndexingResultsMessage = useCallback((result) => {
-    const totalLayers = result.layers.length
-    const totalCells = result.layers.reduce((sum, layer) => sum + layer.length, 0)
-    const formulaCells = result.layers.flat().filter(nodeKey => {
-      const meta = result.graph.nodeMeta?.get(nodeKey)
-      return meta && meta.formula
-    }).length
-    
-    let message = `**Analysis Summary:**\n`
-    message += `• **${totalLayers}** dependency layers identified\n`
-    message += `• **${totalCells}** total cells analyzed\n`
-    message += `• **${formulaCells}** formula cells found\n\n`
     
     // Add text/label analysis summary
     if (result.textIndex) {
@@ -1599,109 +1533,7 @@ function ExcelApp() {
       message += `  • Date patterns are highlighted in green on the spreadsheet\n`;
     }
     
-    return message
-  }, [detectLabelsForGroup])
 
-  // Handle dependency analysis with visual highlighting (toggle functionality)
-  const handleDependencyAnalysis = useCallback(async () => {
-    // If already showing dependency frames, clear them
-    if (dependencyFrames) {
-      setDependencyFrames(null)
-      return
-    }
-
-    if (!spreadsheetData || spreadsheetData.length === 0) {
-      alert('No spreadsheet data available for analysis. Please upload a spreadsheet first.')
-      return
-    }
-
-    try {
-      // Use the proper DependencyAnalyzer from indexService
-      const analyzer = new DependencyAnalyzer()
-      const result = analyzer.analyzeSpreadsheetData(spreadsheetData, excelData?.allSheetsData || {})
-      
-      // Calculate max depth from outputs to inputs (output-centric layering)
-      const maxDepth = Math.max(0, result.layers.length - 1)
-      
-      // Create frame highlighting data using green-to-red colors
-      const greenToRedColors = generateGreenToRedColors()
-      
-      const frames = []
-      result.frames.forEach((frame) => {
-        // Input-based layer indexing: inputs (layer 0) should be green, outputs red
-        const depthFromInput = frame.layer
-        let colorIndex = 0
-        if (maxDepth > 0) {
-          colorIndex = Math.floor((depthFromInput / maxDepth) * (greenToRedColors.length - 1))
-        }
-        const color = greenToRedColors[colorIndex]
-        
-        // Process horizontal frames
-        frame.horizontal.forEach(span => {
-          frames.push({
-            range: span,
-            color: color,
-            type: 'horizontal',
-            layer: frame.layer,
-            depthFromInput: depthFromInput
-          })
-        })
-        
-        // Process vertical frames  
-        frame.vertical.forEach(span => {
-          frames.push({
-            range: span,
-            color: color,
-            type: 'vertical', 
-            layer: frame.layer,
-            depthFromInput: depthFromInput
-          })
-        })
-      })
-      
-      // Combine regular frames with date frames
-      const allFrames = [...frames, ...(result.dateFrames || [])];
-      setDependencyFrames(allFrames)
-      
-      // Generate dependency analysis message
-      const indexingMessage = generateIndexingResultsMessage(result)
-      
-      // TEMPORARILY DISABLED: Process the analysis through LLM with dependency analyzer prompt
-      // if (llmServiceRef.current) {
-      //   setIsChatLoading(true)
-      //   try {
-      //     const response = await llmServiceRef.current.dependencyAnalysisChat(indexingMessage)
-      //     
-      //     // Add the LLM response to chat interface
-      //     if (addBotMessageRef.current) {
-      //       addBotMessageRef.current(response)
-      //     }
-      //   } catch (error) {
-      //     console.error('Dependency analysis LLM error:', error)
-      //     // Fallback to showing the raw analysis message
-      //     if (addBotMessageRef.current) {
-      //       addBotMessageRef.current(indexingMessage)
-      //     }
-      //   } finally {
-      //     setIsChatLoading(false)
-      //   }
-      // } else {
-      //   // Fallback: Add the raw analysis message if no LLM service
-      //   if (addBotMessageRef.current) {
-      //     addBotMessageRef.current(indexingMessage)
-      //   }
-      // }
-
-      // TEMPORARY: Show the input message as output (for testing)
-      if (addBotMessageRef.current) {
-        addBotMessageRef.current(indexingMessage)
-      }
-      
-    } catch (error) {
-      console.error('Dependency analysis error:', error)
-      alert(`Analysis failed: ${error.message}`)
-    }
-  }, [spreadsheetData, dependencyFrames, generateGreenToRedColors, generateIndexingResultsMessage, excelData?.allSheetsData])
 
 
   // Format selected cells as dates
@@ -1979,7 +1811,6 @@ function ExcelApp() {
                     formulaDisplayMode={formulaDisplayMode}
                     selectedCells={selectedCells}
                     onSelectedCellsChange={setSelectedCells}
-                    dependencyFrames={dependencyFrames}
                   />
                 ) : (
                   <div className="p-8 text-center text-gray-500">

@@ -387,7 +387,7 @@ export class LLMService {
   findSubFrame(label1, label2) {
     // label1 = metric (e.g., "agents"), label2 = entity axis (e.g., "client")
     const trace = [];
-    trace.push({ step: "find_subframe()", label1, label2 });
+    trace.push({ step: "analysis()", label1, label2 });
 
     // Step 1: Find variables - fuzzy search both labels anywhere
     const metricHits = this.findLabelPositions(label1);
@@ -774,7 +774,12 @@ export class LLMService {
       }
     }
     
-    return { address, newValue };
+    return { 
+      address, 
+      newValue, 
+      success: true, 
+      message: `Cell ${address} successfully updated to ${JSON.stringify(processedValue)}` 
+    };
   }
 
   /**
@@ -865,20 +870,12 @@ export class LLMService {
   async execTool(name, args) {
     try {
       switch (name) {
-        case "find_subframe":
-          return this.findSubFrame(args.label1, args.label2);
         case "conclude":
           return this.conclude(args.answer, args.confidence, args.sources);
-        case "small_talk":
-          return this.smallTalk(args.response);
         case "read_cell":
           return this.readCell(args.address);
         case "update_cell":
           return this.updateCell(args.address, args.newValue);
-        case "recalc":
-          return this.recalc();
-        case "read_sheet":
-          return this.readSheet(args.range);
         default:
           return { error: `Unknown tool: ${name}` };
       }
@@ -1071,7 +1068,7 @@ export class LLMService {
             const usedDataRead = () => {
               // Check for direct data reading tools
               const hasDataRead = toolOutputs.some(t => 
-                ["read_cell", "read_sheet", "find_subframe"].includes(t.tool_name)
+                ["read_cell"].includes(t.tool_name)
               );
               
               
@@ -1081,7 +1078,7 @@ export class LLMService {
             if (!usedDataRead()) {
               console.log('Protocol guard: Blocking conclude without data read');
               const errorResult = {
-                error: "ProtocolError: You must read spreadsheet data before concluding. Call read_cell (the intersection address), read_sheet, or complete indexing first."
+                error: "ProtocolError: You must read spreadsheet data before concluding. Call read_cell first."
               };
               
               // Add error result to conversation
@@ -1171,12 +1168,6 @@ export class LLMService {
             return result.answer;
           }
 
-          // If small_talk tool was called, return the simple response immediately
-          if (call.function.name === 'small_talk') {
-            console.log('Small talk tool called, returning response:', result.response);
-            this.addToHistory("assistant", result.response);
-            return result.response;
-          }
         }
 
         // Get next response from the model
@@ -1555,30 +1546,30 @@ export class LLMService {
             const usedDataRead = () => {
               // Check for direct data reading tools
               const hasDataRead = toolOutputs.some(t => 
-                ["read_cell", "read_sheet", "find_subframe"].includes(t.tool_name)
+                ["read_cell"].includes(t.tool_name)
               );
               return hasDataRead;
             };
 
             if (!usedDataRead()) {
-              console.warn('Protocol violation: conclude called without data read. Adding read_sheet call.');
-              // Add a read_sheet call to get some data first
-              const readSheetCall = {
-                id: `call_${Date.now()}_read_sheet`,
+              console.warn('Protocol violation: conclude called without data read. Adding read_cell call.');
+              // Add a read_cell call to get some data first
+              const readCellCall = {
+                id: `call_${Date.now()}_read_cell`,
                 type: "function",
                 function: {
-                  name: "read_sheet",
-                  arguments: JSON.stringify({ range: "A1:Z50" })
+                  name: "read_cell",
+                  arguments: JSON.stringify({ address: "A1" })
                 }
               };
-              toolCalls.push(readSheetCall);
+              toolCalls.push(readCellCall);
               
               // Add a tool response for the skipped conclude call
               messages.push({
                 role: "tool",
                 tool_call_id: call.id,
                 content: JSON.stringify({ 
-                  error: "Protocol violation: conclude called without data read. Adding read_sheet call first." 
+                  error: "Protocol violation: conclude called without data read. Adding read_cell call first." 
                 })
               });
               continue; // Skip the conclude call for now

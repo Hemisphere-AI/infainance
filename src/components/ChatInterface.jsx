@@ -287,25 +287,9 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onToolCall = null, on
 
   const getToolDescription = (toolName, type) => {
     const descriptions = {
-      'find': {
-        call: '🔎 Searching for label in spreadsheet',
-        result: '📍 Label found'
-      },
-      'find_label_value': {
-        call: '🏷️ Finding label and its associated value',
-        result: '💰 Label-value pair found'
-      },
-      'find_subframe': {
-        call: '🔍 Finding data subframe for comparison analysis',
-        result: '📊 Subframe analysis complete'
-      },
       'conclude': {
         call: '🎯 Providing final answer',
         result: 'Answer concluded'
-      },
-      'small_talk': {
-        call: '💬 Handling simple conversation',
-        result: 'Response provided'
       },
       'read_cell': {
         call: '📖 Reading cell value',
@@ -314,18 +298,6 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onToolCall = null, on
       'update_cell': {
         call: '✏️ Updating cell value',
         result: 'Cell updated'
-      },
-      'recalc': {
-        call: '🔄 Recalculating formulas',
-        result: 'Recalculation complete'
-      },
-      'read_sheet': {
-        call: '📋 Reading spreadsheet range',
-        result: '📊 Range data loaded'
-      },
-      'dependency_analysis': {
-        call: '🔍 Analyzing spreadsheet dependencies',
-        result: '📊 Dependency layer identified'
       },
     };
     
@@ -403,26 +375,8 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onToolCall = null, on
 
   const formatParameters = (toolCall) => {
     if (toolCall.type === 'tool_call') {
-      if (toolCall.tool === 'find') {
-        return [
-          `Searching for: ${toolCall.arguments?.hint || 'N/A'}`,
-          `Strategy: ${toolCall.arguments?.search_strategy || 'default'}`
-        ];
-      } else if (toolCall.tool === 'find_label_value') {
-        return [
-          `Label: ${toolCall.arguments?.label || 'N/A'}`,
-          `Strategy: ${toolCall.arguments?.search_strategy || 'default'}`
-        ];
-      } else if (toolCall.tool === 'find_subframe') {
-        return [
-          `Metric: ${toolCall.arguments?.label1 || 'N/A'}`,
-          `Entity: ${toolCall.arguments?.label2 || 'N/A'}`,
-          `Purpose: Finding which entity has the most/least of the metric`
-        ];
-      } else if (toolCall.tool === 'conclude') {
+      if (toolCall.tool === 'conclude') {
         return [`Answer: ${toolCall.arguments?.answer || 'No answer provided'}`];
-      } else if (toolCall.tool === 'small_talk') {
-        return [`Response: ${toolCall.arguments?.response || 'No response provided'}`];
       } else if (toolCall.tool === 'read_cell') {
         return [
           `Reading cell: ${toolCall.arguments?.address || 'N/A'}`,
@@ -433,52 +387,12 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onToolCall = null, on
           `Cell: ${toolCall.arguments?.address || 'N/A'}`,
           `New value: ${JSON.stringify(toolCall.arguments?.newValue || 'N/A')}`
         ];
-      } else if (toolCall.tool === 'recalc') {
-        return ['Triggering formula recalculation'];
-      } else if (toolCall.tool === 'read_sheet') {
-        return [
-          `Reading range: ${toolCall.arguments?.range || 'N/A'}`,
-          `Purpose: Getting data from multiple cells`
-        ];
-      } else if (toolCall.tool === 'dependency_analysis') {
-        const cells = toolCall.arguments?.cells || [];
-        const mergedCells = mergeCellRanges(cells);
-        return [
-          `Layer ${toolCall.arguments?.layer || 'N/A'}: ${toolCall.arguments?.layerType || 'Unknown'}`,
-          `Cells: ${mergedCells.join(', ') || 'N/A'}`,
-          `Frames: ${toolCall.arguments?.horizontalFrames?.join(', ') || 'None'} | ${toolCall.arguments?.verticalFrames?.join(', ') || 'None'}`
-        ];
       } else {
         return Object.entries(toolCall.arguments || {}).map(([key, value]) => `${key}: ${JSON.stringify(value)}`);
       }
     } else {
       if (toolCall.result?.error) {
         return [`❌ Error: ${toolCall.result.error}`];
-      } else if (toolCall.tool === 'find') {
-        return [
-          `📍 Found: ${toolCall.result?.address || 'N/A'}`,
-          `💰 Value: ${toolCall.result?.value || 'N/A'}`,
-          `📍 Location: ${toolCall.result?.location || 'N/A'}`
-        ];
-      } else if (toolCall.tool === 'find_label_value') {
-        return [
-          `🏷️ Label: ${toolCall.result?.label?.value || 'N/A'}`,
-          `💰 Value: ${toolCall.result?.value?.value || 'N/A'}`,
-          `📍 Location: ${toolCall.result?.valueLocation || 'N/A'}`
-        ];
-      } else if (toolCall.tool === 'find_subframe') {
-        if (toolCall.result?.resultAddr) {
-          return [
-            `📍 Found subframe: ${toolCall.result?.range || 'N/A'}`,
-            `🏆 Winner: ${toolCall.result?.resultEntity || 'N/A'}`,
-            `📍 Location: ${toolCall.result?.resultAddr || 'N/A'}`,
-            `Next: Will read this cell to confirm the value`
-          ];
-        } else if (toolCall.result?.error) {
-          return [`❌ Error: ${toolCall.result.error}`];
-        } else {
-          return ['📊 Subframe analysis complete'];
-        }
       } else if (toolCall.tool === 'conclude') {
         const answer = toolCall.result?.answer || 'No answer provided';
         const confidence = toolCall.result?.confidence || 'unknown';
@@ -488,8 +402,6 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onToolCall = null, on
           `🎯 Confidence: ${confidence}`,
           ...(sources.length > 0 ? [`📚 Sources: ${sources.length} references`] : [])
         ];
-      } else if (toolCall.tool === 'small_talk') {
-        return [`💬 Response: ${toolCall.result?.response || 'No response provided'}`];
       } else if (toolCall.tool === 'read_cell') {
         return [
           `📍 Cell: ${toolCall.result?.address || 'N/A'}`,
@@ -500,39 +412,6 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onToolCall = null, on
         return [
           `Cell: ${toolCall.result?.address || 'N/A'}`,
           `New value: ${JSON.stringify(toolCall.result?.newValue || 'N/A')}`
-        ];
-      } else if (toolCall.tool === 'recalc') {
-        return [
-          `Changed: ${toolCall.result?.changed || 0} cells`,
-          `Message: ${toolCall.result?.message || 'Recalculation complete'}`
-        ];
-      } else if (toolCall.tool === 'read_sheet') {
-        const window = toolCall.result?.window;
-        const range = toolCall.result?.range || 'N/A';
-        return [
-          `📊 Range: ${range}`,
-          `📈 Data loaded: ${window ? 'Yes' : 'No'}`,
-          ...(window ? [
-            `📏 Size: ${window.length} rows x ${window[0]?.length || 0} columns`,
-            `📋 Sample: ${window[0]?.slice(0, 3).join(', ') || 'No data'}`
-          ] : []),
-          `Next: Analyzing the data to find the answer`
-        ];
-      } else if (toolCall.tool === 'dependency_analysis') {
-        const layer = toolCall.result?.layer || 'N/A';
-        const cellCount = toolCall.result?.cellCount || 0;
-        const frames = toolCall.result?.frames;
-        const cells = toolCall.result?.cells || [];
-        const mergedCells = mergeCellRanges(cells);
-        return [
-          `📊 Layer ${layer} analyzed`,
-          `📈 Cells: ${cellCount} cells in this layer`,
-          ...(mergedCells.length > 0 ? [`📍 Cell ranges: ${mergedCells.join(', ')}`] : []),
-          ...(frames ? [
-            `🔗 Horizontal frames: ${frames.horizontal?.join(', ') || 'None'}`,
-            `🔗 Vertical frames: ${frames.vertical?.join(', ') || 'None'}`
-          ] : []),
-          `✅ Layer dependency structure identified`
         ];
       } else {
         return [];

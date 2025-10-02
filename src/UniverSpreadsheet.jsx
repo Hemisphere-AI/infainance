@@ -2,7 +2,7 @@ import React, { useMemo, useState, useCallback, useRef, useEffect } from 'react'
 import PropTypes from 'prop-types'
 import * as XLSX from 'xlsx'
 
-const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1', onDataChange, formulaDisplayMode, selectedCells = [], onSelectedCellsChange, highlightedBlock = null, dependencyFrames = null }) => {
+const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1', onDataChange, formulaDisplayMode, selectedCells = [], onSelectedCellsChange, highlightedBlock = null }) => {
   const [selectedCell, setSelectedCell] = useState(null)
   const [editingCell, setEditingCell] = useState(null)
   const [visibleRange, setVisibleRange] = useState({ startRow: 0, endRow: 50, startCol: 0, endCol: 10 })
@@ -432,40 +432,6 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
     return row >= startRowNum && row <= endRowNum && col >= startColNum && col <= endColNum
   }, [highlightedBlock, getColumnIndex])
 
-  // Helper function to get dependency frame color for a cell
-  const getDependencyFrameColor = useCallback((row, col) => {
-    if (!dependencyFrames || dependencyFrames.length === 0) return null
-    
-    const cellAddr = getColumnLetter(col) + (row + 1)
-    
-    for (const frame of dependencyFrames) {
-      const range = frame.range
-      
-      // Handle single cell (e.g., "A1")
-      if (range.match(/^[A-Z]+\d+$/)) {
-        if (range === cellAddr) {
-          return frame.color
-        }
-      }
-      // Handle range (e.g., "A1:C3")
-      else if (range.includes(':')) {
-        const rangeMatch = range.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/)
-        if (rangeMatch) {
-          const [, startCol, startRow, endCol, endRow] = rangeMatch
-          const startColNum = getColumnIndex(startCol)
-          const endColNum = getColumnIndex(endCol)
-          const startRowNum = parseInt(startRow) - 1
-          const endRowNum = parseInt(endRow) - 1
-          
-          if (row >= startRowNum && row <= endRowNum && col >= startColNum && col <= endColNum) {
-            return frame.color
-          }
-        }
-      }
-    }
-    
-    return null
-  }, [dependencyFrames, getColumnLetter, getColumnIndex])
 
 
   // Handle autocomplete
@@ -2115,8 +2081,6 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
                   // Check if this cell is in the highlighted block
                   const isHighlighted = isInHighlightedBlock(actualRowIndex, actualColIndex)
                   
-                  // Check if this cell is in a dependency frame
-                  const dependencyFrameColor = getDependencyFrameColor(actualRowIndex, actualColIndex)
                   
                   return (
                     <td
@@ -2124,10 +2088,9 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
                       style={{ 
                         width: `${width}px`,
                         border: isReferenced && referencedColor ? `3px solid ${referencedColor}` : 
-                               isHighlighted ? '3px solid #f59e0b' : 
-                               dependencyFrameColor ? `3px solid ${dependencyFrameColor}` : '1px solid #d1d5db',
+                               isHighlighted ? '3px solid #f59e0b' : '1px solid #d1d5db',
                         position: 'relative',
-                        zIndex: isReferenced ? 20 : isHighlighted ? 15 : dependencyFrameColor ? 10 : 'auto'
+                        zIndex: isReferenced ? 20 : isHighlighted ? 15 : 'auto'
                       }}
                       className={`cursor-pointer text-xs py-1 px-2 ${
                         isSelected || isMultiSelected
@@ -2255,11 +2218,5 @@ ReactSpreadsheet.propTypes = {
   })),
   onSelectedCellsChange: PropTypes.func,
   highlightedBlock: PropTypes.string,
-  dependencyFrames: PropTypes.arrayOf(PropTypes.shape({
-    range: PropTypes.string.isRequired,
-    color: PropTypes.string.isRequired,
-    type: PropTypes.string.isRequired,
-    layer: PropTypes.number.isRequired
-  }))
 }
 

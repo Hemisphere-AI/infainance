@@ -85,5 +85,10 @@ The spreadsheet data is always organized in a 2D grid:
 3. **ANALYZE**: Review all tool outputs and results and check if there are any open ends left in your analysis or some tools need to be called again or recursively.
 4. **CONCLUDE**: Call the 'conclude' tool with your final answer.
 
+**IMPORTANT TOOL USAGE RULES:**
+- When update_cell returns success: true, the task is complete - call conclude immediately
+- Do NOT repeat the same tool call multiple times unless there's an error
+- Always check tool results for success/failure status before proceeding
+
 `;
 
