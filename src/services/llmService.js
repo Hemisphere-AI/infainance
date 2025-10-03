@@ -1027,9 +1027,9 @@ export class LLMService {
           // Protocol guard: Check if conclude is being called without data read
           if (call.function.name === 'conclude') {
             const usedDataRead = () => {
-              // Check for direct data reading tools
+              // Check for direct data reading tools or update operations
               const hasDataRead = toolOutputs.some(t => 
-                ["read_cell"].includes(t.tool_name)
+                ["read_cell", "update_cell"].includes(t.tool_name)
               );
               
               
@@ -1505,9 +1505,9 @@ export class LLMService {
           // Protocol guard: Check if conclude is being called without data read
           if (call.function.name === 'conclude') {
             const usedDataRead = () => {
-              // Check for direct data reading tools
+              // Check for direct data reading tools or update operations
               const hasDataRead = toolOutputs.some(t => 
-                ["read_cell"].includes(t.tool_name)
+                ["read_cell", "update_cell"].includes(t.tool_name)
               );
               return hasDataRead;
             };

@@ -12,16 +12,8 @@ export const SupabaseAuthProvider = ({ children }) => {
   useEffect(() => {
     // Get initial session
     supabase.auth.getSession().then(({ data: { session } }) => {
-      console.log('🔍 SupabaseAuthContext: Initial session check:', { 
-        hasSession: !!session, 
-        hasUser: !!session?.user,
-        userId: session?.user?.id,
-        email: session?.user?.email 
-      })
-      
       if (session?.user) {
         setUser(session.user)
-        console.log('✅ SupabaseAuthContext: User authenticated, ensuring profile exists')
         
         // Manually ensure user profile exists since trigger might not be working
         setTimeout(() => {
@@ -29,8 +21,6 @@ export const SupabaseAuthProvider = ({ children }) => {
             id: session.user.id,
             email: session.user.email,
             name: session.user.user_metadata?.name || session.user.email
-          }).then(() => {
-            console.log('✅ SupabaseAuthContext: User profile created/updated in initial session')
           }).catch((err) => {
             console.error('❌ SupabaseAuthContext: Error creating user profile in initial session:', err)
           })
@@ -46,16 +36,7 @@ export const SupabaseAuthProvider = ({ children }) => {
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
-        console.log('🔄 SupabaseAuthContext: Auth state change:', { 
-          event, 
-          hasSession: !!session, 
-          hasUser: !!session?.user,
-          userId: session?.user?.id,
-          email: session?.user?.email 
-        })
-        
         if (event === 'SIGNED_IN' && session?.user) {
-          console.log('🎉 SupabaseAuthContext: User successfully signed in!')
           setUser(session.user)
           
           // Manually ensure user profile exists since trigger might not be working
@@ -64,17 +45,13 @@ export const SupabaseAuthProvider = ({ children }) => {
               id: session.user.id,
               email: session.user.email,
               name: session.user.user_metadata?.name || session.user.email
-            }).then(() => {
-              console.log('✅ SupabaseAuthContext: User profile created/updated manually')
             }).catch((err) => {
               console.error('❌ SupabaseAuthContext: Error creating user profile manually:', err)
             })
           }, 1000)
         } else if (event === 'SIGNED_OUT') {
-          console.log('👋 SupabaseAuthContext: User signed out')
           setUser(null)
         } else if (session?.user) {
-          console.log('✅ SupabaseAuthContext: User authenticated in auth change, letting trigger handle profile creation')
           setUser(session.user)
         } else {
           setUser(null)
@@ -91,9 +68,6 @@ export const SupabaseAuthProvider = ({ children }) => {
       setLoading(true)
       setError(null)
       
-      console.log('🚀 SupabaseAuthContext: Starting Google OAuth sign in...')
-      console.log('🚀 SupabaseAuthContext: Redirect URL:', `${window.location.origin}/app`)
-      
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
@@ -108,8 +82,6 @@ export const SupabaseAuthProvider = ({ children }) => {
       if (error) {
         console.error('❌ SupabaseAuthContext: OAuth error:', error)
         setError('Failed to sign in with Google: ' + error.message)
-      } else {
-        console.log('✅ SupabaseAuthContext: OAuth initiated successfully:', data)
       }
     } catch (err) {
       console.error('❌ SupabaseAuthContext: Error signing in with Google:', err)

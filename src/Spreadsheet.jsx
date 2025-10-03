@@ -17,6 +17,10 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
   const [dragStart, setDragStart] = useState(null)
   const [dragEnd, setDragEnd] = useState(null)
   const [inputValue, setInputValue] = useState('') // Local state for input value during editing
+  const [fillHandleVisible, setFillHandleVisible] = useState(false)
+  const [fillHandlePosition, setFillHandlePosition] = useState(null)
+  const [isFillDragging, setIsFillDragging] = useState(false)
+  const [fillPreview, setFillPreview] = useState([])
   const containerRef = useRef(null)
   const inputRef = useRef(null)
   const scrollTimeoutRef = useRef(null)
@@ -123,33 +127,65 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
     })
   }, [getDependentCells])
 
-  // Process recalculation queue
+  // Process recalculation queue - moved after evaluateFormula to avoid circular dependency
+
+  // Add a state to force re-renders for recalculation
+  const [recalcTrigger, setRecalcTrigger] = useState(0)
+  const [forceUpdate, setForceUpdate] = useState(0)
+
+  // Process recalculation queue - enhanced version that actually calculates display values
   const processRecalculationQueue = useCallback(() => {
     if (recalculationQueueRef.current.size === 0) return
     
-    Array.from(recalculationQueueRef.current)
+    const cellsToRecalc = Array.from(recalculationQueueRef.current)
     
-    // Force multiple re-renders to ensure the component updates
-    setRecalcTrigger(prev => prev + 1)
-    setForceUpdate(prev => prev + 1)
+    // Create a copy of the data to update
+    const newData = [...data]
+    let hasChanges = false
     
-    // Force a data change to trigger parent re-render
-    if (onDataChange) {
-      const newData = [...data]
+    // Process each cell that needs recalculation
+    cellsToRecalc.forEach(cellKey => {
+      const [rowIndex, colIndex] = cellKey.split('-').map(Number)
+      const cell = newData[rowIndex]?.[colIndex]
+      
+      if (cell && cell.value && String(cell.value).startsWith('=')) {
+        try {
+          // Mark as formula and clear any existing display value to force recalculation
+          newData[rowIndex][colIndex] = {
+            ...cell,
+            isFormula: true,
+            displayValue: undefined // Clear to force recalculation in getCellDisplayValue
+          }
+          
+          hasChanges = true
+        } catch (error) {
+          console.warn('Error preparing formula for recalculation:', error)
+          newData[rowIndex][colIndex] = {
+            ...cell,
+            displayValue: '#ERROR',
+            isFormula: true
+          }
+          hasChanges = true
+        }
+      }
+    })
+    
+    // Only update if there were changes
+    if (hasChanges && onDataChange) {
       onDataChange(newData)
     }
     
-    // Clear the queue after triggering re-renders
+    // Force re-renders to ensure the component updates
+    setRecalcTrigger(prev => prev + 1)
+    setForceUpdate(prev => prev + 1)
+    
+    // Clear the queue after processing
     setTimeout(() => {
       recalculationQueueRef.current.clear()
       setRecalcTrigger(prev => prev + 1)
       setForceUpdate(prev => prev + 1)
     }, 50) // Give time for formulas to be evaluated
   }, [data, onDataChange])
-
-  // Add a state to force re-renders for recalculation
-  const [recalcTrigger, setRecalcTrigger] = useState(0)
-  const [forceUpdate, setForceUpdate] = useState(0)
 
   // Extract cell references from formula - moved up to avoid hoisting issues
   const extractCellReferences = useCallback((formula) => {
@@ -292,8 +328,16 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
           input.setSelectionRange(length, length)
         }
       }, 0)
+      
+      // Show fill handle when editing a cell with content
+      const cell = data[editingCell.row]?.[editingCell.col]
+      if (cell && cell.value) {
+        setFillHandleVisible(true)
+        setFillHandlePosition({ row: editingCell.row, col: editingCell.col })
+      } else {
+      }
     }
-  }, [editingCell])
+  }, [editingCell, data])
 
   // Cleanup timeout and animation frame on unmount
   useEffect(() => {
@@ -387,6 +431,15 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
     return result
   }, [])
 
+  // Helper function to get column index from column letter
+  const getColumnIndex = useCallback((colLetter) => {
+    let result = 0
+    for (let i = 0; i < colLetter.length; i++) {
+      result = result * 26 + (colLetter.charCodeAt(i) - 'A'.charCodeAt(0) + 1)
+    }
+    return result - 1
+  }, [])
+
   // Handle column resize
   const handleColumnResize = useCallback((colIndex, newWidth) => {
     setColumnWidths(prev => ({
@@ -405,15 +458,200 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
     return colors[Math.floor(Math.random() * colors.length)]
   }, [])
 
-
-  // Helper function to get column index from column letter
-  const getColumnIndex = useCallback((colLetter) => {
-    let result = 0
-    for (let i = 0; i < colLetter.length; i++) {
-      result = result * 26 + (colLetter.charCodeAt(i) - 'A'.charCodeAt(0) + 1)
+  // Fill handle functionality
+  const showFillHandle = useCallback((rowIndex, colIndex, event) => {
+    // Always show fill handle if cell has content, regardless of editing state
+    const cell = data[rowIndex]?.[colIndex]
+    if (!cell || !cell.value) {
+      return
     }
-    return result - 1
+    
+    setFillHandleVisible(true)
+    setFillHandlePosition({ row: rowIndex, col: colIndex })
+  }, [data, editingCell])
+
+  // Update fill handle position to bottom-right corner of range
+  const updateFillHandlePosition = useCallback((sourceRow, sourceCol, targetRow, targetCol) => {
+    const endRow = Math.max(sourceRow, targetRow)
+    const endCol = Math.max(sourceCol, targetCol)
+    setFillHandlePosition({ row: endRow, col: endCol })
   }, [])
+
+  const hideFillHandle = useCallback(() => {
+    if (isFillDragging) {
+      return
+    }
+    // Don't hide fill handle when editing a cell - keep it visible
+    if (editingCell) {
+      return
+    }
+    setFillHandleVisible(false)
+    setFillHandlePosition(null)
+    setFillPreview([])
+  }, [isFillDragging, editingCell])
+
+  // Calculate relative references in formulas
+  const adjustFormulaReferences = useCallback((formula, sourceRow, sourceCol, targetRow, targetCol) => {
+    if (!formula || !formula.startsWith('=')) return formula
+    
+    const rowDiff = targetRow - sourceRow
+    const colDiff = targetCol - sourceCol
+    
+    // Handle cell references like A1, $A$1, $A1, A$1
+    return formula.replace(/(\$?)([A-Z]+)(\$?)(\d+)/g, (match, colDollar, col, rowDollar, row) => {
+      const colIndex = getColumnIndex(col)
+      const rowIndex = parseInt(row) - 1
+      
+      let newColIndex = colIndex
+      let newRowIndex = rowIndex
+      
+      // Only adjust if not absolute (no $)
+      if (!colDollar) {
+        newColIndex = colIndex + colDiff
+        // Ensure column index doesn't go below 0
+        newColIndex = Math.max(0, newColIndex)
+      }
+      if (!rowDollar) {
+        newRowIndex = rowIndex + rowDiff
+        // Ensure row index doesn't go below 0
+        newRowIndex = Math.max(0, newRowIndex)
+      }
+      
+      // Convert back to column letter
+      const newCol = getColumnLetter(newColIndex)
+      const newRow = newRowIndex + 1
+      
+      return `${colDollar}${newCol}${rowDollar}${newRow}`
+    })
+  }, [getColumnIndex, getColumnLetter])
+
+  // Generate fill preview
+  const generateFillPreview = useCallback((sourceRow, sourceCol, targetRow, targetCol) => {
+    const sourceCell = data[sourceRow]?.[sourceCol]
+    if (!sourceCell) {
+      return []
+    }
+    
+    const preview = []
+    const startRow = Math.min(sourceRow, targetRow)
+    const endRow = Math.max(sourceRow, targetRow)
+    const startCol = Math.min(sourceCol, targetCol)
+    const endCol = Math.max(sourceCol, targetCol)
+    
+    // Handle different fill patterns based on source cell content
+    for (let row = startRow; row <= endRow; row++) {
+      for (let col = startCol; col <= endCol; col++) {
+        if (row === sourceRow && col === sourceCol) continue
+        
+        let newValue = sourceCell.value
+        let newCell = { ...sourceCell }
+        
+        // Handle different types of content
+        if (sourceCell.value && String(sourceCell.value).startsWith('=')) {
+          // Formula - adjust references
+          newValue = adjustFormulaReferences(sourceCell.value, sourceRow, sourceCol, row, col)
+          newCell = { ...sourceCell, value: newValue, isFormula: true }
+        } else if (typeof sourceCell.value === 'number' || !isNaN(parseFloat(sourceCell.value))) {
+          // Numeric value - increment based on pattern
+          const numericValue = parseFloat(sourceCell.value)
+          const rowDiff = row - sourceRow
+          const colDiff = col - sourceCol
+          
+          // Simple increment pattern
+          newValue = numericValue + (rowDiff + colDiff)
+          newCell = { ...sourceCell, value: newValue }
+        } else {
+          // Text or other - copy as-is
+          newValue = sourceCell.value
+          newCell = { ...sourceCell, value: newValue }
+        }
+        
+        preview.push({
+          row,
+          col,
+          value: newValue,
+          cell: newCell
+        })
+      }
+    }
+    
+    return preview
+  }, [data, adjustFormulaReferences])
+
+  // Handle fill drag
+  const handleFillDrag = useCallback((event) => {
+    if (!isFillDragging || !fillHandlePosition) {
+      return
+    }
+    
+    const container = containerRef.current
+    if (!container) return
+    
+    const rect = container.getBoundingClientRect()
+    const x = event.clientX - rect.left + container.scrollLeft
+    const y = event.clientY - rect.top + container.scrollTop
+    
+    const rowHeight = 32
+    const avgColWidth = 120
+    
+    // Calculate target cell more accurately
+    // Account for header row and row number column
+    const targetRow = Math.max(0, Math.floor((y - 32) / rowHeight)) // -32 for header row
+    const targetCol = Math.max(0, Math.floor((x - 40) / avgColWidth)) // -40 for row number column
+    
+    // Ensure we don't go beyond data bounds
+    const maxRow = Math.min(targetRow, data.length - 1)
+    const maxCol = Math.min(targetCol, (data[0]?.length || 0) - 1)
+    
+    const preview = generateFillPreview(fillHandlePosition.row, fillHandlePosition.col, maxRow, maxCol)
+    setFillPreview(preview)
+    
+    // Update fill handle position to bottom-right corner of the range
+    if (preview.length > 0) {
+      updateFillHandlePosition(fillHandlePosition.row, fillHandlePosition.col, maxRow, maxCol)
+    }
+  }, [isFillDragging, fillHandlePosition, generateFillPreview, data, updateFillHandlePosition])
+
+  // Apply fill
+  const applyFill = useCallback(() => {
+    if (!fillHandlePosition || fillPreview.length === 0) {
+      return
+    }
+    
+    const newData = [...data]
+    const cellsToRecalculate = []
+    
+    fillPreview.forEach(({ row, col, cell }) => {
+      if (!newData[row]) newData[row] = []
+      if (!newData[row][col]) newData[row][col] = { value: '', className: '' }
+      
+      newData[row][col] = { ...newData[row][col], ...cell }
+      
+      // Track cells that need recalculation (formulas)
+      if (cell.isFormula || (cell.value && String(cell.value).startsWith('='))) {
+        cellsToRecalculate.push(`${row}-${col}`)
+      }
+    })
+    
+    if (onDataChange) {
+      onDataChange(newData)
+    }
+    
+    // Trigger recalculation for formula cells
+    if (cellsToRecalculate.length > 0) {
+      cellsToRecalculate.forEach(cellKey => {
+        triggerRecalculation(cellKey)
+      })
+      // Process recalculation queue
+      processRecalculationQueue()
+    }
+    
+    // Clear fill state
+    setFillPreview([])
+    setFillHandleVisible(false)
+    setFillHandlePosition(null)
+    setIsFillDragging(false)
+  }, [fillHandlePosition, fillPreview, data, onDataChange, triggerRecalculation, processRecalculationQueue])
 
   // Helper function to check if a cell is in the highlighted block
   const isInHighlightedBlock = useCallback((row, col) => {
@@ -456,13 +694,11 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
 
   // Handle cell value change (without triggering recalculation during typing)
   const handleCellChange = useCallback((rowIndex, colIndex, value, shouldRecalculate = false) => {
-    console.log('🔴 handleCellChange called:', { rowIndex, colIndex, value, shouldRecalculate })
     
     // Check if we're trying to save an incomplete reference
     const stringValue = String(value || '')
     const isIncompleteReference = stringValue.match(/^[=+\-:][^A-Z0-9]*$/) // Ends with =, +, -, or : but no cell reference
     if (isIncompleteReference && !shouldRecalculate) {
-      console.log('🚫 Preventing save of incomplete reference:', stringValue)
       return
     }
     
@@ -477,13 +713,6 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       const normalizedNewValue = newValue || ''
       const valueChanged = normalizedOldValue !== normalizedNewValue
       
-      console.log('🔍 Value comparison:', { 
-        oldValue, 
-        newValue, 
-        normalizedOldValue, 
-        normalizedNewValue, 
-        valueChanged 
-      })
       
       const newData = [...data]
       if (!newData[rowIndex]) newData[rowIndex] = []
@@ -493,19 +722,96 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       const stringValue = String(value || '')
       const isFormula = stringValue.startsWith('=')
       
-      // Update cell with proper type
-      newData[rowIndex][colIndex] = { 
+      // Update cell with proper type and auto-detect currency
+      let cellData = { 
         ...newData[rowIndex][colIndex], 
         value,
-        cellType: isFormula ? 'formula' : 'text'
+        cellType: isFormula ? 'formula' : 'text',
+        isFormula: isFormula
       }
+      
+      // Auto-detect currency formatting when user types €, $, or £ in front of numbers
+      // Only apply currency detection to non-formula cells
+      if (!isFormula && value && typeof value === 'string') {
+        const trimmedValue = value.trim()
+        
+        // Detect Euro (€) currency
+        if (trimmedValue.startsWith('€')) {
+          const numericValue = trimmedValue.slice(1).trim()
+          if (!isNaN(parseFloat(numericValue))) {
+            cellData = {
+              ...cellData,
+              value: numericValue, // Store the numeric value for calculations
+              isCurrency: true,
+              currencySymbol: '€',
+              cellType: 'number'
+            }
+          }
+        }
+        // Detect Dollar ($) currency
+        else if (trimmedValue.startsWith('$')) {
+          const numericValue = trimmedValue.slice(1).trim()
+          if (!isNaN(parseFloat(numericValue))) {
+            cellData = {
+              ...cellData,
+              value: numericValue, // Store the numeric value for calculations
+              isCurrency: true,
+              currencySymbol: '$',
+              cellType: 'number'
+            }
+          }
+        }
+        // Detect Pound (£) currency
+        else if (trimmedValue.startsWith('£')) {
+          const numericValue = trimmedValue.slice(1).trim()
+          if (!isNaN(parseFloat(numericValue))) {
+            cellData = {
+              ...cellData,
+              value: numericValue, // Store the numeric value for calculations
+              isCurrency: true,
+              currencySymbol: '£',
+              cellType: 'number'
+            }
+          }
+        }
+        // If it's text (not currency), reset formatting properties
+        else {
+          cellData = {
+            ...cellData,
+            value: value,
+            cellType: 'text',
+            isCurrency: false,
+            currencySymbol: undefined,
+            isPercentage: false,
+            decimalPlaces: undefined,
+            isDate: false,
+            formatting: undefined
+          }
+        }
+      }
+      
+      // For formulas, calculate and store the display value immediately
+      if (isFormula && shouldRecalculate) {
+        try {
+          // We need to evaluate the formula to get the display value
+          // Since evaluateFormula is not available here, we'll use a simple approach
+          // The getCellDisplayValue function will handle the actual evaluation
+          cellData.isFormula = true
+          // Clear any existing displayValue to force recalculation
+          delete cellData.displayValue
+        } catch (error) {
+          console.warn('Error preparing formula:', error)
+          cellData.displayValue = '#ERROR'
+          cellData.isFormula = true
+        }
+      }
+      
+      newData[rowIndex][colIndex] = cellData
       
       // Always call onDataChange when Enter is pressed (shouldRecalculate = true)
       if (shouldRecalculate || valueChanged) {
-        console.log('💾 Saving cell change:', { shouldRecalculate, valueChanged })
         onDataChange(newData)
       } else {
-        console.log('❌ NOT saving cell change:', { shouldRecalculate, valueChanged, oldValue, newValue })
       }
 
       // Check if we're editing a formula
@@ -556,42 +862,70 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
   const handleMouseDown = useCallback((rowIndex, colIndex, event) => {
     if (event.button !== 0) return // Only handle left mouse button
     
+    // Check if clicking on fill handle
+    if (fillHandleVisible && fillHandlePosition && 
+        fillHandlePosition.row === rowIndex && fillHandlePosition.col === colIndex) {
+      const rect = event.currentTarget.getBoundingClientRect()
+      const clickX = event.clientX - rect.left
+      const clickY = event.clientY - rect.top
+      
+      // Check if click is in the bottom-right corner (fill handle area)
+      if (clickX > rect.width - 12 && clickY > rect.height - 12) {
+        setIsFillDragging(true)
+        event.preventDefault()
+        return
+      }
+    }
+    
     // If we're currently editing a formula, insert the cell reference
     if (isFormulaEditing && editingCell) {
-      const cellRef = getColumnLetter(colIndex) + (rowIndex + 1)
-      const newValue = inputValue + cellRef
+      // Check if the last character allows cell reference insertion
+      const lastChar = inputValue.slice(-1)
+      const allowedChars = ['-', '+', '/', '*', '=', ':']
+      
+      if (allowedChars.includes(lastChar)) {
+        const cellRef = getColumnLetter(colIndex) + (rowIndex + 1)
+        const newValue = inputValue + cellRef
 
-      console.log('🔵 Clicking cell reference - NOT calling handleCellChange')
-      console.log('🔵 New value:', newValue)
-      
-      // Directly update the input value without triggering onChange
-      if (inputRef.current) {
-        inputRef.current.value = newValue
-      }
-      
-      // Update the state to keep it in sync
-      setInputValue(newValue)
-
-      // Keep the same cell in editing mode - DON'T trigger recalculation yet
-      setSelectedCell({ row: editingCell.row, col: editingCell.col })
-      
-      // Update referenced cells for highlighting (only during typing)
-      const stringValue = String(newValue || '')
-      if (stringValue.startsWith('=')) {
-        const references = extractCellReferences(stringValue)
-        setReferencedCells(references)
         
-        // Assign the same color to all referenced cells in this formula
-        const newColors = {}
-        const rangeColor = generateRandomColor()
-        references.forEach(ref => {
-          const key = `${ref.row}-${ref.col}`
-          newColors[key] = rangeColor
-        })
-        setReferencedCellColors(prev => ({ ...prev, ...newColors }))
+        // Directly update the input value without triggering onChange
+        if (inputRef.current) {
+          inputRef.current.value = newValue
+          // Focus back on the input field so user can continue typing
+          setTimeout(() => {
+            inputRef.current.focus()
+          }, 0)
+        }
+        
+        // Update the state to keep it in sync
+        setInputValue(newValue)
+      } else {
+        // Save the current cell's value and switch to the new cell
+        const currentValue = inputValue
+        
+        // Save the current cell's value
+        handleCellChange(editingCell.row, editingCell.col, currentValue, true)
+        
+        // Clear editing state
+        setEditingCell(null)
+        setInputValue('')
+        setIsFormulaEditing(false)
+        setReferencedCells([])
+        
+        // Continue with normal cell selection (don't return here)
       }
+    }
+    
+    // If we're editing a cell but NOT in formula mode, save the current value first
+    if (editingCell && !isFormulaEditing) {
+      const currentValue = inputValue
       
-      return
+      // Save the current cell's value
+      handleCellChange(editingCell.row, editingCell.col, currentValue, true)
+      
+      // Clear editing state
+      setEditingCell(null)
+      setInputValue('')
     }
     
     // Start drag selection
@@ -620,12 +954,26 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
         // Just update the selection without starting to edit
         setSelectedCell({ row: rowIndex, col: colIndex })
         onSelectedCellsChange?.([{ row: rowIndex, col: colIndex }])
+        
+        // Show fill handle if cell has content (even when not editing)
+        const cell = data[rowIndex]?.[colIndex]
+        if (cell && cell.value) {
+          setFillHandleVisible(true)
+          setFillHandlePosition({ row: rowIndex, col: colIndex })
+        }
       } else {
         // Normal cell editing
         setSelectedCell({ row: rowIndex, col: colIndex })
         setEditingCell({ row: rowIndex, col: colIndex })
         setInputValue(String(data[rowIndex]?.[colIndex]?.value || ''))
         onSelectedCellsChange?.([{ row: rowIndex, col: colIndex }])
+        
+        // Show fill handle if cell has content
+        const cell = data[rowIndex]?.[colIndex]
+        if (cell && cell.value) {
+          setFillHandleVisible(true)
+          setFillHandlePosition({ row: rowIndex, col: colIndex })
+        }
       }
       
       // Check if the cell contains a formula and highlight referenced cells
@@ -654,6 +1002,11 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
 
   // Handle mouse move for drag selection
   const handleMouseMove = useCallback((event) => {
+    if (isFillDragging) {
+      handleFillDrag(event)
+      return
+    }
+    
     if (!isDragging || !dragStart) return
     
     const container = containerRef.current
@@ -675,10 +1028,15 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
     const maxCol = Math.min(colIndex, (data[0]?.length || 0) - 1)
     
     setDragEnd({ row: maxRow, col: maxCol })
-  }, [isDragging, dragStart, data])
+  }, [isDragging, dragStart, data, isFillDragging, handleFillDrag])
 
   // Handle mouse up to finish drag selection
   const handleMouseUp = useCallback(() => {
+    if (isFillDragging) {
+      applyFill()
+      return
+    }
+    
     if (!isDragging || !dragStart || !dragEnd) {
       setIsDragging(false)
       setDragStart(null)
@@ -703,7 +1061,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
     setIsDragging(false)
     setDragStart(null)
     setDragEnd(null)
-  }, [isDragging, dragStart, dragEnd, onSelectedCellsChange])
+  }, [isDragging, dragStart, dragEnd, onSelectedCellsChange, isFillDragging, applyFill])
 
 
   // Handle column header click to select entire column
@@ -731,7 +1089,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
     const handleGlobalMouseMove = (e) => handleMouseMove(e)
     const handleGlobalMouseUp = () => handleMouseUp()
 
-    if (isDragging) {
+    if (isDragging || isFillDragging) {
       document.addEventListener('mousemove', handleGlobalMouseMove)
       document.addEventListener('mouseup', handleGlobalMouseUp)
     }
@@ -740,7 +1098,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       document.removeEventListener('mousemove', handleGlobalMouseMove)
       document.removeEventListener('mouseup', handleGlobalMouseUp)
     }
-  }, [isDragging, handleMouseMove, handleMouseUp])
+  }, [isDragging, isFillDragging, handleMouseMove, handleMouseUp])
 
   // Add optimized scroll event listener
   useEffect(() => {
@@ -759,6 +1117,57 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       container.removeEventListener('scroll', optimizedScrollHandler)
     }
   }, [handleScroll])
+
+  // Global keyboard event listener for backspace/delete on selected cells
+  useEffect(() => {
+    const handleGlobalKeyDown = (e) => {
+      // Only handle backspace/delete if we're not in an input field
+      const isInputField = e.target.tagName === 'INPUT' || 
+                           e.target.tagName === 'TEXTAREA' || 
+                           e.target.contentEditable === 'true' ||
+                           e.target.isContentEditable
+      
+      // Handle backspace/delete when no cell is being edited and not in input field
+      if (!editingCell && !isInputField && (e.key === 'Backspace' || e.key === 'Delete')) {
+        e.preventDefault()
+        
+        if (selectedCells.length > 1) {
+          // Multiple cells selected - clear all
+          
+          const newData = [...data]
+          selectedCells.forEach(({ row, col }) => {
+            if (newData[row] && newData[row][col]) {
+              newData[row][col] = { value: '', className: '' }
+            }
+          })
+          
+          if (onDataChange) {
+            onDataChange(newData)
+          }
+          
+          // Clear selection
+          setSelectedCells([])
+          setSelectedCell(null)
+        } else if (selectedCell) {
+          // Single cell selected - clear that cell
+          
+          const newData = [...data]
+          if (newData[selectedCell.row] && newData[selectedCell.row][selectedCell.col]) {
+            newData[selectedCell.row][selectedCell.col] = { value: '', className: '' }
+          }
+          
+          if (onDataChange) {
+            onDataChange(newData)
+          }
+        }
+      }
+    }
+
+    document.addEventListener('keydown', handleGlobalKeyDown)
+    return () => {
+      document.removeEventListener('keydown', handleGlobalKeyDown)
+    }
+  }, [editingCell, selectedCells, selectedCell, data, onDataChange])
 
   // Helper function to parse function arguments (handles nested parentheses)
   const parseFunctionArgs = useCallback((argsString) => {
@@ -1654,6 +2063,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
     }
   }, [data, parseFunctionArgs, processPercentageValues, allSheetsData, currentSheetName])
 
+
   // Enhanced cell value formatting function
   const formatCellValueWithProperties = useCallback((value, cell) => {
     if (!value && value !== 0) return ''
@@ -1845,6 +2255,15 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       if (shouldShowFormula) {
         return cellValue
       } else {
+        // Check if we have a pre-calculated display_value from the database
+        if (cell?.displayValue !== undefined && cell?.displayValue !== null && cell?.displayValue !== '') {
+          // Use the pre-calculated result from the database
+          const formattedResult = formatCellValueWithProperties(cell.displayValue, cell)
+          return formattedResult
+        }
+        
+        // Fallback to live evaluation if no display_value available
+        
         // Track dependencies for this formula cell
         const references = extractCellReferences(cellValue)
         const dependencyKeys = references.map(ref => `${ref.row}-${ref.col}`)
@@ -1852,9 +2271,10 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
         
         const result = evaluateFormula(cellValue, rowIndex, colIndex)
         
-        // Debug: Log inter-sheet formula evaluation
-        if (cellValue.includes('!') && import.meta.env.DEV) {
-          // Debug logging for development
+        // Store the computed result in the cell object for the graph to use
+        if (data[rowIndex] && data[rowIndex][colIndex]) {
+          data[rowIndex][colIndex].computedValue = result
+          data[rowIndex][colIndex].displayValue = result
         }
         
         // Apply enhanced formatting based on cell properties
@@ -2074,8 +2494,29 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       if (rowIndex < data.length - 1) {
         setSelectedCell({ row: rowIndex + 1, col: colIndex })
       }
+    } else if (e.key === 'Backspace' || e.key === 'Delete') {
+      // Handle backspace/delete for multiple selected cells
+      if (selectedCells.length > 1) {
+        e.preventDefault()
+        
+        // Clear all selected cells
+        const newData = [...data]
+        selectedCells.forEach(({ row, col }) => {
+          if (newData[row] && newData[row][col]) {
+            newData[row][col] = { value: '', className: '' }
+          }
+        })
+        
+        if (onDataChange) {
+          onDataChange(newData)
+        }
+        
+        // Clear selection
+        setSelectedCells([])
+        setSelectedCell(null)
+      }
     }
-  }, [data, autocompleteVisible, autocompleteOptions, autocompleteIndex, handleCellChange, editingCell, inputValue])
+  }, [data, autocompleteVisible, autocompleteOptions, autocompleteIndex, handleCellChange, editingCell, inputValue, selectedCells, onDataChange])
 
   if (!data) {
     return (
@@ -2210,6 +2651,34 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
                   const isHighlighted = isInHighlightedBlock(actualRowIndex, actualColIndex)
                   
                   
+                  // Check if this cell should show fill handle
+                  // Show fill handle when:
+                  // 1. Cell is selected (clicked) AND has content
+                  // 2. Cell is being edited
+                  // 3. Mouse is hovering over cell with content
+                  // 4. During fill drag, show at bottom-right corner of range
+                  const isCellSelected = selectedCell?.row === actualRowIndex && selectedCell?.col === actualColIndex
+                  const hasContent = cell?.value && cell.value !== ''
+                  
+                  // During fill drag, show handle at the bottom-right corner of the range
+                  const isFillHandleAtBottomRight = isFillDragging && 
+                    fillHandlePosition?.row === actualRowIndex && 
+                    fillHandlePosition?.col === actualColIndex
+                  
+                  const shouldShowFillHandle = (fillHandleVisible && 
+                    fillHandlePosition?.row === actualRowIndex && 
+                    fillHandlePosition?.col === actualColIndex) ||
+                    (isCellSelected && hasContent) || // Show when cell is selected and has content
+                    isEditing || // Show when editing ANY cell
+                    (editingCell?.row === actualRowIndex && editingCell?.col === actualColIndex) || // Show for editing cell
+                    isFillHandleAtBottomRight // Show at bottom-right during fill drag
+                  
+                  
+                  // Check if this cell is in fill preview
+                  const isInFillPreview = fillPreview.some(preview => 
+                    preview.row === actualRowIndex && preview.col === actualColIndex
+                  )
+                  
                   return (
                     <td
                       key={actualColIndex}
@@ -2227,9 +2696,17 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
                           ? 'bg-blue-50 border-blue-300'
                           : isHighlighted
                           ? 'bg-orange-50'
+                          : isInFillPreview
+                          ? 'bg-green-100 border-green-400'
                           : 'hover:bg-gray-50'
                       } ${shouldHighlightFormula ? 'bg-green-50 border-green-300' : ''} ${shouldShowFormula ? 'bg-blue-50 border-blue-300' : ''} ${isFormulaEditing ? 'ring-2 ring-yellow-400' : ''} ${isNumeric ? 'text-right' : 'text-center'}`}
                       onMouseDown={(e) => handleMouseDown(actualRowIndex, actualColIndex, e)}
+                      onMouseEnter={(e) => {
+                        showFillHandle(actualRowIndex, actualColIndex, e)
+                      }}
+                      onMouseLeave={() => {
+                        hideFillHandle()
+                      }}
                     >
                       {isEditing ? (
                         <div className="relative w-full h-full">
@@ -2242,7 +2719,6 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
                             onChange={(e) => {
                               let newValue = e.target.value
                               
-                              console.log('🟡 onChange called with value:', newValue)
                               
                               // Auto-capitalize cell references in formulas
                               if (newValue.startsWith('=')) {
@@ -2288,6 +2764,12 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
                               // Prevent the cell's onMouseDown from firing when clicking on the input
                               e.stopPropagation()
                             }}
+                            onMouseEnter={(e) => {
+                              showFillHandle(actualRowIndex, actualColIndex, e)
+                            }}
+                            onMouseLeave={() => {
+                              hideFillHandle()
+                            }}
                             onBlur={() => {
                               // Only clear editing state if we're not in formula editing mode
                               // When editing formulas, clicking cells should not clear the editing state
@@ -2327,10 +2809,36 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
                           )}
                         </div>
                         ) : (
-                          <div className={`cell-content ${isNumeric ? 'text-right' : 'text-center'}`}>
+                          <div className={`cell-content ${isNumeric ? 'text-right' : 'text-center'} relative`}>
                             <span className="truncate">
                               {shouldShowFormula ? cellValue : displayValue}
                             </span>
+                            {shouldShowFillHandle && (
+                              <div 
+                                className="absolute cursor-crosshair"
+                                style={{
+                                  bottom: '0px',
+                                  right: '0px',
+                                  width: '6px',
+                                  height: '6px',
+                                  backgroundColor: '#d1d5db',
+                                  borderRadius: '1px',
+                                  zIndex: 9999,
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center'
+                                }}
+                                onMouseDown={(e) => {
+                                  e.stopPropagation()
+                                  // Ensure we have the position set before starting drag
+                                  if (!fillHandlePosition) {
+                                    setFillHandlePosition({ row: actualRowIndex, col: actualColIndex })
+                                  }
+                                  setIsFillDragging(true)
+                                }}
+                              >
+                              </div>
+                            )}
                           </div>
                         )}
                     </td>

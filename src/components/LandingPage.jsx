@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import PropTypes from 'prop-types'
 import { Link } from 'react-router-dom'
 import { ArrowRight, CheckCircle, Shield, FileSpreadsheet, Wand2, AlertTriangle, TrendingUp, Timer, ChevronDown, ChevronUp } from 'lucide-react'
-import { useAuth } from '../hooks/useAuth'
+import { useSupabaseAuth } from '../contexts/SupabaseAuthContext'
 import landingPageHeader from '../assets/landing_page_header.png'
 
 const BenefitItem = ({ icon, title, description, isExpanded, onClick }) => {
@@ -40,7 +40,7 @@ BenefitItem.propTypes = {
 }
 
 const LandingPage = () => {
-  const { user } = useAuth()
+  const { user } = useSupabaseAuth()
   const [expandedBenefit, setExpandedBenefit] = useState(null)
   
   const benefits = [

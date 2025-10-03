@@ -1,11 +1,12 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react'
 import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from 'react-router-dom'
-import { FileSpreadsheet, Download, Calculator } from 'lucide-react'
+import { FileSpreadsheet, Download, Calculator, BarChart3 } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import PropTypes from 'prop-types'
 import ReactSpreadsheet from './Spreadsheet'
 import ChatInterface from './components/ChatInterface'
 import Sidebar from './components/Sidebar'
+import GraphContainer from './components/GraphContainer'
 import { SupabaseAuthProvider, useSupabaseAuth } from './contexts/SupabaseAuthContext'
 import { useSpreadsheet, useUserSpreadsheets } from './hooks/useSpreadsheet'
 import LoginPage from './components/LoginPage'
@@ -14,6 +15,7 @@ import TermsOfService from './components/TermsOfService'
 import PrivacyPolicy from './components/PrivacyPolicy'
 import UserProfile from './components/UserProfile'
 import { LLMService } from './services/llmService'
+import { graphService } from './services/graphService'
 
 // Editable spreadsheet name component
 const EditableSpreadsheetName = ({ name, onRename }) => {
@@ -89,18 +91,7 @@ EditableSpreadsheetName.propTypes = {
 function MainApp() {
   // Let Supabase handle OAuth hash fragments naturally
   useEffect(() => {
-    console.log('🔍 MainApp: Current URL:', window.location.href)
-    console.log('🔍 MainApp: Hash:', window.location.hash)
-    console.log('🔍 MainApp: Search:', window.location.search)
-    console.log('🔍 MainApp: Version 2.0 - NO hash cleanup!')
-    console.log('🚨 MainApp: If you see this message, the new code is running!')
-    
     // Don't clean up hash fragments - let Supabase handle OAuth tokens
-    if (window.location.hash && window.location.pathname === '/app') {
-      console.log('🔍 MainApp: OAuth hash fragment detected, letting Supabase process it')
-      console.log('🔍 MainApp: NOT cleaning up hash - letting Supabase handle it')
-      console.log('🚨 MainApp: Hash fragment will NOT be cleaned up!')
-    }
   }, [])
 
   return (
@@ -128,18 +119,11 @@ function SpreadsheetApp() {
   
   // Debug authentication state
   useEffect(() => {
-    console.log('🔍 SpreadsheetApp: Authentication state:', { 
-      user: !!user, 
-      authLoading, 
-      userId: user?.id,
-      email: user?.email 
-    })
   }, [user, authLoading])
   
   // Redirect to login if not authenticated
   useEffect(() => {
     if (!authLoading && !user) {
-      console.log('🔄 SpreadsheetApp: Redirecting to login - no user and not loading')
       navigate('/login')
     }
   }, [user, authLoading, navigate])
@@ -169,6 +153,10 @@ function MainSpreadsheetApp({ user }) {
   const [selectedCells, setSelectedCells] = useState([])
   const [isChatLoading, setIsChatLoading] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [chatCollapsed, setChatCollapsed] = useState(false)
+  const [saveStatus, setSaveStatus] = useState({ type: null, message: null }) // 'saving', 'success', 'error'
+  const [graphs, setGraphs] = useState([])
+  const [graphsLoading, setGraphsLoading] = useState(false)
   const toolCallHandlerRef = useRef(null)
   const addBotMessageRef = useRef(null)
   const llmServiceRef = useRef(null)
@@ -182,6 +170,36 @@ function MainSpreadsheetApp({ user }) {
     deleteSpreadsheet
   } = useUserSpreadsheets(user.id)
 
+  // Load graphs for current spreadsheet
+  const loadGraphs = useCallback(async () => {
+    if (!currentSpreadsheetId || !user?.id) return
+    
+    setGraphsLoading(true)
+    try {
+      const graphsData = await graphService.getGraphs(currentSpreadsheetId, user.id)
+      
+      // Map database fields to component props
+      const mappedGraphs = graphsData.map(graph => ({
+        id: graph.id,
+        title: graph.title,
+        xAxisRange: graph.label_range,
+        yAxisRange: graph.value_range,
+        isEditing: false
+      }))
+      
+      setGraphs(mappedGraphs)
+    } catch (error) {
+      console.error('Error loading graphs:', error)
+    } finally {
+      setGraphsLoading(false)
+    }
+  }, [currentSpreadsheetId, user?.id])
+
+  // Load graphs when spreadsheet changes
+  useEffect(() => {
+    loadGraphs()
+  }, [loadGraphs])
+
   // Load current spreadsheet
   const { 
     spreadsheet, 
@@ -193,7 +211,6 @@ function MainSpreadsheetApp({ user }) {
 
   // Debug current spreadsheet ID changes
   useEffect(() => {
-    console.log('Current spreadsheet ID changed to:', currentSpreadsheetId)
   }, [currentSpreadsheetId])
 
   // Initialize with first spreadsheet or create new one
@@ -212,21 +229,15 @@ function MainSpreadsheetApp({ user }) {
 
   // Load initial spreadsheet data (only when spreadsheet ID changes, not when user edits)
   useEffect(() => {
-    console.log('🔄 useEffect triggered - spreadsheet ID:', spreadsheet?.id, 'current ID:', currentSpreadsheetId)
-    console.log('🔄 Current spreadsheetData length:', spreadsheetData.length)
     if (spreadsheet?.data && Array.isArray(spreadsheet.data)) {
-      console.log('📥 Loading initial spreadsheet data:', spreadsheet.data.length, 'rows')
       setSpreadsheetData(spreadsheet.data)
     } else if (spreadsheet && (!spreadsheet.data || !Array.isArray(spreadsheet.data))) {
-      console.log('📥 Spreadsheet has no data, setting empty array')
       setSpreadsheetData([])
     }
   }, [spreadsheet?.id]) // Only trigger when spreadsheet ID changes, not on data changes
 
   // Handle spreadsheet data changes
   const handleSpreadsheetChange = useCallback(async (newData) => {
-    console.log('📊 handleSpreadsheetChange called with data:', newData.length, 'rows')
-    console.log('📊 Current spreadsheetData length:', spreadsheetData.length)
     setSpreadsheetData(newData)
     
     // Update LLM service with new data
@@ -237,14 +248,23 @@ function MainSpreadsheetApp({ user }) {
     // Debounce saves to avoid too many database calls
     if (currentSpreadsheetId) {
       try {
-        console.log('💾 Calling saveSpreadsheet...')
+        setSaveStatus({ type: 'saving', message: 'Saving changes...' })
         await saveSpreadsheet(newData)
-        console.log('✅ saveSpreadsheet completed')
+        setSaveStatus({ type: 'success', message: 'Changes saved successfully' })
+        
+        // Clear success message after 2 seconds
+        setTimeout(() => {
+          setSaveStatus({ type: null, message: null })
+        }, 2000)
       } catch (error) {
         console.error('❌ Error saving spreadsheet:', error)
+        setSaveStatus({ type: 'error', message: 'Failed to save changes. Please try again.' })
+        
+        // Clear error message after 5 seconds
+        setTimeout(() => {
+          setSaveStatus({ type: null, message: null })
+        }, 5000)
       }
-    } else {
-      console.log('⚠️ No currentSpreadsheetId, skipping save')
     }
   }, [currentSpreadsheetId, saveSpreadsheet])
 
@@ -287,7 +307,6 @@ function MainSpreadsheetApp({ user }) {
         setTimeout(async () => {
           try {
             const updatedQuotaStatus = await llmServiceRef.current.getTokenQuotaStatus();
-            console.log('Updating token quota status after completion:', updatedQuotaStatus);
             // Dispatch a custom event to notify UserProfile component
             window.dispatchEvent(new CustomEvent('tokenQuotaUpdated', { 
               detail: updatedQuotaStatus 
@@ -328,7 +347,6 @@ function MainSpreadsheetApp({ user }) {
 
   // Handle spreadsheet selection
   const handleSpreadsheetSelect = useCallback((spreadsheetId) => {
-    console.log('Selecting spreadsheet:', spreadsheetId)
     if (spreadsheetId !== currentSpreadsheetId) {
       setCurrentSpreadsheetId(spreadsheetId)
       // Let the useEffect handle data loading when spreadsheet ID changes
@@ -352,6 +370,10 @@ function MainSpreadsheetApp({ user }) {
   // Handle sidebar toggle
   const handleSidebarToggle = useCallback(() => {
     setSidebarOpen(prev => !prev)
+  }, [])
+
+  const handleChatToggle = useCallback(() => {
+    setChatCollapsed(prev => !prev)
   }, [])
 
   // Handle spreadsheet delete
@@ -482,9 +504,23 @@ function MainSpreadsheetApp({ user }) {
 
         {/* Content area */}
         <div className="flex-1 flex flex-col lg:flex-row px-4 py-4 min-h-0 overflow-hidden">
-          {/* Spreadsheet area */}
+          {/* Main content area */}
           <div className="flex-1 flex flex-col min-h-0 lg:mr-4 mb-4 lg:mb-0 min-w-0">
-            <div className="flex-1 bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden flex flex-col min-h-0 max-w-full">
+            {/* Graph Container - Separate container above everything */}
+            <div className="bg-white border border-gray-200 rounded-lg overflow-hidden flex flex-col mb-4">
+              <GraphContainer
+                spreadsheetData={spreadsheetData}
+                allSheetsData={{}}
+                currentSheetName="Sheet1"
+                graphs={graphs}
+                onGraphsChange={setGraphs}
+                spreadsheetId={currentSpreadsheetId}
+                userId={user?.id}
+              />
+            </div>
+
+            {/* Spreadsheet area - Separate container below graphs */}
+            <div className="flex-1 bg-white border border-gray-200 rounded-lg overflow-hidden flex flex-col min-h-0 max-w-full">
               <div className="p-4 border-b border-gray-200 bg-gray-50 flex-shrink-0">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center space-x-2">
@@ -493,12 +529,16 @@ function MainSpreadsheetApp({ user }) {
                       name={spreadsheet?.name || 'Untitled Spreadsheet'}
                       onRename={(newName) => handleSpreadsheetRename(currentSpreadsheetId, newName)}
                     />
-                    {saving && (
-                      <span className="text-xs text-gray-500">Saving...</span>
+                    {saveStatus.type && (
+                      <span className="text-xs text-gray-500">
+                        {saveStatus.type === 'saving' && 'Saving...'}
+                        {saveStatus.type === 'success' && 'Saved'}
+                        {saveStatus.type === 'error' && 'Save failed'}
+                      </span>
                     )}
                   </div>
                   
-                  {/* Formatting buttons - positioned to the right of spreadsheet title */}
+                  {/* Formatting buttons */}
                   <div className="flex items-center space-x-2">
                     {/* Formula display mode button */}
                     <button
@@ -558,7 +598,7 @@ function MainSpreadsheetApp({ user }) {
           </div>
 
           {/* Chat interface */}
-          <div className="w-full lg:w-80 flex-shrink-0">
+          <div className="flex-shrink-0 w-full lg:w-auto">
             <ChatInterface 
               onSendMessage={handleSendMessage}
               isLoading={isChatLoading}
@@ -566,6 +606,8 @@ function MainSpreadsheetApp({ user }) {
               onCancel={handleCancel}
               llmService={llmServiceRef.current}
               onAddBotMessage={handleBotMessageRegistration}
+              isCollapsed={chatCollapsed}
+              onToggleCollapse={handleChatToggle}
             />
           </div>
         </div>
