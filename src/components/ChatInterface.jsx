@@ -1,10 +1,9 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import PropTypes from 'prop-types';
-import { Send, Bot, User, Loader2, Square, ChevronDown, ChevronUp, AlertTriangle, Plus, X } from 'lucide-react';
+import { Send, Bot, User, Loader2, Square, ChevronDown, ChevronUp, Plus, X } from 'lucide-react';
 
-const ChatInterface = ({ onSendMessage, isLoading = false, onToolCall = null, onCancel = null, llmService = null, onAddBotMessage = null }) => {
+const ChatInterface = ({ onSendMessage, isLoading = false, onToolCall = null, onCancel = null, onAddBotMessage = null }) => {
   const [message, setMessage] = useState('');
-  const [tokenQuotaStatus, setTokenQuotaStatus] = useState(null);
   
   // Chat tabs management
   const [activeChatId, setActiveChatId] = useState(1);
@@ -146,15 +145,6 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onToolCall = null, on
     }
   }, [onAddBotMessage, addBotMessage]);
 
-  // Update token quota status
-  useEffect(() => {
-    if (llmService) {
-      const quotaStatus = llmService.getTokenQuotaStatus();
-      setTokenQuotaStatus(quotaStatus);
-    } else {
-      setTokenQuotaStatus(null);
-    }
-  }, [llmService]);
 
   // Handle cancellation
   const handleCancel = useCallback(() => {
@@ -240,16 +230,6 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onToolCall = null, on
         }
       }));
       
-      // Update token quota status after successful completion
-      if (llmService) {
-        // Add a small delay to ensure token cache is fully updated
-        setTimeout(() => {
-          const updatedQuotaStatus = llmService.getTokenQuotaStatus();
-          console.log('Updating token quota status after completion:', updatedQuotaStatus);
-          // Force a new object reference to ensure React re-renders
-          setTokenQuotaStatus({...updatedQuotaStatus});
-        }, 100);
-      }
     } catch (error) {
       const errorMessage = {
         id: Date.now() + 1,
@@ -308,70 +288,8 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onToolCall = null, on
 
 
 
-  // Utility functions for cell range merging
-  const parseCellAddress = (address) => {
-    const match = address.match(/^([A-Z]+)(\d+)$/);
-    if (!match) return null;
-    const [, colStr, rowStr] = match;
-    
-    // Convert column letters to number (A=1, B=2, ..., Z=26, AA=27, etc.)
-    let colNum = 0;
-    for (let i = 0; i < colStr.length; i++) {
-      colNum = colNum * 26 + (colStr.charCodeAt(i) - 64);
-    }
-    
-    return {
-      row: parseInt(rowStr),
-      col: colNum,
-      address: address
-    };
-  };
 
 
-  const mergeCellRanges = (addresses) => {
-    if (!addresses || addresses.length === 0) return [];
-    
-    // Parse all addresses
-    const parsed = addresses
-      .map(parseCellAddress)
-      .filter(addr => addr !== null)
-      .sort((a, b) => a.row - b.row || a.col - b.col);
-    
-    if (parsed.length === 0) return addresses;
-    
-    const ranges = [];
-    let currentRange = { start: parsed[0], end: parsed[0] };
-    
-    for (let i = 1; i < parsed.length; i++) {
-      const current = parsed[i];
-      const prev = parsed[i - 1];
-      
-      // Check if cells are adjacent (same row and consecutive columns, or same column and consecutive rows)
-      const isAdjacent = (current.row === prev.row && current.col === prev.col + 1) ||
-                        (current.col === prev.col && current.row === prev.row + 1);
-      
-      if (isAdjacent) {
-        currentRange.end = current;
-      } else {
-        // Add current range and start new one
-        if (currentRange.start.address === currentRange.end.address) {
-          ranges.push(currentRange.start.address);
-        } else {
-          ranges.push(`${currentRange.start.address}:${currentRange.end.address}`);
-        }
-        currentRange = { start: current, end: current };
-      }
-    }
-    
-    // Add the last range
-    if (currentRange.start.address === currentRange.end.address) {
-      ranges.push(currentRange.start.address);
-    } else {
-      ranges.push(`${currentRange.start.address}:${currentRange.end.address}`);
-    }
-    
-    return ranges;
-  };
 
   const formatParameters = (toolCall) => {
     if (toolCall.type === 'tool_call') {
@@ -420,64 +338,18 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onToolCall = null, on
   };
 
   return (
-    <div className="flex flex-col h-full bg-white border border-gray-200 rounded-lg">
-
-      {/* Token Usage Display */}
-      {tokenQuotaStatus && (
-        <div className="bg-gray-50 p-4 rounded-t-lg">
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-xs font-medium text-gray-700">Token Usage</span>
-            <span className="text-xs font-medium text-gray-600">
-              {tokenQuotaStatus.used >= 1000 ? `${(tokenQuotaStatus.used / 1000).toFixed(1)}K` : tokenQuotaStatus.used.toLocaleString()}
-              {tokenQuotaStatus.limit === Infinity ? ' (unlimited)' : ` / ${tokenQuotaStatus.limit >= 1000 ? `${(tokenQuotaStatus.limit / 1000).toFixed(0)}K` : tokenQuotaStatus.limit.toLocaleString()}`}
-            </span>
-          </div>
-          {/* Only show progress bar for non-test users with limited quota */}
-          {tokenQuotaStatus.limit !== Infinity && tokenQuotaStatus.limit > 0 && (
-            <div className="w-full bg-gray-200 rounded-full h-2">
-              <div 
-                className="h-2 rounded-full bg-blue-500 transition-all duration-300"
-                style={{ width: `${Math.min(100, (tokenQuotaStatus.used / tokenQuotaStatus.limit) * 100)}%` }}
-              ></div>
-            </div>
-          )}
-          
-          {/* Token limit exceeded warning */}
-          {tokenQuotaStatus.hasReachedQuota && (
-            <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-lg">
-              <div className="flex items-center">
-                <AlertTriangle className="w-4 h-4 text-red-600 mr-2 flex-shrink-0" />
-                <div className="flex-1">
-                  <p className="text-sm text-red-800 font-medium">
-                    Token limit reached! Number of tokens used: {tokenQuotaStatus.used.toLocaleString()}
-                  </p>
-                  <p className="text-xs text-red-600 mt-1">
-                    <a 
-                      href="https://calendly.com/hemisphere/30min" 
-                      target="_blank" 
-                      rel="noopener noreferrer"
-                      className="underline hover:text-red-800 transition-colors"
-                    >
-                      Click here to increase your limit
-                    </a>
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
+    <div className="flex flex-col h-full">
 
       {/* Chat Tabs */}
-      <div className="bg-gray-50 px-4 py-0 -mt-px">
-        <div className="flex items-center space-x-0.5">
+      <div className="px-4 pt-2 pb-0">
+        <div className="flex items-end space-x-0.5">
           {Object.values(chats).map((chat) => (
             <div
               key={chat.id}
-              className={`flex items-center space-x-2 px-3 py-2 rounded-t-lg transition-colors ${
+              className={`flex items-center space-x-2 px-3 py-2 rounded-t-lg border border-gray-200 transition-colors relative ${
                 activeChatId === chat.id
-                  ? 'bg-white text-gray-800'
-                  : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
+                  ? 'bg-white text-gray-800 border-b-0 -mb-px z-10'
+                  : 'bg-gray-200 text-gray-600 hover:bg-gray-300 border-b border-gray-200'
               }`}
             >
               <button
@@ -499,7 +371,7 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onToolCall = null, on
           ))}
           <button
             onClick={addNewChat}
-            className="flex items-center px-3 py-2 rounded-t-lg bg-gray-200 hover:bg-gray-300 text-gray-600 transition-colors"
+            className="flex items-center px-3 py-2 rounded-t-lg bg-gray-200 hover:bg-gray-300 text-gray-600 transition-colors border border-gray-200 border-b border-gray-200"
             title="Add new chat"
           >
             <Plus className="w-4 h-4" />
@@ -507,12 +379,14 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onToolCall = null, on
         </div>
       </div>
 
-      {/* Messages */}
-      <div 
-        ref={messagesContainerRef}
-        onScroll={handleScroll}
-        className="flex-1 overflow-y-auto p-4 space-y-2 scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100 hover:scrollbar-thumb-gray-400 relative rounded-b-lg"
-      >
+      {/* White Content Area with Border */}
+      <div className="flex-1 bg-white border border-gray-200 rounded-lg overflow-hidden flex flex-col">
+        {/* Messages */}
+        <div 
+          ref={messagesContainerRef}
+          onScroll={handleScroll}
+          className="flex-1 overflow-y-auto p-4 space-y-2 scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100 hover:scrollbar-thumb-gray-400 relative"
+        >
         {messages.map((msg) => (
           <div
             key={msg.id}
@@ -649,11 +523,11 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onToolCall = null, on
         )}
         
         <div ref={messagesEndRef} />
-      </div>
+        </div>
 
-      {/* Input */}
-      <div className="p-4 border-t border-gray-200">
-        <form onSubmit={handleSubmit} className="flex space-x-2">
+        {/* Input */}
+        <div className="p-4 border-t border-gray-200 bg-white">
+          <form onSubmit={handleSubmit} className="flex space-x-2">
           <input
             type="text"
             value={message}
@@ -687,7 +561,8 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onToolCall = null, on
               <Send className="w-4 h-4" />
             )}
           </button>
-        </form>
+          </form>
+        </div>
       </div>
     </div>
   );

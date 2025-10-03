@@ -2,119 +2,98 @@ import OpenAI from 'openai';
 import { tools, SYSTEM_PROMPT } from '../utils/tools.js';
 import { addrToRC, rcToAddr, sliceRange, getColumnIndex } from '../utils/a1Helpers.js';
 import { tokenSortJaroWinkler } from '../utils/similarity.js';
+import { userService } from '../lib/supabase.js';
 
 /**
- * Token Cache System for tracking OpenAI API usage
- * Tracks tokens per API key with monthly reset
+ * Database-based Token Tracking System for OpenAI API usage
+ * Tracks tokens per user with monthly reset
  */
-class TokenCache {
-  constructor() {
-    this.cacheKey = 'openai_token_usage';
+class DatabaseTokenTracker {
+  constructor(userId) {
+    this.userId = userId;
     this.quotaLimit = 500000; // Token limit per month (500k)
-    this.loadCache();
   }
 
   /**
-   * Load token cache from localStorage
+   * Check if token balance should be reset (new month)
    */
-  loadCache() {
+  async shouldReset() {
     try {
-      const cached = localStorage.getItem(this.cacheKey);
-      if (cached) {
-        const data = JSON.parse(cached);
-        this.cache = data.cache || {};
-        this.lastReset = new Date(data.lastReset);
-        
-        // Check if we need to reset (new month)
-        if (this.shouldReset()) {
-          this.resetCache();
-        }
-      } else {
-        this.cache = {};
-        this.lastReset = new Date();
-        this.saveCache();
+      const balance = await userService.getTokenBalance(this.userId);
+      const now = new Date();
+      const lastReset = new Date(balance.token_reset_date);
+      
+      // Reset on the 1st of each month
+      return now.getMonth() !== lastReset.getMonth() || 
+             now.getFullYear() !== lastReset.getFullYear();
+    } catch (error) {
+      console.warn('Error checking reset status:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Reset token balance for new month
+   */
+  async resetBalance() {
+    try {
+      await userService.resetTokenBalance(this.userId);
+    } catch (error) {
+      console.error('Error resetting token balance:', error);
+    }
+  }
+
+  /**
+   * Get current token usage for user
+   */
+  async getTokenUsage() {
+    try {
+      const balance = await userService.getTokenBalance(this.userId);
+      
+      // Check if we need to reset (new month)
+      if (await this.shouldReset()) {
+        await this.resetBalance();
+        const newBalance = await userService.getTokenBalance(this.userId);
+        return {
+          totalTokens: newBalance.monthly_token_balance,
+          lastUsed: newBalance.token_reset_date
+        };
       }
-    } catch (error) {
-      console.warn('Error loading token cache:', error);
-      this.cache = {};
-      this.lastReset = new Date();
-    }
-  }
-
-  /**
-   * Save token cache to localStorage
-   */
-  saveCache() {
-    try {
-      const data = {
-        cache: this.cache,
-        lastReset: this.lastReset.toISOString()
+      
+      return {
+        totalTokens: balance.monthly_token_balance,
+        lastUsed: balance.token_reset_date
       };
-      localStorage.setItem(this.cacheKey, JSON.stringify(data));
     } catch (error) {
-      console.warn('Error saving token cache:', error);
+      console.error('Error getting token usage:', error);
+      return { totalTokens: 0, lastUsed: null };
     }
   }
 
   /**
-   * Check if cache should be reset (new month)
+   * Add tokens to user's balance
    */
-  shouldReset() {
-    const now = new Date();
-    const lastReset = new Date(this.lastReset);
-    
-    // Reset on the 1st of each month
-    return now.getMonth() !== lastReset.getMonth() || 
-           now.getFullYear() !== lastReset.getFullYear();
+  async addTokens(tokens) {
+    try {
+      await userService.addTokens(this.userId, tokens);
+    } catch (error) {
+      console.error('Error adding tokens:', error);
+    }
   }
 
   /**
-   * Reset cache for new month
+   * Check if user has reached quota
    */
-  resetCache() {
-    this.cache = {};
-    this.lastReset = new Date();
-    this.saveCache();
-  }
-
-  /**
-   * Get current token usage for an API key
-   */
-  getTokenUsage(apiKey) {
-    const keyHash = this.hashApiKey(apiKey);
-    return this.cache[keyHash] || { totalTokens: 0, lastUsed: null };
-  }
-
-  /**
-   * Add tokens to cache for an API key
-   */
-  addTokens(apiKey, tokens) {
-    const keyHash = this.hashApiKey(apiKey);
-    const current = this.getTokenUsage(apiKey);
-    
-    
-    this.cache[keyHash] = {
-      totalTokens: current.totalTokens + tokens,
-      lastUsed: new Date().toISOString()
-    };
-    
-    this.saveCache();
-    
-  }
-
-  /**
-   * Check if API key has reached quota
-   */
-  hasReachedQuota(apiKey) {
-    const usage = this.getTokenUsage(apiKey);
+  async hasReachedQuota() {
+    const usage = await this.getTokenUsage();
     return usage.totalTokens >= this.quotaLimit;
   }
 
   /**
-   * Get quota status for an API key
+   * Get quota status for user
    */
-  getQuotaStatus(apiKey) {
-    const usage = this.getTokenUsage(apiKey);
+  async getQuotaStatus() {
+    const usage = await this.getTokenUsage();
     const quotaStatus = {
       used: usage.totalTokens,
       limit: this.quotaLimit,
@@ -123,20 +102,6 @@ class TokenCache {
       lastUsed: usage.lastUsed
     };
     return quotaStatus;
-  }
-
-  /**
-   * Hash API key for storage (for privacy)
-   */
-  hashApiKey(apiKey) {
-    // Simple hash function for API key identification
-    let hash = 0;
-    for (let i = 0; i < apiKey.length; i++) {
-      const char = apiKey.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash; // Convert to 32-bit integer
-    }
-    return `key_${Math.abs(hash)}`;
   }
 }
 
@@ -162,7 +127,7 @@ export class LLMService {
     this.conversationHistory = [];
     this.abortController = null; // For cancellation support
     this.isCancelled = false; // Flag to track cancellation
-    this.tokenCache = new TokenCache(); // Token tracking system
+    this.tokenTracker = user ? new DatabaseTokenTracker(user.id) : null; // Database-based token tracking
     this.user = user; // Store user information
   }
 
@@ -699,7 +664,7 @@ export class LLMService {
       decimalPlaces: cell.decimalPlaces,
       // Enhanced formatting information
       cellType: cell.cellType || 'text',
-      numberFormat: cell.numberFormat || null,
+      formatting: cell.formatting || null,
       originalFormat: cell.originalFormat || null
     };
   }
@@ -753,7 +718,6 @@ export class LLMService {
       ...existingCell,
       value: processedValue,
       cellType: isFormula ? 'formula' : 'text',
-      rawValue: isFormula ? processedValue : undefined, // For formulas, rawValue should be the formula string
       isFormula: isFormula
     };
     
@@ -924,32 +888,29 @@ export class LLMService {
   }
 
   /**
-   * Get token quota status for the current API key
+   * Get token quota status for the current user
    */
-  getTokenQuotaStatus() {
-    // Use environment API key
-    const apiKeyToUse = import.meta.env.VITE_OPENAI_KEY;
-
-    if (!apiKeyToUse || apiKeyToUse === 'your_openai_api_key_here') {
+  async getTokenQuotaStatus() {
+    if (!this.tokenTracker) {
       return null;
     }
 
-    const quotaStatus = this.tokenCache.getQuotaStatus(apiKeyToUse);
-    
     // Check if this is a test user (demo user or demo key)
     const isTestUser = this.isTestUser();
     
-    
     if (isTestUser) {
+      // For test users, get actual usage but set unlimited limit
+      const actualUsage = await this.tokenTracker.getQuotaStatus();
       return {
-        ...quotaStatus,
+        used: actualUsage.used,
         limit: Infinity,
         remaining: Infinity,
-        hasReachedQuota: false
+        hasReachedQuota: false,
+        lastUsed: actualUsage.lastUsed
       };
     }
 
-    return quotaStatus;
+    return await this.tokenTracker.getQuotaStatus();
   }
 
   /**
@@ -988,8 +949,8 @@ export class LLMService {
       // Check token quota before making API call (skip for test user)
       const isTestUser = this.isTestUser();
       
-      if (!isTestUser && this.tokenCache.hasReachedQuota(apiKeyToUse)) {
-        const quotaStatus = this.tokenCache.getQuotaStatus(apiKeyToUse);
+      if (!isTestUser && this.tokenTracker && await this.tokenTracker.hasReachedQuota()) {
+        const quotaStatus = await this.tokenTracker.getQuotaStatus();
         throw new Error(`OpenAI API key: token limit reached, number of tokens used: ${quotaStatus.used}. <a href="https://calendly.com/hemisphere/30min" target="_blank" rel="noopener noreferrer" class="underline hover:text-blue-800 transition-colors">Click here to increase your limit</a>`);
       }
 
@@ -1025,8 +986,8 @@ export class LLMService {
       });
 
       // Track tokens from the response
-      if (response.usage && response.usage.total_tokens) {
-        this.tokenCache.addTokens(apiKeyToUse, response.usage.total_tokens);
+      if (response.usage && response.usage.total_tokens && this.tokenTracker) {
+        await this.tokenTracker.addTokens(response.usage.total_tokens);
       }
 
       // 2) Handle tool calls in a loop
@@ -1181,7 +1142,7 @@ export class LLMService {
 
         // Track tokens from the response
         if (response.usage && response.usage.total_tokens) {
-          this.tokenCache.addTokens(apiKeyToUse, response.usage.total_tokens);
+          await this.tokenTracker.addTokens(response.usage.total_tokens);
         }
 
         finalResponse = response;
@@ -1467,8 +1428,8 @@ export class LLMService {
       // Check token quota before making API call (skip for test user)
       const isTestUser = this.isTestUser();
       
-      if (!isTestUser && this.tokenCache.hasReachedQuota(apiKeyToUse)) {
-        const quotaStatus = this.tokenCache.getQuotaStatus(apiKeyToUse);
+      if (!isTestUser && this.tokenTracker && await this.tokenTracker.hasReachedQuota()) {
+        const quotaStatus = await this.tokenTracker.getQuotaStatus();
         throw new Error(`OpenAI API key: token limit reached, number of tokens used: ${quotaStatus.used}. <a href="https://calendly.com/hemisphere/30min" target="_blank" rel="noopener noreferrer" class="underline hover:text-blue-800 transition-colors">Click here to increase your limit</a>`);
       }
 
@@ -1503,8 +1464,8 @@ export class LLMService {
       });
 
       // Track tokens from the response
-      if (response.usage && response.usage.total_tokens) {
-        this.tokenCache.addTokens(apiKeyToUse, response.usage.total_tokens);
+      if (response.usage && response.usage.total_tokens && this.tokenTracker) {
+        await this.tokenTracker.addTokens(response.usage.total_tokens);
       }
 
       // 2) Handle tool calls in a loop
@@ -1659,7 +1620,7 @@ export class LLMService {
         
         // Track tokens from the response
         if (response.usage && response.usage.total_tokens) {
-          this.tokenCache.addTokens(apiKeyToUse, response.usage.total_tokens);
+          await this.tokenTracker.addTokens(response.usage.total_tokens);
         }
         
         finalResponse = response;
