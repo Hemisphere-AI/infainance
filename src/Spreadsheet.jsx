@@ -2,7 +2,7 @@ import React, { useMemo, useState, useCallback, useRef, useEffect } from 'react'
 import PropTypes from 'prop-types'
 import * as XLSX from 'xlsx'
 
-const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1', onDataChange, formulaDisplayMode, selectedCells = [], onSelectedCellsChange, highlightedBlock = null, dependencyFrames = null }) => {
+const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1', onDataChange, formulaDisplayMode, selectedCells = [], onSelectedCellsChange, highlightedBlock = null }) => {
   const [selectedCell, setSelectedCell] = useState(null)
   const [editingCell, setEditingCell] = useState(null)
   const [visibleRange, setVisibleRange] = useState({ startRow: 0, endRow: 50, startCol: 0, endCol: 10 })
@@ -16,7 +16,9 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
   const [isDragging, setIsDragging] = useState(false)
   const [dragStart, setDragStart] = useState(null)
   const [dragEnd, setDragEnd] = useState(null)
+  const [inputValue, setInputValue] = useState('') // Local state for input value during editing
   const containerRef = useRef(null)
+  const inputRef = useRef(null)
   const scrollTimeoutRef = useRef(null)
   const rafRef = useRef(null)
   const scrollDebounceRef = useRef(null)
@@ -39,7 +41,9 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
         decimalPlaces: cell?.decimalPlaces,
         isCurrency: cell?.isCurrency,
         isPercentage: cell?.isPercentage,
-        currencySymbol: cell?.currencySymbol
+        currencySymbol: cell?.currencySymbol,
+        isFormula: cell?.isFormula,
+        cellType: cell?.cellType
       }))
     ))
   }, [])
@@ -103,7 +107,6 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
     // Add the changed cell and all its dependents to recalculation queue
     const cellsToRecalc = [changedCellKey, ...getDependentCells(changedCellKey)]
     
-    // Debug logging removed to prevent console spam
     
     cellsToRecalc.forEach(cellKey => {
       recalculationQueueRef.current.add(cellKey)
@@ -124,8 +127,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
   const processRecalculationQueue = useCallback(() => {
     if (recalculationQueueRef.current.size === 0) return
     
-    const cellsToRecalc = Array.from(recalculationQueueRef.current)
-    console.log('Processing recalculation queue:', cellsToRecalc)
+    Array.from(recalculationQueueRef.current)
     
     // Force multiple re-renders to ensure the component updates
     setRecalcTrigger(prev => prev + 1)
@@ -198,7 +200,6 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
   useEffect(() => {
     const currentHash = generateDataHash(data)
     if (currentHash !== lastDataHashRef.current) {
-      console.log('Data change detected, clearing cache and establishing dependencies')
       clearFormulaCache()
       lastDataHashRef.current = currentHash
       
@@ -223,12 +224,15 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       
       // Trigger recalculation for all formula cells
       if (changedCells.size > 0) {
-        console.log('Triggering recalculation for changed cells:', Array.from(changedCells))
         changedCells.forEach(cellKey => {
           triggerRecalculation(cellKey)
         })
         // Process the recalculation queue
         processRecalculationQueue()
+        
+        // Force a re-render to ensure all dependent cells are updated
+        setRecalcTrigger(prev => prev + 1)
+        setForceUpdate(prev => prev + 1)
       }
     }
   }, [data, generateDataHash, clearFormulaCache, extractCellReferences, trackDependencies, triggerRecalculation, processRecalculationQueue])
@@ -326,43 +330,51 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
     )
   }, [data, visibleRange])
 
-  // Handle scroll to update visible range with debouncing
+  // Handle scroll to update visible range with improved debouncing
   const handleScroll = useCallback((e) => {
     // Clear previous debounce timeout
     if (scrollDebounceRef.current) {
       clearTimeout(scrollDebounceRef.current)
     }
     
-    // Debounce scroll events to prevent excessive updates
-    scrollDebounceRef.current = setTimeout(() => {
-      const container = e.target
-      const scrollTop = container.scrollTop
-      const scrollLeft = container.scrollLeft
-      
-      const rowHeight = 32 // height of each row
-      const avgColWidth = 120 // average width of columns
-      
-      // Larger buffer to ensure we load enough data
-      const buffer = 50
-      
-      const startRow = Math.max(0, Math.floor(scrollTop / rowHeight) - buffer)
-      const endRow = Math.min(startRow + Math.ceil(container.clientHeight / rowHeight) + buffer, data.length)
-      
-      // Simplified column calculation using average width
-      const startCol = Math.max(0, Math.floor(scrollLeft / avgColWidth) - buffer)
-      const endCol = Math.min(startCol + Math.ceil(container.clientWidth / avgColWidth) + buffer, data[0]?.length || 0)
-      
-      // Only update if the range has changed significantly to prevent flickering
-      setVisibleRange(prevRange => {
-        if (Math.abs(prevRange.startRow - startRow) > 5 || 
-            Math.abs(prevRange.endRow - endRow) > 5 ||
-            Math.abs(prevRange.startCol - startCol) > 3 || 
-            Math.abs(prevRange.endCol - endCol) > 3) {
-          return { startRow, endRow, startCol, endCol }
-        }
-        return prevRange
-      })
-    }, 8) // 8ms debounce for more responsive scrolling
+    // Use requestAnimationFrame for smoother scrolling
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current)
+    }
+    
+    rafRef.current = requestAnimationFrame(() => {
+      // Debounce scroll events to prevent excessive updates
+      scrollDebounceRef.current = setTimeout(() => {
+        const container = e.target
+        const scrollTop = container.scrollTop
+        const scrollLeft = container.scrollLeft
+        
+        const rowHeight = 32 // height of each row
+        const avgColWidth = 120 // average width of columns
+        
+        // Larger buffer to ensure we load enough data
+        const buffer = 100 // Increased buffer for smoother scrolling
+        
+        const startRow = Math.max(0, Math.floor(scrollTop / rowHeight) - buffer)
+        const endRow = Math.min(startRow + Math.ceil(container.clientHeight / rowHeight) + buffer, data.length)
+        
+        // Simplified column calculation using average width
+        const startCol = Math.max(0, Math.floor(scrollLeft / avgColWidth) - buffer)
+        const endCol = Math.min(startCol + Math.ceil(container.clientWidth / avgColWidth) + buffer, data[0]?.length || 0)
+        
+        // Only update if the range has changed significantly to prevent flickering
+        setVisibleRange(prevRange => {
+          // Increased thresholds to reduce update frequency
+          if (Math.abs(prevRange.startRow - startRow) > 10 || 
+              Math.abs(prevRange.endRow - endRow) > 10 ||
+              Math.abs(prevRange.startCol - startCol) > 5 || 
+              Math.abs(prevRange.endCol - endCol) > 5) {
+            return { startRow, endRow, startCol, endCol }
+          }
+          return prevRange
+        })
+      }, 16) // Increased debounce time for more stable scrolling
+    })
   }, [data])
 
   // Helper function to get column letter from index
@@ -420,40 +432,6 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
     return row >= startRowNum && row <= endRowNum && col >= startColNum && col <= endColNum
   }, [highlightedBlock, getColumnIndex])
 
-  // Helper function to get dependency frame color for a cell
-  const getDependencyFrameColor = useCallback((row, col) => {
-    if (!dependencyFrames || dependencyFrames.length === 0) return null
-    
-    const cellAddr = getColumnLetter(col) + (row + 1)
-    
-    for (const frame of dependencyFrames) {
-      const range = frame.range
-      
-      // Handle single cell (e.g., "A1")
-      if (range.match(/^[A-Z]+\d+$/)) {
-        if (range === cellAddr) {
-          return frame.color
-        }
-      }
-      // Handle range (e.g., "A1:C3")
-      else if (range.includes(':')) {
-        const rangeMatch = range.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/)
-        if (rangeMatch) {
-          const [, startCol, startRow, endCol, endRow] = rangeMatch
-          const startColNum = getColumnIndex(startCol)
-          const endColNum = getColumnIndex(endCol)
-          const startRowNum = parseInt(startRow) - 1
-          const endRowNum = parseInt(endRow) - 1
-          
-          if (row >= startRowNum && row <= endRowNum && col >= startColNum && col <= endColNum) {
-            return frame.color
-          }
-        }
-      }
-    }
-    
-    return null
-  }, [dependencyFrames, getColumnLetter, getColumnIndex])
 
 
   // Handle autocomplete
@@ -478,13 +456,34 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
 
   // Handle cell value change (without triggering recalculation during typing)
   const handleCellChange = useCallback((rowIndex, colIndex, value, shouldRecalculate = false) => {
+    console.log('🔴 handleCellChange called:', { rowIndex, colIndex, value, shouldRecalculate })
+    
+    // Check if we're trying to save an incomplete reference
+    const stringValue = String(value || '')
+    const isIncompleteReference = stringValue.match(/^[=+\-:][^A-Z0-9]*$/) // Ends with =, +, -, or : but no cell reference
+    if (isIncompleteReference && !shouldRecalculate) {
+      console.log('🚫 Preventing save of incomplete reference:', stringValue)
+      return
+    }
+    
     if (onDataChange) {
       const cellKey = `${rowIndex}-${colIndex}`
       const oldValue = data[rowIndex]?.[colIndex]?.value
       const newValue = value
       
-      // Check if the value actually changed
-      const valueChanged = oldValue !== newValue
+      
+      // Check if the value actually changed (normalize empty values)
+      const normalizedOldValue = oldValue || ''
+      const normalizedNewValue = newValue || ''
+      const valueChanged = normalizedOldValue !== normalizedNewValue
+      
+      console.log('🔍 Value comparison:', { 
+        oldValue, 
+        newValue, 
+        normalizedOldValue, 
+        normalizedNewValue, 
+        valueChanged 
+      })
       
       const newData = [...data]
       if (!newData[rowIndex]) newData[rowIndex] = []
@@ -494,14 +493,20 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       const stringValue = String(value || '')
       const isFormula = stringValue.startsWith('=')
       
-      // Update cell with proper type and rawValue
+      // Update cell with proper type
       newData[rowIndex][colIndex] = { 
         ...newData[rowIndex][colIndex], 
         value,
-        cellType: isFormula ? 'formula' : 'text',
-        rawValue: isFormula ? value : undefined // For formulas, rawValue should be the formula string
+        cellType: isFormula ? 'formula' : 'text'
       }
-      onDataChange(newData)
+      
+      // Always call onDataChange when Enter is pressed (shouldRecalculate = true)
+      if (shouldRecalculate || valueChanged) {
+        console.log('💾 Saving cell change:', { shouldRecalculate, valueChanged })
+        onDataChange(newData)
+      } else {
+        console.log('❌ NOT saving cell change:', { shouldRecalculate, valueChanged, oldValue, newValue })
+      }
 
       // Check if we're editing a formula
       setIsFormulaEditing(stringValue.startsWith('='))
@@ -536,6 +541,10 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
         triggerRecalculation(cellKey)
         // Process recalculation queue immediately
         processRecalculationQueue()
+        
+        // Force a re-render to ensure all dependent cells are updated
+        setRecalcTrigger(prev => prev + 1)
+        setForceUpdate(prev => prev + 1)
       }
 
       // Trigger autocomplete
@@ -550,14 +559,38 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
     // If we're currently editing a formula, insert the cell reference
     if (isFormulaEditing && editingCell) {
       const cellRef = getColumnLetter(colIndex) + (rowIndex + 1)
-      const currentValue = data[editingCell.row]?.[editingCell.col]?.value || ''
-      const newValue = currentValue + cellRef
+      const newValue = inputValue + cellRef
 
-      // Update the formula with the cell reference
-      handleCellChange(editingCell.row, editingCell.col, newValue, false) // false = don't recalculate during formula editing
+      console.log('🔵 Clicking cell reference - NOT calling handleCellChange')
+      console.log('🔵 New value:', newValue)
+      
+      // Directly update the input value without triggering onChange
+      if (inputRef.current) {
+        inputRef.current.value = newValue
+      }
+      
+      // Update the state to keep it in sync
+      setInputValue(newValue)
 
-      // Keep the same cell in editing mode
+      // Keep the same cell in editing mode - DON'T trigger recalculation yet
       setSelectedCell({ row: editingCell.row, col: editingCell.col })
+      
+      // Update referenced cells for highlighting (only during typing)
+      const stringValue = String(newValue || '')
+      if (stringValue.startsWith('=')) {
+        const references = extractCellReferences(stringValue)
+        setReferencedCells(references)
+        
+        // Assign the same color to all referenced cells in this formula
+        const newColors = {}
+        const rangeColor = generateRandomColor()
+        references.forEach(ref => {
+          const key = `${ref.row}-${ref.col}`
+          newColors[key] = rangeColor
+        })
+        setReferencedCellColors(prev => ({ ...prev, ...newColors }))
+      }
+      
       return
     }
     
@@ -581,31 +614,43 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
         onSelectedCellsChange?.(newSelection)
       }
     } else {
-      // Single selection
-      setSelectedCell({ row: rowIndex, col: colIndex })
-      setEditingCell({ row: rowIndex, col: colIndex })
-      onSelectedCellsChange?.([{ row: rowIndex, col: colIndex }])
+      // Single selection - but don't start editing if we're already editing a formula
+      if (isFormulaEditing && editingCell) {
+        // If we're editing a formula, don't start editing a new cell
+        // Just update the selection without starting to edit
+        setSelectedCell({ row: rowIndex, col: colIndex })
+        onSelectedCellsChange?.([{ row: rowIndex, col: colIndex }])
+      } else {
+        // Normal cell editing
+        setSelectedCell({ row: rowIndex, col: colIndex })
+        setEditingCell({ row: rowIndex, col: colIndex })
+        setInputValue(String(data[rowIndex]?.[colIndex]?.value || ''))
+        onSelectedCellsChange?.([{ row: rowIndex, col: colIndex }])
+      }
       
       // Check if the cell contains a formula and highlight referenced cells
-      const cellValue = String(data[rowIndex]?.[colIndex]?.value || '')
-      if (cellValue.startsWith('=')) {
-        const references = extractCellReferences(cellValue)
-        setReferencedCells(references)
-        
-        // Assign the same color to all referenced cells in this formula
-        const newColors = {}
-        const rangeColor = generateRandomColor()
-        references.forEach(ref => {
-          const key = `${ref.row}-${ref.col}`
-          newColors[key] = rangeColor
-        })
-        setReferencedCellColors(prev => ({ ...prev, ...newColors }))
-      } else {
-        setReferencedCells([])
-        setReferencedCellColors({})
+      // Only do this if we're not currently editing a formula
+      if (!isFormulaEditing || !editingCell) {
+        const cellValue = String(data[rowIndex]?.[colIndex]?.value || '')
+        if (cellValue.startsWith('=')) {
+          const references = extractCellReferences(cellValue)
+          setReferencedCells(references)
+          
+          // Assign the same color to all referenced cells in this formula
+          const newColors = {}
+          const rangeColor = generateRandomColor()
+          references.forEach(ref => {
+            const key = `${ref.row}-${ref.col}`
+            newColors[key] = rangeColor
+          })
+          setReferencedCellColors(prev => ({ ...prev, ...newColors }))
+        } else {
+          setReferencedCells([])
+          setReferencedCellColors({})
+        }
       }
     }
-  }, [isFormulaEditing, editingCell, data, getColumnLetter, handleCellChange, selectedCells, onSelectedCellsChange, extractCellReferences, generateRandomColor])
+  }, [isFormulaEditing, editingCell, data, getColumnLetter, selectedCells, onSelectedCellsChange, extractCellReferences, generateRandomColor, inputValue])
 
   // Handle mouse move for drag selection
   const handleMouseMove = useCallback((event) => {
@@ -681,7 +726,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
     onSelectedCellsChange?.(newSelection)
   }, [data, onSelectedCellsChange])
 
-  // Add mouse event listeners
+  // Add mouse event listeners and optimize scroll handling
   useEffect(() => {
     const handleGlobalMouseMove = (e) => handleMouseMove(e)
     const handleGlobalMouseUp = () => handleMouseUp()
@@ -696,6 +741,24 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       document.removeEventListener('mouseup', handleGlobalMouseUp)
     }
   }, [isDragging, handleMouseMove, handleMouseUp])
+
+  // Add optimized scroll event listener
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+
+    // Use passive listener for better performance
+    const optimizedScrollHandler = (e) => {
+      e.preventDefault = () => {} // Prevent default to avoid conflicts
+      handleScroll(e)
+    }
+
+    container.addEventListener('scroll', optimizedScrollHandler, { passive: true })
+
+    return () => {
+      container.removeEventListener('scroll', optimizedScrollHandler)
+    }
+  }, [handleScroll])
 
   // Helper function to parse function arguments (handles nested parentheses)
   const parseFunctionArgs = useCallback((argsString) => {
@@ -742,6 +805,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
     
     const cellKey = `${rowIndex}-${colIndex}`
     
+    
     // Check if this cell is in the recalculation queue
     const shouldRecalculate = recalculationQueueRef.current.has(cellKey)
     
@@ -754,71 +818,34 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
     try {
       const expression = stringFormula.slice(1)
       
-      // Debug logging removed to prevent console spam
-      
       // Enhanced number parsing that handles currency/locale formatted values robustly
       const parseNumericValue = (value) => {
         if (value === null || value === undefined) return 0
         if (typeof value === 'number') return value
         let stringVal = String(value).trim()
 
-        // Use cell rawValue when available for better numeric fidelity
-        // This helper is only used with getCellValue/parseRange which have access to data[][]
-
         // Normalize NBSP and spaces
         stringVal = stringVal.replace(/\u00A0/g, ' ').replace(/\s+/g, ' ').trim()
 
-        // Handle accounting negatives with parentheses: ($1,234.56) or (1.234,56 €)
-        let isNegative = false
-        if (/^\(.*\)$/.test(stringVal)) {
-          isNegative = true
-          stringVal = stringVal.slice(1, -1)
+        // Handle empty strings
+        if (stringVal === '') return 0
+
+        // Handle percentage values (e.g., "2%" -> 0.02)
+        const isPercent = stringVal.endsWith('%')
+        if (isPercent) {
+          stringVal = stringVal.slice(0, -1)
         }
 
-        // Strip common currency symbols and ISO codes around value
-        // Accept symbols $, €, £ and codes USD, EUR, GBP placed before/after with spaces
-        stringVal = stringVal.replace(/(^[€$£]\s*|\s*[€$£]$)/g, '')
-        stringVal = stringVal.replace(/\b(USD|EUR|GBP)\b/gi, '').trim()
-
-        // Remove thousands separators and normalize decimal
-        // Support both 1,234.56 and 1.234,56; decide by last separator
-        const hasComma = stringVal.includes(',')
-        const hasDot = stringVal.includes('.')
-        if (hasComma && hasDot) {
-          // Determine decimal separator by last occurrence
-          const lastComma = stringVal.lastIndexOf(',')
-          const lastDot = stringVal.lastIndexOf('.')
-          if (lastComma > lastDot) {
-            // comma is decimal; remove dots (thousands), replace comma with dot
-            stringVal = stringVal.replace(/\./g, '').replace(/,/g, '.')
-          } else {
-            // dot is decimal; remove commas (thousands)
-            stringVal = stringVal.replace(/,/g, '')
-          }
-        } else if (hasComma && !hasDot) {
-          // Check if it's likely a thousands separator (more than 3 digits after comma)
-          const commaIndex = stringVal.lastIndexOf(',')
-          const afterComma = stringVal.substring(commaIndex + 1)
-          if (afterComma.length > 3) {
-            // Likely thousands separator, remove comma
-            stringVal = stringVal.replace(/,/g, '')
-          } else {
-            // Likely European decimal comma; replace comma with dot
-            stringVal = stringVal.replace(/\./g, '') // just in case stray dots
-            stringVal = stringVal.replace(/,/g, '.')
-          }
-        } else {
-          // Remove any commas as thousands
-          stringVal = stringVal.replace(/,/g, '')
+        // Handle negative values
+        const isNegative = stringVal.startsWith('-')
+        if (isNegative) {
+          stringVal = stringVal.slice(1)
         }
 
-        // Handle trailing percentage
-        let isPercent = false
-        if (/%$/.test(stringVal)) {
-          isPercent = true
-          stringVal = stringVal.replace(/%$/, '')
-        }
+        // Remove currency symbols and thousands separators
+        stringVal = stringVal.replace(/[$€£¥₹]/g, '').replace(/,/g, '')
 
+        // Try to parse as number
         const parsed = parseFloat(stringVal)
         if (isNaN(parsed)) return 0
         let result = parsed
@@ -826,7 +853,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
         if (isPercent) result = result / 100
         return result
       }
-
+      
       // Helper function to get cell value (recursively evaluates formulas)
       // Now supports inter-sheet references like 'Sheet2'!A1
       const getCellValue = (cellRef, visitedCells = new Set(), targetSheet = currentSheetName) => {
@@ -903,9 +930,9 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
           return finalResult
         }
         
-        // CASE 2: RAW VALUE - Use the numeric value for calculations
-        if (cell.rawValue !== undefined && cell.rawValue !== null) {
-          return parseFloat(cell.rawValue) || 0
+        // CASE 2: DISPLAY VALUE - Use the display value for calculations
+        if (cell.value !== undefined && cell.value !== null) {
+          return parseFloat(cell.value) || 0
         }
         
         // CASE 3: DISPLAY VALUE - Extract numeric value from formatted string
@@ -919,6 +946,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       // Helper function to parse range (e.g., A1:A10 or $A$1:$A$10)
       // Now supports inter-sheet references like 'Sheet2'!A1:B10
       const parseRange = (range, targetSheet = currentSheetName) => {
+        
         // Handle inter-sheet references like 'Sheet2'!A1:B10
         const interSheetMatch = range.match(/^'([^']+)'!(.+)$/)
         if (interSheetMatch) {
@@ -973,9 +1001,9 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
                 numValue = parseFloat(result) || 0
               }
             }
-            // CASE 2: RAW VALUE - Use the numeric value for calculations
-            else if (cell.rawValue !== undefined && cell.rawValue !== null) {
-              numValue = parseFloat(cell.rawValue) || 0
+            // CASE 2: DISPLAY VALUE - Use the display value for calculations
+            else if (cell.value !== undefined && cell.value !== null) {
+              numValue = parseFloat(cell.value) || 0
             }
             // CASE 3: DISPLAY VALUE - Extract numeric value from formatted string
             else if (cell.value) {
@@ -987,11 +1015,62 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
             }
           }
         }
+        
         return values
       }
       
-      // Handle SUM function
-      if (expression.startsWith('SUM(') && expression.endsWith(')')) {
+      // Handle basic arithmetic FIRST (before single function checks)
+      if (expression.includes('+') || expression.includes('-') || expression.includes('*') || expression.includes('/')) {
+        let processedExpression = expression
+        
+        // First, handle percentage values (e.g., 2% -> 0.02)
+        processedExpression = processPercentageValues(processedExpression)
+        
+        // Handle SUM functions within arithmetic expressions
+        const sumFunctionRegex = /SUM\([^)]+\)/g
+        processedExpression = processedExpression.replace(sumFunctionRegex, (sumMatch) => {
+          // Extract the range from SUM(range)
+          const range = sumMatch.slice(4, -1)
+          let sumResult = 0
+          
+          if (range.includes(':')) {
+            const values = parseRange(range)
+            sumResult = values.reduce((sum, val) => sum + val, 0)
+          } else {
+            // Single cell or comma-separated values
+            const values = range.split(',').map(ref => getCellValue(ref.trim(), visitedCells))
+            sumResult = values.reduce((sum, val) => sum + val, 0)
+          }
+          
+          return sumResult
+        })
+        
+        // Updated regex to handle absolute references with $ symbols
+        // Handle both simple cell references (A1, $B$2) and inter-sheet references ('Sheet'!A1 or Sheet!A1)
+        const cellRefRegex = /(?:'([^']+)'!|([A-Za-z][A-Za-z0-9_]*[A-Za-z0-9]|[A-Za-z])!)?(\$?[A-Z]+\$?\d+)/g
+        processedExpression = processedExpression.replace(cellRefRegex, (match, quotedSheetName, unquotedSheetName, cellRef) => {
+          // If it's an inter-sheet reference (either quoted or unquoted), pass the full match to getCellValue
+          if (quotedSheetName || unquotedSheetName) {
+            const cellValue = getCellValue(match, visitedCells)
+            return cellValue
+          } else {
+            // Simple cell reference
+            const cellValue = getCellValue(cellRef, visitedCells)
+            return cellValue
+          }
+        })
+        
+        const result = Function('"use strict"; return (' + processedExpression + ')')()
+        const finalResult = isNaN(result) ? stringFormula : result
+        
+        // Cache the result
+        formulaCacheRef.current.set(cacheKey, finalResult)
+        return finalResult
+      }
+      
+      // Handle SUM function - but only if it's the entire expression (not part of arithmetic)
+      // Case-insensitive detection for sum, Sum, SUM, etc.
+      if (/^sum\(/i.test(expression) && expression.endsWith(')') && !expression.includes('+') && !expression.includes('-') && !expression.includes('*') && !expression.includes('/')) {
         const range = expression.slice(4, -1)
         let result
         if (range.includes(':')) {
@@ -1002,13 +1081,14 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
           const values = range.split(',').map(ref => getCellValue(ref.trim(), visitedCells))
           result = values.reduce((sum, val) => sum + val, 0)
         }
+        
         // Cache the result
         formulaCacheRef.current.set(cacheKey, result)
         return result
       }
       
-      // Handle AVERAGE function
-      if (expression.startsWith('AVERAGE(') && expression.endsWith(')')) {
+      // Handle AVERAGE function - case-insensitive
+      if (/^average\(/i.test(expression) && expression.endsWith(')')) {
         const range = expression.slice(8, -1)
         let result
         if (range.includes(':')) {
@@ -1023,8 +1103,8 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
         return result
       }
       
-      // Handle COUNT function
-      if (expression.startsWith('COUNT(') && expression.endsWith(')')) {
+      // Handle COUNT function - case-insensitive
+      if (/^count\(/i.test(expression) && expression.endsWith(')')) {
         const range = expression.slice(6, -1)
         let result
         if (range.includes(':')) {
@@ -1039,8 +1119,8 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
         return result
       }
       
-      // Handle MAX function
-      if (expression.startsWith('MAX(') && expression.endsWith(')')) {
+      // Handle MAX function - case-insensitive
+      if (/^max\(/i.test(expression) && expression.endsWith(')')) {
         const range = expression.slice(4, -1)
         let result
         if (range.includes(':')) {
@@ -1055,8 +1135,8 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
         return result
       }
       
-      // Handle MIN function
-      if (expression.startsWith('MIN(') && expression.endsWith(')')) {
+      // Handle MIN function - case-insensitive
+      if (/^min\(/i.test(expression) && expression.endsWith(')')) {
         const range = expression.slice(4, -1)
         let result
         if (range.includes(':')) {
@@ -1071,8 +1151,8 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
         return result
       }
       
-      // Handle IF function
-      if (expression.startsWith('IF(') && expression.endsWith(')')) {
+      // Handle IF function - case-insensitive
+      if (/^if\(/i.test(expression) && expression.endsWith(')')) {
         const args = parseFunctionArgs(expression.slice(3, -1))
         if (args.length >= 2) {
           const condition = getCellValue(args[0], visitedCells)
@@ -1086,7 +1166,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle EOMONTH function
-      if (expression.startsWith('EOMONTH(') && expression.endsWith(')')) {
+      if (/^eomonth\(/i.test(expression) && expression.endsWith(')')) {
         const args = parseFunctionArgs(expression.slice(8, -1))
         if (args.length >= 2) {
           const startDateValue = getCellValue(args[0], visitedCells)
@@ -1104,12 +1184,12 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
               const [year, month, day] = startDateValue.split('-')
               date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day))
             } else {
-              // Try to parse as a number (Excel serial number)
+              // Try to parse as a number (spreadsheet serial number)
               const numValue = parseFloat(startDateValue)
               if (!isNaN(numValue)) {
-                // Convert Excel serial number to Date
-                const excelEpoch = new Date(1900, 0, 1)
-                date = new Date(excelEpoch.getTime() + (numValue - 1) * 24 * 60 * 60 * 1000)
+                // Convert spreadsheet serial number to Date
+                const spreadsheetEpoch = new Date(1900, 0, 1)
+                date = new Date(spreadsheetEpoch.getTime() + (numValue - 1) * 24 * 60 * 60 * 1000)
               }
             }
             
@@ -1128,7 +1208,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle EDATE function (same day in target month)
-      if (expression.startsWith('EDATE(') && expression.endsWith(')')) {
+      if (/^edate\(/i.test(expression) && expression.endsWith(')')) {
         const args = parseFunctionArgs(expression.slice(6, -1))
         if (args.length >= 2) {
           const startDateValue = getCellValue(args[0], visitedCells)
@@ -1146,12 +1226,12 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
               const [year, month, day] = startDateValue.split('-')
               date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day))
             } else {
-              // Try to parse as a number (Excel serial number)
+              // Try to parse as a number (spreadsheet serial number)
               const numValue = parseFloat(startDateValue)
               if (!isNaN(numValue)) {
-                // Convert Excel serial number to Date
-                const excelEpoch = new Date(1900, 0, 1)
-                date = new Date(excelEpoch.getTime() + (numValue - 1) * 24 * 60 * 60 * 1000)
+                // Convert spreadsheet serial number to Date
+                const spreadsheetEpoch = new Date(1900, 0, 1)
+                date = new Date(spreadsheetEpoch.getTime() + (numValue - 1) * 24 * 60 * 60 * 1000)
               }
             }
             
@@ -1184,7 +1264,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle DATE function
-      if (expression.startsWith('DATE(') && expression.endsWith(')')) {
+      if (/^date\(/i.test(expression) && expression.endsWith(')')) {
         const args = parseFunctionArgs(expression.slice(5, -1))
         if (args.length >= 3) {
           const year = parseInt(getCellValue(processPercentageValues(args[0]), visitedCells))
@@ -1201,7 +1281,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle YEAR function
-      if (expression.startsWith('YEAR(') && expression.endsWith(')')) {
+      if (/^year\(/i.test(expression) && expression.endsWith(')')) {
         const dateValue = getCellValue(expression.slice(5, -1), visitedCells)
         let date
         
@@ -1217,25 +1297,25 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
           const [year, month, day] = dateValue.split('-')
           date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day))
         } else {
-          // Try to parse as Excel serial number
+          // Try to parse as spreadsheet serial number
           const numValue = parseFloat(dateValue)
           if (!isNaN(numValue)) {
-            // Use xlsx library to convert Excel serial number to date
+            // Use xlsx library to convert spreadsheet serial number to date
             try {
               const dateString = XLSX.SSF.format('yyyy-mm-dd', numValue)
               if (dateString && dateString !== 'Invalid Date') {
                 date = new Date(dateString)
               } else {
                 // Fallback to manual calculation
-                const excelEpoch = new Date(1900, 0, 1)
+                const spreadsheetEpoch = new Date(1900, 0, 1)
                 const daysSinceEpoch = numValue - 1
-                date = new Date(excelEpoch.getTime() + daysSinceEpoch * 24 * 60 * 60 * 1000)
+                date = new Date(spreadsheetEpoch.getTime() + daysSinceEpoch * 24 * 60 * 60 * 1000)
               }
             } catch (error) {
               // Fallback to manual calculation
-              const excelEpoch = new Date(1900, 0, 1)
+              const spreadsheetEpoch = new Date(1900, 0, 1)
               const daysSinceEpoch = numValue - 1
-              date = new Date(excelEpoch.getTime() + daysSinceEpoch * 24 * 60 * 60 * 1000)
+              date = new Date(spreadsheetEpoch.getTime() + daysSinceEpoch * 24 * 60 * 60 * 1000)
             }
           }
         }
@@ -1248,7 +1328,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle MONTH function
-      if (expression.startsWith('MONTH(') && expression.endsWith(')')) {
+      if (/^month\(/i.test(expression) && expression.endsWith(')')) {
         const dateValue = getCellValue(expression.slice(6, -1), visitedCells)
         let date
         
@@ -1264,25 +1344,25 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
           const [year, month, day] = dateValue.split('-')
           date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day))
         } else {
-          // Try to parse as Excel serial number
+          // Try to parse as spreadsheet serial number
           const numValue = parseFloat(dateValue)
           if (!isNaN(numValue)) {
-            // Use xlsx library to convert Excel serial number to date
+            // Use xlsx library to convert spreadsheet serial number to date
             try {
               const dateString = XLSX.SSF.format('yyyy-mm-dd', numValue)
               if (dateString && dateString !== 'Invalid Date') {
                 date = new Date(dateString)
               } else {
                 // Fallback to manual calculation
-                const excelEpoch = new Date(1900, 0, 1)
+                const spreadsheetEpoch = new Date(1900, 0, 1)
                 const daysSinceEpoch = numValue - 1
-                date = new Date(excelEpoch.getTime() + daysSinceEpoch * 24 * 60 * 60 * 1000)
+                date = new Date(spreadsheetEpoch.getTime() + daysSinceEpoch * 24 * 60 * 60 * 1000)
               }
             } catch (error) {
               // Fallback to manual calculation
-              const excelEpoch = new Date(1900, 0, 1)
+              const spreadsheetEpoch = new Date(1900, 0, 1)
               const daysSinceEpoch = numValue - 1
-              date = new Date(excelEpoch.getTime() + daysSinceEpoch * 24 * 60 * 60 * 1000)
+              date = new Date(spreadsheetEpoch.getTime() + daysSinceEpoch * 24 * 60 * 60 * 1000)
             }
           }
         }
@@ -1295,7 +1375,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle DAY function
-      if (expression.startsWith('DAY(') && expression.endsWith(')')) {
+      if (/^day\(/i.test(expression) && expression.endsWith(')')) {
         const dateValue = getCellValue(expression.slice(4, -1), visitedCells)
         let date
         
@@ -1311,25 +1391,25 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
           const [year, month, day] = dateValue.split('-')
           date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day))
         } else {
-          // Try to parse as Excel serial number
+          // Try to parse as spreadsheet serial number
           const numValue = parseFloat(dateValue)
           if (!isNaN(numValue)) {
-            // Use xlsx library to convert Excel serial number to date
+            // Use xlsx library to convert spreadsheet serial number to date
             try {
               const dateString = XLSX.SSF.format('yyyy-mm-dd', numValue)
               if (dateString && dateString !== 'Invalid Date') {
                 date = new Date(dateString)
               } else {
                 // Fallback to manual calculation
-                const excelEpoch = new Date(1900, 0, 1)
+                const spreadsheetEpoch = new Date(1900, 0, 1)
                 const daysSinceEpoch = numValue - 1
-                date = new Date(excelEpoch.getTime() + daysSinceEpoch * 24 * 60 * 60 * 1000)
+                date = new Date(spreadsheetEpoch.getTime() + daysSinceEpoch * 24 * 60 * 60 * 1000)
               }
             } catch (error) {
               // Fallback to manual calculation
-              const excelEpoch = new Date(1900, 0, 1)
+              const spreadsheetEpoch = new Date(1900, 0, 1)
               const daysSinceEpoch = numValue - 1
-              date = new Date(excelEpoch.getTime() + daysSinceEpoch * 24 * 60 * 60 * 1000)
+              date = new Date(spreadsheetEpoch.getTime() + daysSinceEpoch * 24 * 60 * 60 * 1000)
             }
           }
         }
@@ -1342,7 +1422,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle ROUND function
-      if (expression.startsWith('ROUND(') && expression.endsWith(')')) {
+      if (/^round\(/i.test(expression) && expression.endsWith(')')) {
         const args = parseFunctionArgs(expression.slice(6, -1))
         if (args.length >= 2) {
           const number = parseFloat(getCellValue(args[0], visitedCells))
@@ -1357,7 +1437,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle ROUNDUP function
-      if (expression.startsWith('ROUNDUP(') && expression.endsWith(')')) {
+      if (/^roundup\(/i.test(expression) && expression.endsWith(')')) {
         const args = parseFunctionArgs(expression.slice(8, -1))
         if (args.length >= 2) {
           const number = parseFloat(getCellValue(args[0], visitedCells))
@@ -1373,7 +1453,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle ROUNDDOWN function
-      if (expression.startsWith('ROUNDDOWN(') && expression.endsWith(')')) {
+      if (/^rounddown\(/i.test(expression) && expression.endsWith(')')) {
         const args = parseFunctionArgs(expression.slice(10, -1))
         if (args.length >= 2) {
           const number = parseFloat(getCellValue(args[0], visitedCells))
@@ -1389,7 +1469,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle ABS function
-      if (expression.startsWith('ABS(') && expression.endsWith(')')) {
+      if (/^abs\(/i.test(expression) && expression.endsWith(')')) {
         const processedArg = processPercentageValues(expression.slice(4, -1))
         const value = parseFloat(getCellValue(processedArg, visitedCells))
         if (!isNaN(value)) {
@@ -1400,7 +1480,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle SQRT function
-      if (expression.startsWith('SQRT(') && expression.endsWith(')')) {
+      if (/^sqrt\(/i.test(expression) && expression.endsWith(')')) {
         const processedArg = processPercentageValues(expression.slice(5, -1))
         const value = parseFloat(getCellValue(processedArg, visitedCells))
         if (!isNaN(value) && value >= 0) {
@@ -1411,7 +1491,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle POWER function
-      if (expression.startsWith('POWER(') && expression.endsWith(')')) {
+      if (/^power\(/i.test(expression) && expression.endsWith(')')) {
         const args = parseFunctionArgs(expression.slice(6, -1))
         if (args.length >= 2) {
           const base = parseFloat(getCellValue(args[0], visitedCells))
@@ -1426,7 +1506,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle CONCATENATE function
-      if (expression.startsWith('CONCATENATE(') && expression.endsWith(')')) {
+      if (/^concatenate\(/i.test(expression) && expression.endsWith(')')) {
         const args = parseFunctionArgs(expression.slice(12, -1))
         const result = args.map(arg => String(getCellValue(arg, visitedCells))).join('')
         formulaCacheRef.current.set(cacheKey, result)
@@ -1434,7 +1514,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle LEN function
-      if (expression.startsWith('LEN(') && expression.endsWith(')')) {
+      if (/^len\(/i.test(expression) && expression.endsWith(')')) {
         const value = String(getCellValue(expression.slice(4, -1), visitedCells))
         const result = value.length
         formulaCacheRef.current.set(cacheKey, result)
@@ -1442,7 +1522,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle UPPER function
-      if (expression.startsWith('UPPER(') && expression.endsWith(')')) {
+      if (/^upper\(/i.test(expression) && expression.endsWith(')')) {
         const value = String(getCellValue(expression.slice(6, -1), visitedCells))
         const result = value.toUpperCase()
         formulaCacheRef.current.set(cacheKey, result)
@@ -1450,7 +1530,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle LOWER function
-      if (expression.startsWith('LOWER(') && expression.endsWith(')')) {
+      if (/^lower\(/i.test(expression) && expression.endsWith(')')) {
         const value = String(getCellValue(expression.slice(6, -1), visitedCells))
         const result = value.toLowerCase()
         formulaCacheRef.current.set(cacheKey, result)
@@ -1458,7 +1538,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle LEFT function
-      if (expression.startsWith('LEFT(') && expression.endsWith(')')) {
+      if (/^left\(/i.test(expression) && expression.endsWith(')')) {
         const args = parseFunctionArgs(expression.slice(5, -1))
         if (args.length >= 1) {
           const text = String(getCellValue(args[0], visitedCells))
@@ -1470,7 +1550,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle RIGHT function
-      if (expression.startsWith('RIGHT(') && expression.endsWith(')')) {
+      if (/^right\(/i.test(expression) && expression.endsWith(')')) {
         const args = parseFunctionArgs(expression.slice(6, -1))
         if (args.length >= 1) {
           const text = String(getCellValue(args[0], visitedCells))
@@ -1482,7 +1562,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle MID function
-      if (expression.startsWith('MID(') && expression.endsWith(')')) {
+      if (/^mid\(/i.test(expression) && expression.endsWith(')')) {
         const args = parseFunctionArgs(expression.slice(4, -1))
         if (args.length >= 3) {
           const text = String(getCellValue(args[0], visitedCells))
@@ -1498,7 +1578,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle FIND function
-      if (expression.startsWith('FIND(') && expression.endsWith(')')) {
+      if (/^find\(/i.test(expression) && expression.endsWith(')')) {
         const args = parseFunctionArgs(expression.slice(5, -1))
         if (args.length >= 2) {
           const findText = String(getCellValue(args[0], visitedCells))
@@ -1515,7 +1595,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle ISNUMBER function
-      if (expression.startsWith('ISNUMBER(') && expression.endsWith(')')) {
+      if (/^isnumber\(/i.test(expression) && expression.endsWith(')')) {
         const value = getCellValue(expression.slice(9, -1), visitedCells)
         const result = !isNaN(parseFloat(value)) && isFinite(value)
         formulaCacheRef.current.set(cacheKey, result)
@@ -1523,7 +1603,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle ISTEXT function
-      if (expression.startsWith('ISTEXT(') && expression.endsWith(')')) {
+      if (/^istext\(/i.test(expression) && expression.endsWith(')')) {
         const value = getCellValue(expression.slice(7, -1), visitedCells)
         const result = typeof value === 'string' && isNaN(parseFloat(value))
         formulaCacheRef.current.set(cacheKey, result)
@@ -1531,14 +1611,14 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
       
       // Handle ISBLANK function
-      if (expression.startsWith('ISBLANK(') && expression.endsWith(')')) {
+      if (/^isblank\(/i.test(expression) && expression.endsWith(')')) {
         const value = getCellValue(expression.slice(8, -1), visitedCells)
         const result = value === '' || value === null || value === undefined
         formulaCacheRef.current.set(cacheKey, result)
         return result
       }
       
-      // Handle simple cell reference (e.g., =M59, =$E$7)
+      // Handle simple cell reference (e.g., =M59, =$E$7, =(A1))
       const simpleCellRefRegex = /^\$?([A-Z]+)\$?(\d+)$/
       const simpleMatch = expression.match(simpleCellRefRegex)
       if (simpleMatch) {
@@ -1548,35 +1628,21 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
         return result
       }
       
-      // Handle basic arithmetic
-      if (expression.includes('+') || expression.includes('-') || expression.includes('*') || expression.includes('/')) {
-        let processedExpression = expression
-        
-        // First, handle percentage values (e.g., 2% -> 0.02)
-        processedExpression = processPercentageValues(processedExpression)
-        
-        // Updated regex to handle absolute references with $ symbols
-        // Handle both simple cell references (A1, $B$2) and inter-sheet references ('Sheet'!A1 or Sheet!A1)
-        const cellRefRegex = /(?:'([^']+)'!|([A-Za-z][A-Za-z0-9_]*[A-Za-z0-9]|[A-Za-z])!)?(\$?[A-Z]+\$?\d+)/g
-        processedExpression = processedExpression.replace(cellRefRegex, (match, quotedSheetName, unquotedSheetName, cellRef) => {
-          // If it's an inter-sheet reference (either quoted or unquoted), pass the full match to getCellValue
-          if (quotedSheetName || unquotedSheetName) {
-            const cellValue = getCellValue(match, visitedCells)
-            return cellValue
-          } else {
-            // Simple cell reference
-            const cellValue = getCellValue(cellRef, visitedCells)
-            return cellValue
-          }
-        })
-        
-        const result = Function('"use strict"; return (' + processedExpression + ')')()
-        const finalResult = isNaN(result) ? stringFormula : result
-        
+      // Handle cell reference with parentheses (e.g., =(A1), =($E$7))
+      const parenCellRefRegex = /^\(\$?([A-Z]+)\$?(\d+)\)$/
+      const parenMatch = expression.match(parenCellRefRegex)
+      if (parenMatch) {
+        const cellRef = parenMatch[1] + parenMatch[2] // Reconstruct cell reference without parentheses
+        const result = getCellValue(cellRef, visitedCells)
         // Cache the result
-        formulaCacheRef.current.set(cacheKey, finalResult)
-        return finalResult
+        formulaCacheRef.current.set(cacheKey, result)
+        return result
       }
+      
+      // Cache the original formula
+      formulaCacheRef.current.set(cacheKey, stringFormula)
+      return stringFormula
+      
     } catch (error) {
       // Only log errors for debugging, don't spam console
       if (import.meta.env.DEV) {
@@ -1587,19 +1653,6 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       return stringFormula
     }
   }, [data, parseFunctionArgs, processPercentageValues, allSheetsData, currentSheetName])
-
-
-  // Helper function to format date values
-  // const formatDateValue = useCallback((result) => {
-  //   if (result && typeof result === 'object' && result.type) {
-  //     if (result.type === 'date') {
-  //       return result.value.toLocaleDateString()
-  //     } else if (result.type === 'datetime') {
-  //       return result.value.toLocaleString()
-  //     }
-  //   }
-  //   return result
-  // }, [])
 
   // Enhanced cell value formatting function
   const formatCellValueWithProperties = useCallback((value, cell) => {
@@ -1630,44 +1683,41 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
     
     // Debug: Log formatting properties for formula cells
     
-    // Use computed result for formulas, rawValue for others
-    const rawValue = cell?.isFormula ? value
-      : (cell?.rawValue !== undefined ? cell.rawValue : value)
+    // Use computed result for formulas, display value for others
+    const displayValue = cell?.isFormula ? value : (cell?.value || value)
     
-    // Debug logging removed to prevent console spam during CSV uploads
-    
-    // Format based on cell type and number format
-    if (cell?.isDate && cell?.numberFormat) {
+    // Format based on cell type and formatting
+    if (cell?.isDate && cell?.formatting) {
       try {
-        // Convert Excel serial date to JavaScript Date
-        if (typeof rawValue === 'number' && rawValue > 25569) { // Excel epoch starts at 1900-01-01
-          const excelEpoch = new Date(1900, 0, 1)
-          const jsDate = new Date(excelEpoch.getTime() + (rawValue - 2) * 24 * 60 * 60 * 1000)
+        // Convert spreadsheet serial date to JavaScript Date
+        if (typeof displayValue === 'number' && displayValue > 25569) { // Spreadsheet epoch starts at 1900-01-01
+          const spreadsheetEpoch = new Date(1900, 0, 1)
+          const jsDate = new Date(spreadsheetEpoch.getTime() + (displayValue - 2) * 24 * 60 * 60 * 1000)
           
           // Apply basic date formatting based on the format string
-          if (cell.numberFormat.includes('mm/dd/yyyy') || cell.numberFormat.includes('m/d/yyyy')) {
+          if (cell.formatting.includes('mm/dd/yyyy') || cell.formatting.includes('m/d/yyyy')) {
             return jsDate.toLocaleDateString('en-US')
-          } else if (cell.numberFormat.includes('dd/mm/yyyy') || cell.numberFormat.includes('d/m/yyyy')) {
+          } else if (cell.formatting.includes('dd/mm/yyyy') || cell.formatting.includes('d/m/yyyy')) {
             return jsDate.toLocaleDateString('en-GB')
-          } else if (cell.numberFormat.includes('yyyy-mm-dd')) {
+          } else if (cell.formatting.includes('yyyy-mm-dd')) {
             return jsDate.toISOString().split('T')[0]
-          } else if (cell.numberFormat.includes('h:mm') || cell.numberFormat.includes('hh:mm')) {
+          } else if (cell.formatting.includes('h:mm') || cell.formatting.includes('hh:mm')) {
             return jsDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
           } else {
             return jsDate.toLocaleDateString()
           }
         }
         // If it's already a date string, try to parse and format it
-        else if (typeof rawValue === 'string') {
-          const date = new Date(rawValue)
+        else if (typeof displayValue === 'string') {
+          const date = new Date(displayValue)
           if (!isNaN(date.getTime())) {
-            if (cell.numberFormat.includes('mm/dd/yyyy') || cell.numberFormat.includes('m/d/yyyy')) {
+            if (cell.formatting.includes('mm/dd/yyyy') || cell.formatting.includes('m/d/yyyy')) {
               return date.toLocaleDateString('en-US')
-            } else if (cell.numberFormat.includes('dd/mm/yyyy') || cell.numberFormat.includes('d/m/yyyy')) {
+            } else if (cell.formatting.includes('dd/mm/yyyy') || cell.formatting.includes('d/m/yyyy')) {
               return date.toLocaleDateString('en-GB')
-            } else if (cell.numberFormat.includes('yyyy-mm-dd')) {
+            } else if (cell.formatting.includes('yyyy-mm-dd')) {
               return date.toISOString().split('T')[0]
-            } else if (cell.numberFormat.includes('h:mm') || cell.numberFormat.includes('hh:mm')) {
+            } else if (cell.formatting.includes('h:mm') || cell.formatting.includes('hh:mm')) {
               return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
             } else {
               return date.toLocaleDateString()
@@ -1681,12 +1731,12 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
     
     // Format numbers with currency, percentage, etc.
     // Check for currency/percentage formatting regardless of cellType (important for formula cells)
-    if (cell?.isCurrency || cell?.isPercentage || (cell?.cellType === 'number' && cell?.numberFormat)) {
+    if (cell?.isCurrency || cell?.isPercentage || (cell?.cellType === 'number' && cell?.formatting)) {
       try {
         // Use computed result for formulas, parse rawValue for others
         // Check if cell contains a formula by looking at the value
         const isFormula = cell?.isFormula || (cell?.value && String(cell?.value).startsWith('='))
-        const sourceForNumber = isFormula ? value : rawValue
+        const sourceForNumber = isFormula ? value : displayValue
         const numValue = typeof sourceForNumber === 'number'
           ? sourceForNumber
           : parseFloat(String(sourceForNumber).replace(/\u00A0/g, ' ').replace(/[^\d.,-]/g, '')
@@ -1733,10 +1783,10 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
       }
     }
     
-    // Also try to format based on numberFormat even if cellType is not 'number'
-    if (cell?.numberFormat && !cell?.isDate) {
+    // Also try to format based on formatting even if cellType is not 'number'
+    if (cell?.formatting && !cell?.isDate) {
       try {
-        const numValue = parseFloat(rawValue)
+        const numValue = parseFloat(displayValue)
         if (!isNaN(numValue)) {
           // Use enhanced formatting properties for fallback
           if (cell.isCurrency && cell.currencySymbol) {
@@ -1774,7 +1824,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
     
     // Fallback to basic decimal formatting if specified
     if (cell?.decimalPlaces !== null && cell?.decimalPlaces !== undefined) {
-      const num = parseFloat(rawValue)
+      const num = parseFloat(displayValue)
       if (!isNaN(num)) {
         return num.toFixed(cell.decimalPlaces)
       }
@@ -1804,7 +1854,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
         
         // Debug: Log inter-sheet formula evaluation
         if (cellValue.includes('!') && import.meta.env.DEV) {
-          console.log(`Evaluating inter-sheet formula: ${cellValue} -> ${result}`)
+          // Debug logging for development
         }
         
         // Apply enhanced formatting based on cell properties
@@ -1839,10 +1889,9 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
         e.preventDefault()
         if (autocompleteOptions[autocompleteIndex]) {
           const selectedFormula = autocompleteOptions[autocompleteIndex]
-          const currentValue = e.target.value
-          const beforeEquals = currentValue.split('=')[0] || ''
+          const beforeEquals = inputValue.split('=')[0] || ''
           const newValue = beforeEquals + '=' + selectedFormula.name + '('
-          handleCellChange(rowIndex, colIndex, newValue, false) // false = don't recalculate during autocomplete
+          setInputValue(newValue)
           setAutocompleteVisible(false)
           // Position cursor before the closing parenthesis
           setTimeout(() => {
@@ -1859,37 +1908,115 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
     }
 
     // Handle cell navigation
-        if (e.key === 'Enter') {
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+          // Ctrl+Enter or Cmd+Enter: Commit formula and close editor
           e.preventDefault()
           
-          // Trigger recalculation when Enter is pressed
           const currentValue = e.target.value
           handleCellChange(rowIndex, colIndex, currentValue, true) // true = shouldRecalculate
           
-          setEditingCell(null)
-          setAutocompleteVisible(false)
-          setIsFormulaEditing(false)
-          setReferencedCells([])
-          setReferencedCellColors({})
-          // Move to next row
-          if (rowIndex < data.length - 1) {
-            setSelectedCell({ row: rowIndex + 1, col: colIndex })
+          // Clear editing state after a short delay to ensure data is updated
+          setTimeout(() => {
+            setEditingCell(null)
+            setAutocompleteVisible(false)
+            setIsFormulaEditing(false)
+            setReferencedCells([])
+            setReferencedCellColors({})
+            setInputValue('')
+            // Move to next row
+            if (rowIndex < data.length - 1) {
+              setSelectedCell({ row: rowIndex + 1, col: colIndex })
+            }
+          }, 100)
+        } else if (e.key === 'Enter') {
+          e.preventDefault()
+          
+          // Get the current value directly from the input element
+          const currentValue = e.target.value
+          
+          // Check if we're editing a formula
+          const isFormula = currentValue.startsWith('=')
+          
+          if (isFormula) {
+            // For formulas, save the current state and close the editor to show the result
+            // Trigger recalculation when Enter is pressed
+            handleCellChange(rowIndex, colIndex, currentValue, true) // true = shouldRecalculate
+            
+            // Clear editing state after a short delay to ensure data is updated and show the result
+            setTimeout(() => {
+              setEditingCell(null)
+              setAutocompleteVisible(false)
+              setIsFormulaEditing(false)
+              setReferencedCells([])
+              setReferencedCellColors({})
+              setInputValue('')
+              // Move to next row
+              if (rowIndex < data.length - 1) {
+                setSelectedCell({ row: rowIndex + 1, col: colIndex })
+              }
+            }, 100)
+          } else {
+            // For non-formulas, commit and move to next row
+            handleCellChange(rowIndex, colIndex, currentValue, true) // true = shouldRecalculate
+            
+            // Clear editing state after a short delay to ensure data is updated
+            setTimeout(() => {
+              setEditingCell(null)
+              setAutocompleteVisible(false)
+              setIsFormulaEditing(false)
+              setReferencedCells([])
+              setReferencedCellColors({})
+              setInputValue('')
+              // Move to next row
+              if (rowIndex < data.length - 1) {
+                setSelectedCell({ row: rowIndex + 1, col: colIndex })
+              }
+            }, 100)
           }
         } else if (e.key === 'Tab') {
           e.preventDefault()
           
-          // Trigger recalculation when Tab is pressed
+          // Get the current value directly from the input element
           const currentValue = e.target.value
-          handleCellChange(rowIndex, colIndex, currentValue, true) // true = shouldRecalculate
           
-          setEditingCell(null)
-          setAutocompleteVisible(false)
-          setIsFormulaEditing(false)
-          setReferencedCells([])
-          setReferencedCellColors({})
-          // Move to next column
-          if (colIndex < (data[0]?.length || 0) - 1) {
-            setSelectedCell({ row: rowIndex, col: colIndex + 1 })
+          // Check if we're editing a formula
+          const isFormula = currentValue.startsWith('=')
+          
+          if (isFormula) {
+            // For formulas, save the current state and close the editor to show the result
+            // Trigger recalculation when Tab is pressed
+            handleCellChange(rowIndex, colIndex, currentValue, true) // true = shouldRecalculate
+            
+            // Clear editing state after a short delay to ensure data is updated and show the result
+            setTimeout(() => {
+              setEditingCell(null)
+              setAutocompleteVisible(false)
+              setIsFormulaEditing(false)
+              setReferencedCells([])
+              setReferencedCellColors({})
+              setInputValue('')
+              // Move to next column
+              if (colIndex < (data[0]?.length || 0) - 1) {
+                setSelectedCell({ row: rowIndex, col: colIndex + 1 })
+              }
+            }, 100)
+          } else {
+            // For non-formulas, commit and move to next column
+            handleCellChange(rowIndex, colIndex, currentValue, true) // true = shouldRecalculate
+            
+            // Clear editing state after a short delay to ensure data is updated
+            setTimeout(() => {
+              setEditingCell(null)
+              setAutocompleteVisible(false)
+              setIsFormulaEditing(false)
+              setReferencedCells([])
+              setReferencedCellColors({})
+              setInputValue('')
+              // Move to next column
+              if (colIndex < (data[0]?.length || 0) - 1) {
+                setSelectedCell({ row: rowIndex, col: colIndex + 1 })
+              }
+            }, 100)
           }
         } else if (e.key === 'Escape') {
           e.preventDefault()
@@ -1898,6 +2025,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
           setIsFormulaEditing(false)
           setReferencedCells([])
           setReferencedCellColors({})
+          setInputValue('')
     } else if (e.key === 'ArrowLeft' && !autocompleteVisible) {
       // Don't prevent default - let the cursor move within the text
       // Only move to previous cell if we're not editing
@@ -1947,9 +2075,9 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
         setSelectedCell({ row: rowIndex + 1, col: colIndex })
       }
     }
-  }, [data, autocompleteVisible, autocompleteOptions, autocompleteIndex, handleCellChange, editingCell])
+  }, [data, autocompleteVisible, autocompleteOptions, autocompleteIndex, handleCellChange, editingCell, inputValue])
 
-  if (!data || data.length === 0) {
+  if (!data) {
     return (
       <div 
         style={{ 
@@ -1961,8 +2089,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
         }}
       >
         <div className="text-center text-gray-500">
-          <p>No data to display</p>
-          <p className="text-sm mt-2">Data length: {data?.length || 0}</p>
+          <p>Loading spreadsheet...</p>
         </div>
       </div>
     )
@@ -1975,9 +2102,9 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
         width: '100%',
         height: '100%',
         overflow: 'auto',
-        position: 'relative'
+        position: 'relative',
+        scrollBehavior: 'auto' // Disable smooth scrolling to prevent conflicts
       }}
-      onScroll={handleScroll}
     >
       {/* Virtual table with only visible cells */}
       <table key={`spreadsheet-${recalcTrigger}-${forceUpdate}`} className="excel-grid w-full border-collapse">
@@ -2082,8 +2209,6 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
                   // Check if this cell is in the highlighted block
                   const isHighlighted = isInHighlightedBlock(actualRowIndex, actualColIndex)
                   
-                  // Check if this cell is in a dependency frame
-                  const dependencyFrameColor = getDependencyFrameColor(actualRowIndex, actualColIndex)
                   
                   return (
                     <td
@@ -2091,10 +2216,9 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
                       style={{ 
                         width: `${width}px`,
                         border: isReferenced && referencedColor ? `3px solid ${referencedColor}` : 
-                               isHighlighted ? '3px solid #f59e0b' : 
-                               dependencyFrameColor ? `3px solid ${dependencyFrameColor}` : '1px solid #d1d5db',
+                               isHighlighted ? '3px solid #f59e0b' : '1px solid #d1d5db',
                         position: 'relative',
-                        zIndex: isReferenced ? 20 : isHighlighted ? 15 : dependencyFrameColor ? 10 : 'auto'
+                        zIndex: isReferenced ? 20 : isHighlighted ? 15 : 'auto'
                       }}
                       className={`cursor-pointer text-xs py-1 px-2 ${
                         isSelected || isMultiSelected
@@ -2110,11 +2234,51 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
                       {isEditing ? (
                         <div className="relative w-full h-full">
                           <input
+                            ref={inputRef}
                             type="text"
                             id={`cell-${actualRowIndex}-${actualColIndex}`}
                             name={`cell-${actualRowIndex}-${actualColIndex}`}
-                            value={cellValue}
-                            onChange={(e) => handleCellChange(actualRowIndex, actualColIndex, e.target.value, false)} // false = don't recalculate during typing
+                            value={inputValue}
+                            onChange={(e) => {
+                              let newValue = e.target.value
+                              
+                              console.log('🟡 onChange called with value:', newValue)
+                              
+                              // Auto-capitalize cell references in formulas
+                              if (newValue.startsWith('=')) {
+                                // Convert lowercase cell references to uppercase (e.g., =a1 -> =A1)
+                                newValue = newValue.replace(/([a-z]+)(\d+)/g, (match, letters, numbers) => {
+                                  return letters.toUpperCase() + numbers
+                                })
+                              }
+                              
+                              setInputValue(newValue)
+                              
+                              // Update formula editing state for highlighting
+                              const stringValue = String(newValue || '')
+                              setIsFormulaEditing(stringValue.startsWith('='))
+                              
+                              // Update referenced cells for highlighting (only during typing)
+                              if (stringValue.startsWith('=')) {
+                                const references = extractCellReferences(stringValue)
+                                setReferencedCells(references)
+                                
+                                // Assign the same color to all referenced cells in this formula
+                                const newColors = {}
+                                const rangeColor = generateRandomColor()
+                                references.forEach(ref => {
+                                  const key = `${ref.row}-${ref.col}`
+                                  newColors[key] = rangeColor
+                                })
+                                setReferencedCellColors(prev => ({ ...prev, ...newColors }))
+                              } else {
+                                setReferencedCells([])
+                                setReferencedCellColors({})
+                              }
+                              
+                              // DON'T call handleCellChange here - only update the input value
+                              // handleCellChange will be called only when Enter/Tab is pressed
+                            }}
                             onKeyDown={(e) => handleCellKeyPress(e, actualRowIndex, actualColIndex)}
                             onClick={(e) => {
                               // Allow normal cursor positioning by not preventing default
@@ -2125,17 +2289,18 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
                               e.stopPropagation()
                             }}
                             onBlur={() => {
-                              setTimeout(() => {
-                                // Trigger recalculation when cell loses focus
-                                const currentValue = cellValue
-                                handleCellChange(actualRowIndex, actualColIndex, currentValue, true) // true = shouldRecalculate
-                                
-                                setEditingCell(null)
-                                setAutocompleteVisible(false)
-                                setIsFormulaEditing(false)
-                                setReferencedCells([])
-                                setReferencedCellColors({})
-                              }, 200)
+                              // Only clear editing state if we're not in formula editing mode
+                              // When editing formulas, clicking cells should not clear the editing state
+                              if (!isFormulaEditing) {
+                                setTimeout(() => {
+                                  setEditingCell(null)
+                                  setAutocompleteVisible(false)
+                                  setIsFormulaEditing(false)
+                                  setReferencedCells([])
+                                  setReferencedCellColors({})
+                                  setInputValue('')
+                                }, 200)
+                              }
                             }}
                             className="editing-input w-full h-full border-0 outline-none bg-transparent text-xs px-1"
                           />
@@ -2149,7 +2314,7 @@ const ReactSpreadsheet = ({ data, allSheetsData = {}, currentSheetName = 'Sheet1
                                   }`}
                                   onClick={() => {
                                     const newValue = '=' + formula.name + '('
-                                    handleCellChange(actualRowIndex, actualColIndex, newValue, false) // false = don't recalculate during autocomplete
+                                    setInputValue(newValue)
                                     setAutocompleteVisible(false)
                                   }}
                                 >
@@ -2186,7 +2351,6 @@ export default ReactSpreadsheet
 ReactSpreadsheet.propTypes = {
   data: PropTypes.arrayOf(PropTypes.arrayOf(PropTypes.shape({
     value: PropTypes.oneOfType([PropTypes.string, PropTypes.number]),
-    rawValue: PropTypes.oneOfType([PropTypes.string, PropTypes.number]),
     className: PropTypes.string,
     decimalPlaces: PropTypes.number,
     isDate: PropTypes.bool
@@ -2201,11 +2365,5 @@ ReactSpreadsheet.propTypes = {
   })),
   onSelectedCellsChange: PropTypes.func,
   highlightedBlock: PropTypes.string,
-  dependencyFrames: PropTypes.arrayOf(PropTypes.shape({
-    range: PropTypes.string.isRequired,
-    color: PropTypes.string.isRequired,
-    type: PropTypes.string.isRequired,
-    layer: PropTypes.number.isRequired
-  }))
 }
 

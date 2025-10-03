@@ -74,7 +74,7 @@ npm run dev
 ```
 src/
 ├── App.jsx                    # Main application component
-├── UniverSpreadsheet.jsx      # React Spreadsheet component wrapper
+├── Spreadsheet.jsx            # React Spreadsheet component wrapper
 ├── main.jsx                   # Application entry point
 └── index.css                  # Global styles and Tailwind imports
 ```
