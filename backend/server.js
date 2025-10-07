@@ -1,3 +1,4 @@
+/* eslint-env node */
 /**
  * Backend API Server for Google Service Account Authentication
  * This handles the service account credentials securely on the server side
@@ -327,8 +328,7 @@ app.post('/api/sheets/sync-from-google', async (req, res) => {
  */
 async function moveToUserFolder(spreadsheetId) {
   try {
-    const sharedDriveId = process.env.GOOGLE_SHARED_DRIVE_ID
-    const userFolderId = process.env.GOOGLE_USER_SHEETS_FOLDER_ID
+  const userFolderId = process.env.GOOGLE_USER_SHEETS_FOLDER_ID
 
     // Get current parents
     const file = await drive.files.get({

@@ -696,8 +696,9 @@ export const cellService = {
       // Only fill in the cell if it's within our 100x20 grid bounds
       if (cell.row_index < 100 && cell.col_index < 20) {
         spreadsheetData[cell.row_index][cell.col_index] = cellData
-      } else {
-      }
+  } else {
+    // no-op
+  }
     })
     
     console.log('📊 Final grid created with', spreadsheetData.length, 'rows')

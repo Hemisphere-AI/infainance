@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react'
 import PropTypes from 'prop-types'
-import { ExternalLink, X, RefreshCw, FileSpreadsheet, LogIn } from 'lucide-react'
+import { ExternalLink, X, FileSpreadsheet, LogIn } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { googleOAuthService } from '../services/googleOAuthService.js'
 import { googleSheetsService } from '../services/googleSheetsService.js'
@@ -126,12 +126,12 @@ const GoogleSheetsEmbed = ({
   }, [])
 
   // Real-time sync state
-  const [isLoading, setIsLoading] = useState(false)
+  // const [isLoading, setIsLoading] = useState(false)
   const [lastSync, setLastSync] = useState(null)
-  const [lastKnownModified, setLastKnownModified] = useState(null)
-  const [syncInterval, setSyncInterval] = useState(null)
+  // const [lastKnownModified, setLastKnownModified] = useState(null)
+  // const [syncInterval, setSyncInterval] = useState(null)
   const [lastDataHash, setLastDataHash] = useState(null)
-  const [isDataChanging, setIsDataChanging] = useState(false)
+  // const [isDataChanging, setIsDataChanging] = useState(false)
   const [syncStatus, setSyncStatus] = useState(null) // 'saving', 'saved', 'syncing'
 
   // Load existing configuration on mount
@@ -194,7 +194,7 @@ const GoogleSheetsEmbed = ({
       const { googleServiceAccount } = await import('../services/googleServiceAccount.js')
       
       // Use last known modified time or current time as fallback
-      const lastModified = lastKnownModified || new Date().toISOString()
+      const lastModified = new Date().toISOString()
       
       const result = await googleServiceAccount.autoSyncFromGoogleSheets(
         config.sheetId, 
@@ -212,7 +212,7 @@ const GoogleSheetsEmbed = ({
     } catch (error) {
       console.error('❌ Auto-sync error:', error)
     }
-  }, [config.sheetId, userId, lastKnownModified])
+  }, [config.sheetId, userId])
 
   // Load configuration on mount
   React.useEffect(() => {
@@ -536,7 +536,7 @@ const GoogleSheetsEmbed = ({
 
       // Data has changed - show sync status
       setSyncStatus('syncing')
-      setIsDataChanging(true)
+      // setIsDataChanging(true)
 
       setLastSync(new Date())
       setError(null)
@@ -571,12 +571,12 @@ const GoogleSheetsEmbed = ({
         // Clear the status after a short delay
         setTimeout(() => {
           setSyncStatus(null)
-          setIsDataChanging(false)
+          // setIsDataChanging(false)
         }, 2000)
       } catch (dbError) {
         console.error('❌ Failed to save to database:', dbError)
         setSyncStatus(null)
-        setIsDataChanging(false)
+        // setIsDataChanging(false)
         // Don't throw - we still want the app to update
       }
       
@@ -584,7 +584,7 @@ const GoogleSheetsEmbed = ({
       console.error('Error fetching sheet data:', err)
       setError(`Failed to sync with Google Sheets: ${err.message}`)
       setSyncStatus(null)
-      setIsDataChanging(false)
+      // setIsDataChanging(false)
     }
   }, [config.sheetId, config.isConfigured, onSheetDataUpdate])
 
@@ -986,16 +986,6 @@ const GoogleSheetsEmbed = ({
           </div>
           
           <div className="flex items-center space-x-2">
-            {/*
-            <button
-              onClick={fetchSheetData}
-              className="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 rounded border border-gray-300 flex items-center space-x-1"
-              title="Sync now"
-            >
-              <RefreshCw className="w-3 h-3" />
-              <span>Sync</span>
-            </button>
-            */}
             {config.isConfigured && config.sheetId && (
               <a
                 href={`https://docs.google.com/spreadsheets/d/${config.sheetId}/edit`}
@@ -1029,7 +1019,7 @@ const GoogleSheetsEmbed = ({
               <div className="font-medium">Connection Error:</div>
               <div className="mt-1">{error}</div>
               <div className="mt-2 text-xs text-red-500">
-                • Make sure the sheet is shared with "Anyone with the link can view"<br/>
+                • Make sure the sheet is shared with &quot;Anyone with the link can view&quot;<br/>
                 • Check that the sheet has data in it
               </div>
             </div>
@@ -1045,7 +1035,7 @@ const GoogleSheetsEmbed = ({
         </div>
         
         {/* Status Footer - like Input in ChatInterface */}
-        <div className="p-4 border-t border-gray-200 bg-white text-xs text-gray-500">
+            <div className="p-4 border-t border-gray-200 bg-white text-xs text-gray-500">
           {error && (
             <span className="text-red-600">Connection failed - check settings</span>
           )}

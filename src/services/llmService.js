@@ -3,7 +3,7 @@ import { tools, SYSTEM_PROMPT } from '../utils/tools.js';
 import { addrToRC, rcToAddr, sliceRange, getColumnIndex } from '../utils/a1Helpers.js';
 import { tokenSortJaroWinkler } from '../utils/similarity.js';
 import { userService } from '../lib/supabase.js';
-import { googleSheetsService } from './googleSheetsService.js';
+// import { googleSheetsService } from './googleSheetsService.js';
 import { updateUserCell } from '../api/sheets.js';
 
 /**

@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react'
 import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from 'react-router-dom'
-import { FileSpreadsheet } from 'lucide-react'
+// import { FileSpreadsheet } from 'lucide-react'
 import PropTypes from 'prop-types'
 import ChatInterface from './components/ChatInterface'
 import Sidebar from './components/Sidebar'
