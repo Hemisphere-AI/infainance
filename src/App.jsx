@@ -1,12 +1,10 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react'
 import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from 'react-router-dom'
-import { FileSpreadsheet, Download, Calculator, BarChart3 } from 'lucide-react'
-import * as XLSX from 'xlsx'
+import { FileSpreadsheet } from 'lucide-react'
 import PropTypes from 'prop-types'
-import ReactSpreadsheet from './Spreadsheet'
 import ChatInterface from './components/ChatInterface'
 import Sidebar from './components/Sidebar'
-import GraphContainer from './components/GraphContainer'
+import GoogleSheetsEmbed from './components/GoogleSheetsEmbed'
 import { SupabaseAuthProvider, useSupabaseAuth } from './contexts/SupabaseAuthContext'
 import { useSpreadsheet, useUserSpreadsheets } from './hooks/useSpreadsheet'
 import LoginPage from './components/LoginPage'
@@ -15,7 +13,6 @@ import TermsOfService from './components/TermsOfService'
 import PrivacyPolicy from './components/PrivacyPolicy'
 import UserProfile from './components/UserProfile'
 import { LLMService } from './services/llmService'
-import { graphService } from './services/graphService'
 
 // Editable spreadsheet name component
 const EditableSpreadsheetName = ({ name, onRename }) => {
@@ -149,14 +146,19 @@ function SpreadsheetApp() {
 function MainSpreadsheetApp({ user }) {
   const [currentSpreadsheetId, setCurrentSpreadsheetId] = useState(null)
   const [spreadsheetData, setSpreadsheetData] = useState([])
-  const [formulaDisplayMode, setFormulaDisplayMode] = useState(0)
-  const [selectedCells, setSelectedCells] = useState([])
   const [isChatLoading, setIsChatLoading] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [chatCollapsed, setChatCollapsed] = useState(false)
   const [saveStatus, setSaveStatus] = useState({ type: null, message: null }) // 'saving', 'success', 'error'
-  const [graphs, setGraphs] = useState([])
-  const [graphsLoading, setGraphsLoading] = useState(false)
+  const [googleSheetsConfig, setGoogleSheetsConfig] = useState({
+    sheetUrl: '',
+    sheetId: '',
+    isConfigured: false,
+    isPublic: false,
+    refreshInterval: 30000,
+    autoRefresh: true
+  })
+  const [googleSheetsVisible, setGoogleSheetsVisible] = useState(true)
   const toolCallHandlerRef = useRef(null)
   const addBotMessageRef = useRef(null)
   const llmServiceRef = useRef(null)
@@ -170,35 +172,6 @@ function MainSpreadsheetApp({ user }) {
     deleteSpreadsheet
   } = useUserSpreadsheets(user.id)
 
-  // Load graphs for current spreadsheet
-  const loadGraphs = useCallback(async () => {
-    if (!currentSpreadsheetId || !user?.id) return
-    
-    setGraphsLoading(true)
-    try {
-      const graphsData = await graphService.getGraphs(currentSpreadsheetId, user.id)
-      
-      // Map database fields to component props
-      const mappedGraphs = graphsData.map(graph => ({
-        id: graph.id,
-        title: graph.title,
-        xAxisRange: graph.label_range,
-        yAxisRange: graph.value_range,
-        isEditing: false
-      }))
-      
-      setGraphs(mappedGraphs)
-    } catch (error) {
-      console.error('Error loading graphs:', error)
-    } finally {
-      setGraphsLoading(false)
-    }
-  }, [currentSpreadsheetId, user?.id])
-
-  // Load graphs when spreadsheet changes
-  useEffect(() => {
-    loadGraphs()
-  }, [loadGraphs])
 
   // Load current spreadsheet
   const { 
@@ -396,50 +369,6 @@ function MainSpreadsheetApp({ user }) {
     }
   }, [deleteSpreadsheet, currentSpreadsheetId, spreadsheets, createSpreadsheet])
 
-  // Download as spreadsheet
-  const downloadAsSpreadsheet = useCallback(() => {
-    if (!spreadsheetData.length) return
-    
-    // Create a new workbook
-    const wb = {
-      SheetNames: ['Sheet1'],
-      Sheets: {
-        'Sheet1': {}
-      }
-    }
-
-    // Convert data to worksheet format
-    const ws = {}
-    const range = { s: { c: 0, r: 0 }, e: { c: 0, r: 0 } }
-
-    spreadsheetData.forEach((row, rowIndex) => {
-      row.forEach((cell, colIndex) => {
-        if (cell && cell.value !== undefined && cell.value !== '') {
-          const cellAddress = String.fromCharCode(65 + colIndex) + (rowIndex + 1)
-          ws[cellAddress] = { v: cell.value }
-          
-          // Update range
-          if (rowIndex > range.e.r) range.e.r = rowIndex
-          if (colIndex > range.e.c) range.e.c = colIndex
-        }
-      })
-    })
-
-    ws['!ref'] = `${String.fromCharCode(65 + range.s.c)}${range.s.r + 1}:${String.fromCharCode(65 + range.e.c)}${range.e.r + 1}`
-    wb.Sheets['Sheet1'] = ws
-
-    // Convert to Excel file
-    const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
-    const blob = new Blob([wbout], { type: 'application/octet-stream' })
-    const url = URL.createObjectURL(blob)
-    
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${spreadsheet?.name || 'spreadsheet'}.xlsx`
-    a.click()
-    
-    URL.revokeObjectURL(url)
-  }, [spreadsheetData, spreadsheet])
 
 
   if (spreadsheetsLoading) {
@@ -506,95 +435,21 @@ function MainSpreadsheetApp({ user }) {
         <div className="flex-1 flex flex-col lg:flex-row px-4 py-4 min-h-0 overflow-hidden">
           {/* Main content area */}
           <div className="flex-1 flex flex-col min-h-0 lg:mr-4 mb-4 lg:mb-0 min-w-0">
-            {/* Graph Container - Separate container above everything */}
-            <div className="bg-white border border-gray-200 rounded-lg overflow-hidden flex flex-col mb-4">
-              <GraphContainer
-                spreadsheetData={spreadsheetData}
-                allSheetsData={{}}
-                currentSheetName="Sheet1"
-                graphs={graphs}
-                onGraphsChange={setGraphs}
-                spreadsheetId={currentSpreadsheetId}
-                userId={user?.id}
-              />
-            </div>
+            {/* Google Sheets Embed - Above Graph Container */}
+            <GoogleSheetsEmbed
+              onSheetDataUpdate={(data, headers) => {
+                // Update the spreadsheet data with Google Sheets data
+                setSpreadsheetData(data)
+                console.log('Google Sheets data updated:', { data, headers })
+              }}
+              onConfigChange={setGoogleSheetsConfig}
+              isVisible={googleSheetsVisible}
+              onToggleVisibility={() => setGoogleSheetsVisible(!googleSheetsVisible)}
+              currentSpreadsheetId={currentSpreadsheetId}
+              userId={user?.id}
+            />
 
-            {/* Spreadsheet area - Separate container below graphs */}
-            <div className="flex-1 bg-white border border-gray-200 rounded-lg overflow-hidden flex flex-col min-h-0 max-w-full">
-              <div className="p-4 border-b border-gray-200 bg-gray-50 flex-shrink-0">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-2">
-                    <FileSpreadsheet className="w-4 h-4 text-green-600" />
-                    <EditableSpreadsheetName 
-                      name={spreadsheet?.name || 'Untitled Spreadsheet'}
-                      onRename={(newName) => handleSpreadsheetRename(currentSpreadsheetId, newName)}
-                    />
-                    {saveStatus.type && (
-                      <span className="text-xs text-gray-500">
-                        {saveStatus.type === 'saving' && 'Saving...'}
-                        {saveStatus.type === 'success' && 'Saved'}
-                        {saveStatus.type === 'error' && 'Save failed'}
-                      </span>
-                    )}
-                  </div>
-                  
-                  {/* Formatting buttons */}
-                  <div className="flex items-center space-x-2">
-                    {/* Formula display mode button */}
-                    <button
-                      onClick={() => setFormulaDisplayMode((prev) => (prev + 1) % 3)}
-                      className={`px-2 py-1 text-xs rounded border transition-colors flex items-center space-x-1 ${
-                        formulaDisplayMode === 0
-                          ? 'bg-gray-100 border-gray-300 text-gray-700 hover:bg-gray-200'
-                          : formulaDisplayMode === 1
-                          ? 'bg-green-100 border-green-300 text-green-700'
-                          : 'bg-blue-100 border-blue-300 text-blue-700'
-                      }`}
-                      title={
-                        formulaDisplayMode === 0
-                          ? 'Click to highlight formula cells'
-                          : formulaDisplayMode === 1
-                          ? 'Click to show all formulas'
-                          : 'Click to reset to normal view'
-                      }
-                    >
-                      <Calculator className="w-3 h-3" />
-                      <span>fx</span>
-                    </button>
-                    
-                    {/* Download button */}
-                    <button
-                      onClick={downloadAsSpreadsheet}
-                      className="px-2 py-1 text-xs rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-200 transition-colors flex items-center space-x-1"
-                      title="Download spreadsheet file"
-                    >
-                      <Download className="w-3 h-3" />
-                      <span>Export</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-                
-              <div className="flex-1 overflow-hidden min-h-0">
-                {spreadsheetLoading ? (
-                  <div className="p-8 text-center text-gray-500">
-                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 mx-auto mb-4"></div>
-                    <p>Loading spreadsheet...</p>
-                  </div>
-                ) : (
-                  <ReactSpreadsheet 
-                    data={spreadsheetData}
-                    allSheetsData={{}}
-                    currentSheetName="Sheet1"
-                    onDataChange={handleSpreadsheetChange}
-                    formulaDisplayMode={formulaDisplayMode}
-                    selectedCells={selectedCells}
-                    onSelectedCellsChange={setSelectedCells}
-                    highlightedBlock={null}
-                  />
-                )}
-              </div>
-            </div>
+
           </div>
 
           {/* Chat interface */}

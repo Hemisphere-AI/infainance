@@ -1,3 +1,8 @@
+// TODO: Graph component needs to be updated to work with Google Sheets data structure
+// TODO: Fix data flow between GoogleSheetsEmbed and Graph component
+// TODO: Ensure proper data transformation for graph rendering
+// TODO: Update cell reference parsing for Google Sheets format
+
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import PropTypes from 'prop-types'
 import { MoreHorizontal, Edit, Trash2, Plus } from 'lucide-react'
@@ -715,6 +720,22 @@ const Graph = ({
     setConfig({ title, xAxisRange, yAxisRange })
   }, [title, xAxisRange, yAxisRange])
 
+  // TODO: Temporarily hidden - needs to be updated for Google Sheets integration
+  return (
+    <div className="bg-white border border-gray-200 rounded-lg overflow-hidden flex flex-col shadow-sm">
+      <div className="flex items-center justify-center h-48 text-gray-400">
+        <div className="text-center">
+          <div className="text-2xl mb-1">📊</div>
+          <p className="text-xs">Graph Temporarily Hidden</p>
+          <p className="text-xs text-gray-300">TODO: Update for Google Sheets integration</p>
+        </div>
+      </div>
+    </div>
+  )
+
+  // TODO: Restore full Graph functionality after Google Sheets integration
+  // Original component functionality commented out to avoid conflicts
+  /*
   if (editMode) {
     return (
       <div className="bg-white border border-gray-200 rounded-lg overflow-hidden p-3 shadow-sm">
@@ -728,7 +749,6 @@ const Graph = ({
               value={config.title}
               onChange={(e) => setConfig(prev => ({ ...prev, title: e.target.value }))}
               onKeyDown={(e) => {
-                // Allow all normal keyboard input including backspace
                 e.stopPropagation()
               }}
               placeholder="e.g., A1"
@@ -745,7 +765,6 @@ const Graph = ({
               value={config.xAxisRange}
               onChange={(e) => setConfig(prev => ({ ...prev, xAxisRange: e.target.value }))}
               onKeyDown={(e) => {
-                // Allow all normal keyboard input including backspace
                 e.stopPropagation()
               }}
               placeholder="e.g., A1:A10"
@@ -762,7 +781,6 @@ const Graph = ({
               value={config.yAxisRange}
               onChange={(e) => setConfig(prev => ({ ...prev, yAxisRange: e.target.value }))}
               onKeyDown={(e) => {
-                // Allow all normal keyboard input including backspace
                 e.stopPropagation()
               }}
               placeholder="e.g., B1:B10"
@@ -770,7 +788,6 @@ const Graph = ({
             />
           </div>
           
-          {/* Buttons */}
           <div className="flex space-x-2 pt-2 border-t border-gray-100">
             <button
               onClick={handleSaveConfig}
@@ -792,9 +809,7 @@ const Graph = ({
 
   return (
     <div className="bg-white border border-gray-200 rounded-lg overflow-hidden flex flex-col shadow-sm">
-      {/* Header - Menu button and Add Graph button */}
       <div className="flex flex-col items-end p-1 space-y-1">
-        {/* Menu button */}
         <div className="relative">
           <button
             onClick={() => setShowMenu(!showMenu)}
@@ -804,7 +819,6 @@ const Graph = ({
             <MoreHorizontal className="w-4 h-4" />
           </button>
           
-          {/* Dropdown Menu */}
           {showMenu && (
             <div className="absolute right-0 top-full mt-1 w-40 bg-white border border-gray-200 rounded-md shadow-lg z-10">
               <div className="py-1">
@@ -835,7 +849,6 @@ const Graph = ({
           )}
         </div>
         
-        {/* Add Graph button */}
         <button
           onClick={() => {
             if (onAddGraph) {
@@ -849,7 +862,6 @@ const Graph = ({
         </button>
       </div>
       
-      {/* Graph Title - Above Graph */}
       <div className="px-2 py-1">
         <div className="bg-white px-2 py-1 rounded-md shadow-sm border border-gray-200 inline-block">
           <span className="text-sm font-medium text-gray-700">
@@ -858,9 +870,7 @@ const Graph = ({
         </div>
       </div>
       
-      {/* Graph Content */}
       <div className="w-full h-48 relative">
-        
         {graphData.length > 0 ? (
           <svg
             width="100%"
@@ -869,155 +879,138 @@ const Graph = ({
             className="rounded-md"
             preserveAspectRatio="xMidYMid meet"
           >
-              {/* Grid lines */}
-              <defs>
-                <pattern id="grid" width="40" height="20" patternUnits="userSpaceOnUse">
-                  <path d="M 40 0 L 0 0 0 20" fill="none" stroke="#f8fafc" strokeWidth="0.5"/>
-                </pattern>
-              </defs>
-              <rect width="100%" height="100%" fill="url(#grid)" />
+            <defs>
+              <pattern id="grid" width="40" height="20" patternUnits="userSpaceOnUse">
+                <path d="M 40 0 L 0 0 0 20" fill="none" stroke="#f8fafc" strokeWidth="0.5"/>
+              </pattern>
+            </defs>
+            <rect width="100%" height="100%" fill="url(#grid)" />
+            
+            <path
+              d={generateLinePath(graphData, 800, 200)}
+              fill="none"
+              stroke="#3b82f6"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            
+            {graphData.map((point, index) => {
+              const coords = toSVGCoords(point.x, point.y, 800, 200)
               
+              if (isNaN(coords.x) || isNaN(coords.y)) {
+                return null
+              }
               
-              {/* Line */}
-              <path
-                d={generateLinePath(graphData, 800, 200)}
-                fill="none"
-                stroke="#3b82f6"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-              
-              {/* Data points */}
-              {graphData.map((point, index) => {
-                const coords = toSVGCoords(point.x, point.y, 800, 200)
-                
-                // Skip rendering if coordinates are invalid
-                if (isNaN(coords.x) || isNaN(coords.y)) {
-                  return null
-                }
-                
+              return (
+                <circle
+                  key={index}
+                  cx={coords.x}
+                  cy={coords.y}
+                  r="3"
+                  fill="#3b82f6"
+                />
+              )
+            }).filter(Boolean)}
+            
+            <line x1="20" y1="180" x2="780" y2="180" stroke="#374151" strokeWidth="1"/>
+            <line x1="20" y1="20" x2="20" y2="180" stroke="#374151" strokeWidth="1"/>
+            
+            {(() => {
+              const { yMin, yMax } = axisScales
+              if (yMin <= 0 && yMax >= 0) {
+                const zeroYPos = 180 - ((0 - yMin) / (yMax - yMin)) * 160
                 return (
-                  <circle
-                    key={index}
-                    cx={coords.x}
-                    cy={coords.y}
-                    r="3"
-                    fill="#3b82f6"
+                  <line 
+                    x1="20" 
+                    y1={zeroYPos} 
+                    x2="780" 
+                    y2={zeroYPos} 
+                    stroke="#e5e7eb" 
+                    strokeWidth="1" 
+                    strokeDasharray="2,2"
                   />
                 )
-              }).filter(Boolean)}
+              }
+              return null
+            })()}
+            
+            {(() => {
+              const tickCount = Math.min(xAxisLabels.length, graphData.length)
+              const ticks = []
               
-              {/* X-axis line */}
-              <line x1="20" y1="180" x2="780" y2="180" stroke="#374151" strokeWidth="1"/>
-              
-              {/* Y-axis line */}
-              <line x1="20" y1="20" x2="20" y2="180" stroke="#374151" strokeWidth="1"/>
-              
-              {/* Zero baseline (if Y-axis includes 0) */}
-              {(() => {
-                const { yMin, yMax } = axisScales
-                if (yMin <= 0 && yMax >= 0) {
-                  const zeroYPos = 180 - ((0 - yMin) / (yMax - yMin)) * 160
-                  return (
-                    <line 
-                      x1="20" 
-                      y1={zeroYPos} 
-                      x2="780" 
-                      y2={zeroYPos} 
-                      stroke="#e5e7eb" 
-                      strokeWidth="1" 
-                      strokeDasharray="2,2"
-                    />
-                  )
-                }
-                return null
-              })()}
-              
-              {/* X-axis labels and ticks */}
-              {(() => {
-                const tickCount = Math.min(xAxisLabels.length, graphData.length)
-                const ticks = []
+              for (let i = 0; i < tickCount; i++) {
+                const xPos = 20 + (760 * i / (tickCount - 1))
+                const label = xAxisLabels[i] || `Point ${i + 1}`
                 
-                for (let i = 0; i < tickCount; i++) {
-                  const xPos = 20 + (760 * i / (tickCount - 1))
-                  const label = xAxisLabels[i] || `Point ${i + 1}`
-                  
-                  // Add tick mark
-                  ticks.push(
-                    <line
-                      key={`x-tick-${i}`}
-                      x1={xPos}
-                      y1="180"
-                      x2={xPos}
-                      y2="185"
-                      stroke="#9ca3af"
-                      strokeWidth="0.5"
-                    />
-                  )
-                  
-                  // Add label with actual cell value
-                  ticks.push(
-                    <text
-                      key={`x-label-${i}`}
-                      x={xPos}
-                      y="195"
-                      textAnchor="middle"
-                      fontSize="10"
-                      fill="#6b7280"
-                    >
-                      {label}
-                    </text>
-                  )
-                }
+                ticks.push(
+                  <line
+                    key={`x-tick-${i}`}
+                    x1={xPos}
+                    y1="180"
+                    x2={xPos}
+                    y2="185"
+                    stroke="#9ca3af"
+                    strokeWidth="0.5"
+                  />
+                )
                 
-                return ticks
-              })()}
+                ticks.push(
+                  <text
+                    key={`x-label-${i}`}
+                    x={xPos}
+                    y="195"
+                    textAnchor="middle"
+                    fontSize="10"
+                    fill="#6b7280"
+                  >
+                    {label}
+                  </text>
+                )
+              }
               
-              {/* Y-axis labels and ticks */}
-              {(() => {
-                const { yMin, yMax, yTicks } = axisScales
-                const ticks = []
-                
-                yTicks.forEach((yValue, i) => {
-                  // Calculate Y position on the chart
-                  const yPos = 180 - ((yValue - yMin) / (yMax - yMin)) * 160
-                  
-                  // Skip if position is outside chart bounds
-                  if (yPos < 20 || yPos > 180) return
-                  
-                  // Add tick mark
-                  ticks.push(
-                    <line
-                      key={`y-tick-${i}`}
-                      x1="20"
-                      y1={yPos}
-                      x2="15"
-                      y2={yPos}
-                      stroke="#9ca3af"
-                      strokeWidth="0.5"
-                    />
-                  )
-                  
-                  // Add label with appropriate formatting
-                  const formattedValue = yValue % 1 === 0 ? yValue.toString() : yValue.toFixed(1)
-                  ticks.push(
-                    <text
-                      key={`y-label-${i}`}
-                      x="10"
-                      y={yPos + 3}
-                      textAnchor="end"
-                      fontSize="10"
-                      fill="#6b7280"
-                    >
-                      {formattedValue}
-                    </text>
-                  )
-                })
-                
-                return ticks
-              })()}
+              return ticks
+            })()}
+            
+            {(() => {
+              const { yMin, yMax, yTicks } = axisScales
+              const ticks = []
               
+              yTicks.forEach((yValue, i) => {
+                const yPos = 180 - ((yValue - yMin) / (yMax - yMin)) * 160
+                
+                if (yPos < 20 || yPos > 180) return
+                
+                ticks.push(
+                  <line
+                    key={`y-tick-${i}`}
+                    x1="20"
+                    y1={yPos}
+                    x2="15"
+                    y2={yPos}
+                    stroke="#9ca3af"
+                    strokeWidth="0.5"
+                  />
+                )
+                
+                const formattedValue = yValue % 1 === 0 ? yValue.toString() : yValue.toFixed(1)
+                ticks.push(
+                  <text
+                    key={`y-label-${i}`}
+                    x="10"
+                    y={yPos + 3}
+                    textAnchor="end"
+                    fontSize="10"
+                    fill="#6b7280"
+                  >
+                    {formattedValue}
+                  </text>
+                )
+              })
+              
+              return ticks
+            })()}
+            
           </svg>
         ) : (
           <div className="flex items-center justify-center h-full text-gray-400">
@@ -1031,6 +1024,7 @@ const Graph = ({
       </div>
     </div>
   )
+  */
 }
 
 Graph.propTypes = {
