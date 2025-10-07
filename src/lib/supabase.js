@@ -23,8 +23,8 @@ export const spreadsheetService = {
       .from('spreadsheets')
       .insert({
         user_id: userId,
-        name: name,
-        data: [] // Start with empty spreadsheet
+        name: name
+        // Note: data column was removed - cell data is stored in spreadsheet_cells table
       })
       .select()
       .single()
@@ -85,6 +85,19 @@ export const spreadsheetService = {
 
   // Update spreadsheet name
   async updateSpreadsheetName(spreadsheetId, userId, newName) {
+    // First, get the Google Sheet ID before updating the record
+    const { data: spreadsheet, error: fetchError } = await supabase
+      .from('spreadsheets')
+      .select('google_sheet_id')
+      .eq('id', spreadsheetId)
+      .eq('user_id', userId)
+      .single()
+
+    if (fetchError) {
+      console.warn('Could not fetch spreadsheet for Google Drive rename:', fetchError)
+    }
+
+    // Update the database record
     const { data, error } = await supabase
       .from('spreadsheets')
       .update({
@@ -97,11 +110,75 @@ export const spreadsheetService = {
       .single()
 
     if (error) throw error
+
+    // Update the Google Drive file name if it exists
+    if (spreadsheet?.google_sheet_id) {
+      try {
+        console.log('📝 Renaming Google Sheet file:', spreadsheet.google_sheet_id, 'to:', newName)
+        const response = await fetch('http://localhost:3001/api/sheets/rename', {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            spreadsheetId: spreadsheet.google_sheet_id,
+            newName: newName
+          })
+        })
+
+        if (response.ok) {
+          const result = await response.json()
+          if (result.success) {
+            console.log('✅ Google Sheet file renamed successfully')
+          } else {
+            console.warn('⚠️ Google Sheet rename failed:', result.error)
+          }
+        } else {
+          console.warn('⚠️ Failed to rename Google Sheet:', response.status)
+        }
+      } catch (renameError) {
+        console.warn('⚠️ Error renaming Google Sheet:', renameError)
+        // Don't throw error - database update succeeded
+      }
+    }
+
     return data
   },
 
   // Delete spreadsheet
   async deleteSpreadsheet(spreadsheetId, userId) {
+    console.log('🗑️ Starting complete deletion of spreadsheet:', spreadsheetId)
+    
+    // First, get the Google Sheet ID before deleting the record
+    const { data: spreadsheet, error: fetchError } = await supabase
+      .from('spreadsheets')
+      .select('google_sheet_id')
+      .eq('id', spreadsheetId)
+      .eq('user_id', userId)
+      .single()
+
+    if (fetchError) {
+      console.warn('Could not fetch spreadsheet for Google Sheet deletion:', fetchError)
+    }
+
+    // First, delete all associated spreadsheet_cells data
+    try {
+      console.log('🗑️ Deleting spreadsheet cells for spreadsheet:', spreadsheetId)
+      const { error: cellsError } = await supabase
+        .from('spreadsheet_cells')
+        .delete()
+        .eq('spreadsheet_id', spreadsheetId)
+
+      if (cellsError) {
+        console.warn('⚠️ Error deleting spreadsheet cells:', cellsError)
+      } else {
+        console.log('✅ Spreadsheet cells deleted successfully')
+      }
+    } catch (cellsDeleteError) {
+      console.warn('⚠️ Error deleting spreadsheet cells:', cellsDeleteError)
+    }
+
+    // Delete the database record
     const { error } = await supabase
       .from('spreadsheets')
       .delete()
@@ -109,6 +186,38 @@ export const spreadsheetService = {
       .eq('user_id', userId)
 
     if (error) throw error
+
+    // Delete the Google Sheet file if it exists
+    if (spreadsheet?.google_sheet_id) {
+      try {
+        console.log('🗑️ Deleting Google Sheet:', spreadsheet.google_sheet_id)
+        const response = await fetch('http://localhost:3001/api/sheets/delete', {
+          method: 'DELETE',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            spreadsheetId: spreadsheet.google_sheet_id
+          })
+        })
+
+        if (response.ok) {
+          const result = await response.json()
+          if (result.success) {
+            console.log('✅ Google Sheet deleted successfully')
+          } else {
+            console.warn('⚠️ Google Sheet deletion failed:', result.error)
+          }
+        } else {
+          console.warn('⚠️ Failed to delete Google Sheet:', response.status)
+        }
+      } catch (deleteError) {
+        console.warn('⚠️ Error deleting Google Sheet:', deleteError)
+        // Don't throw error - database deletion succeeded
+      }
+    }
+    
+    console.log('✅ Complete deletion finished for spreadsheet:', spreadsheetId)
   },
 
   // Subscribe to real-time updates for a spreadsheet

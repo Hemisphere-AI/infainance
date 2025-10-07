@@ -12,6 +12,7 @@ import LandingPage from './components/LandingPage'
 import TermsOfService from './components/TermsOfService'
 import PrivacyPolicy from './components/PrivacyPolicy'
 import UserProfile from './components/UserProfile'
+import GoogleOAuthCallback from './components/GoogleOAuthCallback'
 import { LLMService } from './services/llmService'
 
 // Editable spreadsheet name component
@@ -99,6 +100,7 @@ function MainApp() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/terms" element={<TermsOfService />} />
         <Route path="/privacy" element={<PrivacyPolicy />} />
+        <Route path="/oauth2/callback" element={<GoogleOAuthCallback />} />
         <Route 
           path="/app" 
             element={<SpreadsheetApp />} 
@@ -200,6 +202,13 @@ function MainSpreadsheetApp({ user }) {
     }
   }, [spreadsheets, currentSpreadsheetId, spreadsheetsLoading, createSpreadsheet, user.id])
 
+  // Auto-show Google Sheets integration when user has a spreadsheet
+  useEffect(() => {
+    if (currentSpreadsheetId && user?.id) {
+      setGoogleSheetsVisible(true)
+    }
+  }, [currentSpreadsheetId, user?.id])
+
   // Load initial spreadsheet data (only when spreadsheet ID changes, not when user edits)
   useEffect(() => {
     if (spreadsheet?.data && Array.isArray(spreadsheet.data)) {
@@ -248,10 +257,11 @@ function MainSpreadsheetApp({ user }) {
         spreadsheetData,
         handleSpreadsheetChange,
         toolCallHandlerRef.current,
-        user
+        user,
+        googleSheetsConfig
       )
     }
-  }, [user, spreadsheetData, handleSpreadsheetChange])
+  }, [user, spreadsheetData, handleSpreadsheetChange, googleSheetsConfig])
 
   // Handle tool call registration from ChatInterface
   const handleToolCallRegistration = useCallback((handler) => {
@@ -310,9 +320,14 @@ function MainSpreadsheetApp({ user }) {
   // Create new spreadsheet
   const handleCreateSpreadsheet = useCallback(async () => {
     try {
+      // Create local spreadsheet first
       const newSpreadsheet = await createSpreadsheet('Untitled Spreadsheet')
       setCurrentSpreadsheetId(newSpreadsheet.id)
       setSpreadsheetData([])
+      
+      // Note: Google Sheet creation is now handled automatically by GoogleSheetsEmbed
+      // when the component detects a new spreadsheet without a Google Sheet
+      console.log('✅ Local spreadsheet created, Google Sheet will be auto-created')
     } catch (error) {
       console.error('Error creating spreadsheet:', error)
     }
@@ -339,6 +354,15 @@ function MainSpreadsheetApp({ user }) {
       console.error('Error renaming spreadsheet:', error)
     }
   }, [renameSpreadsheet, updateName, currentSpreadsheetId])
+
+  // Handle Google Sheets config change
+  const handleGoogleSheetsConfigChange = useCallback((config) => {
+    setGoogleSheetsConfig(config)
+    // Update LLM service with new Google Sheets config
+    if (llmServiceRef.current) {
+      llmServiceRef.current.updateGoogleSheetsConfig(config)
+    }
+  }, [])
 
   // Handle sidebar toggle
   const handleSidebarToggle = useCallback(() => {
@@ -435,19 +459,24 @@ function MainSpreadsheetApp({ user }) {
         <div className="flex-1 flex flex-col lg:flex-row px-4 py-4 min-h-0 overflow-hidden">
           {/* Main content area */}
           <div className="flex-1 flex flex-col min-h-0 lg:mr-4 mb-4 lg:mb-0 min-w-0">
-            {/* Google Sheets Embed - Above Graph Container */}
-            <GoogleSheetsEmbed
-              onSheetDataUpdate={(data, headers) => {
-                // Update the spreadsheet data with Google Sheets data
-                setSpreadsheetData(data)
-                console.log('Google Sheets data updated:', { data, headers })
-              }}
-              onConfigChange={setGoogleSheetsConfig}
-              isVisible={googleSheetsVisible}
-              onToggleVisibility={() => setGoogleSheetsVisible(!googleSheetsVisible)}
-              currentSpreadsheetId={currentSpreadsheetId}
-              userId={user?.id}
-            />
+            {/* Google Sheets Integration - Now integrated into the main flow */}
+            {googleSheetsVisible && (
+              <GoogleSheetsEmbed
+                onSheetDataUpdate={(data, headers) => {
+                  // Update the spreadsheet data with Google Sheets data
+                  setSpreadsheetData(data)
+                  console.log('Google Sheets data updated:', { data, headers })
+                }}
+                onConfigChange={handleGoogleSheetsConfigChange}
+                isVisible={googleSheetsVisible}
+                onToggleVisibility={() => setGoogleSheetsVisible(!googleSheetsVisible)}
+                currentSpreadsheetId={currentSpreadsheetId}
+                userId={user?.id}
+                userEmail={user?.email}
+                currentSpreadsheetName={spreadsheet?.name}
+                onSpreadsheetRename={handleSpreadsheetRename}
+              />
+            )}
 
 
           </div>

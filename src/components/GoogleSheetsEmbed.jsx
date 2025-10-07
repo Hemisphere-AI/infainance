@@ -1,7 +1,9 @@
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useEffect, useRef } from 'react'
 import PropTypes from 'prop-types'
-import { ExternalLink, Settings, X, RefreshCw } from 'lucide-react'
+import { ExternalLink, X, RefreshCw, FileSpreadsheet, LogIn } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import { googleOAuthService } from '../services/googleOAuthService.js'
+import { googleSheetsService } from '../services/googleSheetsService.js'
 
 const GoogleSheetsEmbed = ({ 
   onSheetDataUpdate,
@@ -9,7 +11,10 @@ const GoogleSheetsEmbed = ({
   isVisible = true,
   onToggleVisibility,
   currentSpreadsheetId,
-  userId
+  userId,
+  userEmail,
+  currentSpreadsheetName,
+  onSpreadsheetRename
 }) => {
   const [config, setConfig] = useState({
     sheetUrl: '',
@@ -21,6 +26,9 @@ const GoogleSheetsEmbed = ({
   })
   const [isConfiguring, setIsConfiguring] = useState(false)
   const [error, setError] = useState(null)
+  const [isRenaming, setIsRenaming] = useState(false)
+  const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const [authLoading, setAuthLoading] = useState(false)
 
   // Extract sheet ID from Google Sheets URL
   const extractSheetId = useCallback((url) => {
@@ -68,9 +76,9 @@ const GoogleSheetsEmbed = ({
         .upsert({
           id: currentSpreadsheetId,
           user_id: userId,
-          name: `Google Sheets - ${sheetId}`,
+          name: currentSpreadsheetName || `Google Sheets - ${sheetId}`,
           google_sheet_id: sheetId,
-          google_sheet_url: config.sheetUrl,
+          google_sheet_url: `https://docs.google.com/spreadsheets/d/${config.sheetId}/edit`,
           updated_at: new Date().toISOString()
         }, {
           onConflict: 'id'
@@ -120,6 +128,7 @@ const GoogleSheetsEmbed = ({
   // Real-time sync state
   const [isLoading, setIsLoading] = useState(false)
   const [lastSync, setLastSync] = useState(null)
+  const [lastKnownModified, setLastKnownModified] = useState(null)
   const [syncInterval, setSyncInterval] = useState(null)
   const [lastDataHash, setLastDataHash] = useState(null)
   const [isDataChanging, setIsDataChanging] = useState(false)
@@ -132,20 +141,18 @@ const GoogleSheetsEmbed = ({
     try {
       const { data: spreadsheet, error } = await supabase
         .from('spreadsheets')
-        .select('google_sheet_id, google_sheet_url, name')
+        .select('google_sheet_id, name')
         .eq('id', currentSpreadsheetId)
         .single()
 
       if (error) {
-        console.log('No existing Google Sheets configuration found')
         return
       }
 
-      if (spreadsheet && spreadsheet.google_sheet_id) {
-        console.log('📋 Loading existing Google Sheets configuration:', spreadsheet)
+      if (!spreadsheet || !spreadsheet.google_sheet_id) return
         
-        const existingConfig = {
-          sheetUrl: spreadsheet.google_sheet_url || '',
+      const nextConfig = {
+          sheetUrl: `https://docs.google.com/spreadsheets/d/${spreadsheet.google_sheet_id}/edit`,
           sheetId: spreadsheet.google_sheet_id,
           isConfigured: true,
           isPublic: false,
@@ -153,93 +160,259 @@ const GoogleSheetsEmbed = ({
           autoRefresh: true
         }
         
-        setConfig(existingConfig)
-        
-        if (onConfigChange) {
-          onConfigChange(existingConfig)
-        }
-      }
+      // De-duplicate updates to avoid loops
+      const prev = config
+      const noChange = prev.sheetId === nextConfig.sheetId && prev.sheetUrl === nextConfig.sheetUrl && prev.isConfigured === nextConfig.isConfigured
+      if (noChange) return
+
+      setConfig(nextConfig)
+      if (onConfigChange) onConfigChange(nextConfig)
     } catch (error) {
       console.error('Error loading existing configuration:', error)
+    } finally {
+      // Always mark config as loaded, even if there was an error
+      setConfigLoaded(true)
     }
-  }, [currentSpreadsheetId, onConfigChange])
+  }, [currentSpreadsheetId, onConfigChange, config])
+
+  // Check authentication status on mount
+  useEffect(() => {
+    const checkAuth = async () => {
+      if (googleOAuthService.isAuthenticated()) {
+        await googleSheetsService.initializeAuth()
+        setIsAuthenticated(true)
+      }
+    }
+    checkAuth()
+  }, [])
+
+  // Auto-sync check function
+  const checkAndAutoSync = useCallback(async () => {
+    if (!config.sheetId || !userId) return
+
+    try {
+      const { googleServiceAccount } = await import('../services/googleServiceAccount.js')
+      
+      // Use last known modified time or current time as fallback
+      const lastModified = lastKnownModified || new Date().toISOString()
+      
+      const result = await googleServiceAccount.autoSyncFromGoogleSheets(
+        config.sheetId, 
+        userId, 
+        lastModified
+      )
+      
+      if (result.success && result.synced) {
+        setSyncStatus('synced')
+        setLastSync(new Date())
+        console.log('✅ Auto-sync completed successfully')
+      } else if (result.success && !result.synced) {
+        console.log('✅ No changes detected - sync not needed')
+      }
+    } catch (error) {
+      console.error('❌ Auto-sync error:', error)
+    }
+  }, [config.sheetId, userId, lastKnownModified])
 
   // Load configuration on mount
   React.useEffect(() => {
+    setConfigLoaded(false) // Reset config loaded state
     loadExistingConfig()
-  }, [loadExistingConfig])
+    // Reset creation attempt flag when spreadsheet changes
+    setHasAttemptedCreation(false)
+    // Only when spreadsheet ID changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentSpreadsheetId])
 
-  // Fetch data from Google Sheets (automatic sync)
+  // Auto-sync when config is loaded
+  React.useEffect(() => {
+    if (config.isConfigured && config.sheetId && userId) {
+      // Trigger auto-sync check after a short delay
+      const timeoutId = setTimeout(() => {
+        checkAndAutoSync()
+      }, 2000) // 2 second delay to ensure everything is loaded
+
+      return () => clearTimeout(timeoutId)
+    }
+  }, [config.isConfigured, config.sheetId, userId, checkAndAutoSync])
+
+  // Periodic polling for changes (every 30 seconds)
+  React.useEffect(() => {
+    if (config.isConfigured && config.sheetId && userId) {
+      const intervalId = setInterval(() => {
+        console.log('🔄 Periodic sync check...')
+        checkAndAutoSync()
+      }, 30000) // Check every 30 seconds
+
+      return () => clearInterval(intervalId)
+    }
+  }, [config.isConfigured, config.sheetId, userId, checkAndAutoSync])
+
+  // Auto-create Google Sheet if user doesn't have one (with debouncing)
+  const [hasAttemptedCreation, setHasAttemptedCreation] = useState(false)
+  const [configLoaded, setConfigLoaded] = useState(false)
+  const [isCreatingSheet, setIsCreatingSheet] = useState(false)
+  const lastSyncTimeRef = useRef(0)
+  
+  React.useEffect(() => {
+    const autoCreateGoogleSheet = async () => {
+      // Only create if we have all required data AND no existing config AND config has been loaded
+      if (!currentSpreadsheetId || !userId || !userEmail) return
+      if (!configLoaded) {
+        console.log('⏳ Waiting for config to load before auto-creation')
+        return
+      }
+      if (config.sheetId && config.isConfigured) {
+        console.log('✅ Already have Google Sheet configured, skipping auto-creation')
+        return
+      }
+      if (hasAttemptedCreation) {
+        console.log('⏸️ Already attempted creation, skipping')
+        return
+      }
+      
+      console.log('🔄 Auto-creating Google Sheet for new spreadsheet...')
+      setHasAttemptedCreation(true)
+      setIsCreatingSheet(true)
+      
+      try {
+        const response = await fetch('http://localhost:3001/api/sheets/create-for-user', {
+          method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            userId,
+            userEmail,
+            spreadsheetName: currentSpreadsheetName || 'Untitled Spreadsheet'
+          })
+        })
+        
+        if (response.ok) {
+          const result = await response.json()
+          if (result.success) {
+            console.log('✅ Auto-created Google Sheet:', result)
+            
+            // Update the database record with Google Sheet information
+            try {
+              const { error: updateError } = await supabase
+                .from('spreadsheets')
+                .update({
+                  google_sheet_id: result.spreadsheetId,
+                  google_sheet_url: `https://docs.google.com/spreadsheets/d/${result.spreadsheetId}/edit`,
+                  updated_at: new Date().toISOString()
+                })
+                .eq('id', currentSpreadsheetId)
+
+              if (updateError) {
+                console.error('❌ Error updating database with Google Sheet info:', updateError)
+              } else {
+                console.log('✅ Updated database with Google Sheet info')
+              }
+            } catch (dbError) {
+              console.error('❌ Error updating database:', dbError)
+            }
+            
+            // Update config with the new Google Sheet info
+            const newConfig = {
+              sheetUrl: result.spreadsheetUrl,
+              sheetId: result.spreadsheetId,
+              isConfigured: true,
+              isPublic: false,
+              refreshInterval: 30000,
+              autoRefresh: true
+            }
+            setConfig(newConfig)
+            if (onConfigChange) {
+              onConfigChange(newConfig)
+            }
+            
+            // Automatically fetch data from the new Google Sheet
+            console.log('🔄 Auto-fetching data from newly created Google Sheet...')
+            setTimeout(() => {
+              fetchSheetData()
+            }, 1000) // Small delay to ensure config is updated
+            
+            // Force a re-render to show the new Google Sheet immediately
+            setLastSync(new Date())
+            setError(null)
+          }
+        }
+        setIsCreatingSheet(false)
+      } catch (error) {
+        console.warn('⚠️ Could not auto-create Google Sheet:', error)
+        setHasAttemptedCreation(false) // Allow retry on error
+        setIsCreatingSheet(false)
+      }
+    }
+    
+    autoCreateGoogleSheet()
+  }, [currentSpreadsheetId, userId, userEmail, currentSpreadsheetName, config.sheetId, config.isConfigured, hasAttemptedCreation, configLoaded])
+
+  // Fetch data from Google Sheets via backend API (service account)
   const fetchSheetData = useCallback(async () => {
     if (!config.sheetId || !config.isConfigured) return
+
+    // Debounce: prevent sync from running too frequently (max once per 5 seconds)
+    const now = Date.now()
+    if (now - lastSyncTimeRef.current < 5000) {
+      console.log('⏱️ Sync debounced - too soon since last sync')
+      return
+    }
+    lastSyncTimeRef.current = now
 
     setError(null)
 
     try {
-      const csvUrl = `https://docs.google.com/spreadsheets/d/${config.sheetId}/export?format=csv&gid=0`
-      
-      const response = await fetch(csvUrl, {
-        method: 'GET',
-        mode: 'cors',
-        headers: {
-          'Accept': 'text/csv'
-        }
-      })
+      // Use our backend API instead of direct Google Sheets CSV export
+      const response = await fetch(`http://localhost:3001/api/sheets/read?spreadsheetId=${config.sheetId}&range=A1:Z1000`)
       
       if (!response.ok) {
-        if (response.status === 403) {
-          throw new Error('Sheet is not publicly accessible. Please make sure the sheet is shared with "Anyone with the link can view" permission.')
-        }
         throw new Error(`Failed to fetch sheet data: ${response.status} ${response.statusText}`)
       }
       
-      const csvText = await response.text()
+      const result = await response.json()
       
-      if (!csvText || csvText.trim() === '') {
-        throw new Error('No data found in the sheet. Please make sure the sheet has content.')
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to fetch sheet data')
       }
       
-      // Parse CSV data
-      const lines = csvText.split('\n').filter(line => line.trim() !== '')
+      const values = result.values || []
       
-      if (lines.length === 0) {
-        throw new Error('No data rows found in the sheet.')
-      }
-      
-      // Simple CSV parsing
-      const parseCSVLine = (line) => {
-        const result = []
-        let current = ''
-        let inQuotes = false
+      // Handle empty sheets gracefully - create empty grid instead of throwing error
+      if (!values || values.length === 0) {
+        console.log('📋 Sheet is empty, creating empty grid')
         
-        for (let i = 0; i < line.length; i++) {
-          const char = line[i]
-          if (char === '"') {
-            inQuotes = !inQuotes
-          } else if (char === ',' && !inQuotes) {
-            result.push(current.trim())
-            current = ''
-          } else {
-            current += char
+        // Create an empty 100x10 grid
+        const emptySpreadsheetData = []
+        for (let rowIndex = 0; rowIndex < 100; rowIndex++) {
+          const row = []
+          for (let colIndex = 0; colIndex < 10; colIndex++) {
+            row.push({
+              value: '',
+              displayValue: '',
+              computedValue: '',
+              isNumber: false,
+              cellType: 'text'
+            })
           }
+          emptySpreadsheetData.push(row)
         }
-        result.push(current.trim())
-        return result
+        
+        console.log('✅ Created empty grid for new sheet')
+        
+        if (onSheetDataUpdate) {
+          onSheetDataUpdate(emptySpreadsheetData, [])
+          console.log('✅ Empty spreadsheet data updated in app')
+        }
+        
+        setSyncStatus('synced')
+        return
       }
       
-      const headers = parseCSVLine(lines[0])
-      const rows = lines.slice(1).map(line => {
-        const values = parseCSVLine(line)
-        return headers.reduce((obj, header, index) => {
-          obj[header] = values[index] || ''
-          return obj
-        }, {})
-      }).filter(row => Object.values(row).some(value => value !== ''))
-
-      // Transform to spreadsheet format (properly structured for your app)
-      // Create a 2D array that matches the expected format
-      const maxRows = Math.max(rows.length, 100) // Ensure we have enough rows
-      const maxCols = Math.max(headers.length, 10) // Ensure we have enough columns
+      // Convert values array to spreadsheet format
+      const maxRows = Math.max(values.length, 100) // Ensure we have enough rows
+      const maxCols = Math.max(...values.map(row => row.length), 10) // Ensure we have enough columns
       
       const spreadsheetData = []
       
@@ -259,23 +432,8 @@ const GoogleSheetsEmbed = ({
       }
       
       // Fill in the actual data from Google Sheets
-      // First, add the header row (row 0)
-      headers.forEach((header, colIndex) => {
-        if (spreadsheetData[0] && spreadsheetData[0][colIndex]) {
-          spreadsheetData[0][colIndex] = {
-            value: header,
-            displayValue: header,
-            computedValue: header,
-            isNumber: false,
-            cellType: 'text'
-          }
-        }
-      })
-      
-      // Then add the data rows (starting from row 1)
-      rows.forEach((row, rowIndex) => {
-        headers.forEach((header, colIndex) => {
-          const cellValue = row[header] || ''
+      values.forEach((row, rowIndex) => {
+        row.forEach((cellValue, colIndex) => {
           
           // Enhanced parsing for different cell types
           let parsedValue = cellValue
@@ -352,9 +510,9 @@ const GoogleSheetsEmbed = ({
             }
           }
           
-          // Use rowIndex + 1 because we're starting from the second row (index 1)
-          if (spreadsheetData[rowIndex + 1] && spreadsheetData[rowIndex + 1][colIndex]) {
-            spreadsheetData[rowIndex + 1][colIndex] = {
+          // Assign cell data directly
+          if (spreadsheetData[rowIndex] && spreadsheetData[rowIndex][colIndex]) {
+            spreadsheetData[rowIndex][colIndex] = {
               value: parsedValue,
               displayValue: cellValue,
               computedValue: cellValue,
@@ -385,29 +543,28 @@ const GoogleSheetsEmbed = ({
       setLastDataHash(currentDataHash)
       
       console.log('🔄 Google Sheets sync successful:', {
-        headers,
-        rowCount: rows.length,
+        rowCount: values.length,
         dataPreview: spreadsheetData.slice(0, 3),
-        totalCells: spreadsheetData.length * headers.length,
+        totalCells: spreadsheetData.length * (spreadsheetData[0]?.length || 0),
         sampleCell: spreadsheetData[0]?.[0],
-        sampleData: rows.slice(0, 2),
+        sampleData: values.slice(0, 2),
         firstRowData: spreadsheetData[0],
         cellC1: spreadsheetData[0]?.[2], // Column C (index 2)
         cellC4: spreadsheetData[3]?.[2], // Row 4, Column C
-        rawCSVPreview: lines.slice(0, 3), // Show raw CSV data
+        rawDataPreview: values.slice(0, 3), // Show raw data
         currencyCells: spreadsheetData.flat().filter(cell => cell.isCurrency),
         formulaCells: spreadsheetData.flat().filter(cell => cell.isFormula)
       })
       
       if (onSheetDataUpdate) {
-        onSheetDataUpdate(spreadsheetData, headers)
+        onSheetDataUpdate(spreadsheetData, values[0] || [])
         console.log('✅ Spreadsheet data updated in app')
       }
       
       // Save to database
       try {
         setSyncStatus('saving')
-        await saveToDatabase(spreadsheetData, headers)
+        await saveToDatabase(spreadsheetData, values[0] || [])
         console.log('✅ Data saved to database')
         setSyncStatus('saved')
         
@@ -436,8 +593,14 @@ const GoogleSheetsEmbed = ({
     try {
       console.log('💾 Saving Google Sheets data to database...')
       
-      // Use the current spreadsheet ID from the parent component
-      const spreadsheetId = currentSpreadsheetId || 'google-sheets-sync'
+      // Require a valid spreadsheet ID - no fallback to dummy string
+      if (!currentSpreadsheetId) {
+        console.error('❌ No valid spreadsheet ID available for saving Google Sheets data')
+        setError('No spreadsheet selected. Please select or create a spreadsheet first.')
+        return
+      }
+      
+      const spreadsheetId = currentSpreadsheetId
       console.log('🆔 Using spreadsheet ID:', spreadsheetId)
       console.log('🆔 Current spreadsheet ID from props:', currentSpreadsheetId)
       
@@ -459,7 +622,9 @@ const GoogleSheetsEmbed = ({
               cell_type: cell.cellType || 'text',
               is_currency: cell.isCurrency || false,
               currency_symbol: cell.currencySymbol || null,
-              is_number: cell.isNumber || false,
+              is_percentage: cell.isPercentage || false,
+              formatting: cell.formatting || null,
+              decimal_places: cell.decimalPlaces || null,
               created_at: new Date().toISOString(),
               updated_at: new Date().toISOString()
             })
@@ -546,25 +711,88 @@ const GoogleSheetsEmbed = ({
     }
   }, [currentSpreadsheetId])
 
-  // Auto-sync effect (always enabled when configured)
+  // One-time initial sync after configuration; no periodic auto-sync
   React.useEffect(() => {
     if (!config.isConfigured) return
-
-    // Initial sync
     fetchSheetData()
-    
-    // Set up periodic sync (every 10 seconds for real-time feel)
-    const interval = setInterval(() => {
-      fetchSheetData()
-    }, 10000) // Every 10 seconds
+  }, [config.isConfigured]) // Removed fetchSheetData from dependencies to prevent loop
 
-    setSyncInterval(interval)
-
-    return () => {
-      clearInterval(interval)
-      setSyncInterval(null)
+  // Inline rename handlers
+  const [editName, setEditName] = useState('')
+  
+  const handleNameDoubleClick = () => {
+    setEditName(currentSpreadsheetName || '')
+    setIsRenaming(true)
+  }
+  
+  const handleNameChange = (e) => setEditName(e.target.value)
+  
+  const commitRename = async () => {
+    const trimmed = (editName || '').trim()
+    if (!trimmed || !currentSpreadsheetId || trimmed === currentSpreadsheetName) {
+      setIsRenaming(false)
+      return
     }
-  }, [config.isConfigured, fetchSheetData])
+    try {
+      if (onSpreadsheetRename) {
+        await onSpreadsheetRename(currentSpreadsheetId, trimmed)
+      }
+      setIsRenaming(false)
+    } catch (e) {
+      console.error('Error renaming spreadsheet:', e)
+      setIsRenaming(false)
+    }
+  }
+  
+  const handleNameKeyDown = (e) => {
+    if (e.key === 'Enter') commitRename()
+    if (e.key === 'Escape') setIsRenaming(false)
+  }
+
+  // Handle Google OAuth authentication
+  const handleAuthenticate = useCallback(async () => {
+    try {
+      setAuthLoading(true)
+      setError(null)
+
+      if (!googleOAuthService.isConfigured()) {
+        setError('Google OAuth not configured. Please set VITE_GOOGLE_CLIENT_ID in .env')
+        return
+      }
+
+      const authUrl = googleOAuthService.getAuthUrl()
+      window.location.href = authUrl
+    } catch (error) {
+      console.error('Authentication error:', error)
+      setError(`Authentication failed: ${error.message}`)
+    } finally {
+      setAuthLoading(false)
+    }
+  }, [])
+
+  // Handle logout
+  const handleLogout = useCallback(() => {
+    googleOAuthService.logout()
+    setIsAuthenticated(false)
+    setConfig({
+      sheetUrl: '',
+      sheetId: '',
+      isConfigured: false,
+      isPublic: false,
+      refreshInterval: 30000,
+      autoRefresh: true
+    })
+    if (onConfigChange) {
+      onConfigChange({
+        sheetUrl: '',
+        sheetId: '',
+        isConfigured: false,
+        isPublic: false,
+        refreshInterval: 30000,
+        autoRefresh: true
+      })
+    }
+  }, [onConfigChange])
 
   // No auto-refresh needed for iframe - it updates automatically
 
@@ -628,17 +856,7 @@ const GoogleSheetsEmbed = ({
             </div>
           </div>
           
-          <div className="text-xs text-gray-500 bg-green-50 p-2 rounded">
-            <strong>Auto-Sync Enabled:</strong> Changes in Google Sheets will automatically sync to your app and database every 10 seconds.
-          </div>
-          
-          <div className="text-xs text-gray-500 bg-blue-50 p-2 rounded">
-            <strong>Note:</strong> CSV export may not preserve currency formatting or formulas. For full formatting support, consider using the Google Sheets API.
-          </div>
-          
-          <div className="text-xs text-red-600 bg-red-50 p-2 rounded">
-            <strong>⚠️ Warning:</strong> Google Sheets sync will replace ALL existing data in your spreadsheet. Make sure to backup important data before connecting.
-          </div>
+          {/* Info notices removed as requested */}
           
           {error && (
             <div className="text-xs text-red-600 bg-red-50 p-2 rounded">
@@ -654,19 +872,6 @@ const GoogleSheetsEmbed = ({
               Connect
             </button>
             <button
-              onClick={() => {
-                const sheetId = extractSheetId(config.sheetUrl)
-                if (sheetId) {
-                  // Test the connection
-                  const testUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=0`
-                  window.open(testUrl, '_blank')
-                }
-              }}
-              className="px-4 py-2 bg-green-100 text-green-600 rounded-md text-sm hover:bg-green-200 flex-1"
-            >
-              Test Link
-            </button>
-            <button
               onClick={handleCancelConfig}
               className="px-4 py-2 bg-gray-100 text-gray-600 rounded-md text-sm hover:bg-gray-200 flex-1"
             >
@@ -674,6 +879,37 @@ const GoogleSheetsEmbed = ({
             </button>
           </div>
         </div>
+      </div>
+    )
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <div className="bg-white border border-gray-200 rounded-lg p-4 mb-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-3">
+            <div className="w-8 h-8 bg-green-100 rounded-lg flex items-center justify-center">
+              <ExternalLink className="w-4 h-4 text-green-600" />
+            </div>
+            <div>
+              <h3 className="text-sm font-medium text-gray-900">Google Sheets Integration</h3>
+              <p className="text-xs text-gray-500">Connect to Google Sheets for real-time sync</p>
+            </div>
+          </div>
+          <button
+            onClick={handleAuthenticate}
+            disabled={authLoading}
+            className="px-3 py-1.5 bg-blue-600 text-white rounded-md text-xs hover:bg-blue-700 disabled:opacity-50 flex items-center space-x-1"
+          >
+            <LogIn className="w-3 h-3" />
+            <span>{authLoading ? 'Connecting...' : 'Connect'}</span>
+          </button>
+        </div>
+        {error && (
+          <div className="mt-3 text-xs text-red-600 bg-red-50 p-2 rounded">
+            {error}
+          </div>
+        )}
       </div>
     )
   }
@@ -688,104 +924,142 @@ const GoogleSheetsEmbed = ({
             </div>
             <div>
               <h3 className="text-sm font-medium text-gray-900">Google Sheets Embed</h3>
-              <p className="text-xs text-gray-500">Embed live Google Sheets in your app</p>
+              <p className="text-xs text-gray-500">Configure your Google Sheet for sync</p>
             </div>
           </div>
+          <div className="flex items-center space-x-2">
           <button
             onClick={() => setIsConfiguring(true)}
             className="px-3 py-1.5 bg-blue-600 text-white rounded-md text-xs hover:bg-blue-700"
           >
             Configure
           </button>
+            <button
+              onClick={handleLogout}
+              className="px-3 py-1.5 bg-gray-100 text-gray-600 rounded-md text-xs hover:bg-gray-200"
+            >
+              Logout
+          </button>
+          </div>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="bg-white border border-gray-200 rounded-lg overflow-hidden mb-4">
-      {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b border-gray-200 bg-gray-50">
-        <div className="flex items-center space-x-3">
-          <div className="w-8 h-8 bg-green-100 rounded-lg flex items-center justify-center">
-            <ExternalLink className="w-4 h-4 text-green-600" />
-          </div>
-          <div>
-            <h3 className="text-sm font-medium text-gray-900">Google Sheets</h3>
-            <p className="text-xs text-gray-500">
-              {syncStatus === 'syncing' && 'Synchronizing...'}
-              {syncStatus === 'saving' && 'Saving...'}
-              {syncStatus === 'saved' && 'Saved'}
-              {!syncStatus && lastSync && 'Auto-sync active'}
-              {!syncStatus && !lastSync && 'Google Sheets view'}
-            </p>
-          </div>
-        </div>
-        
-        <div className="flex items-center space-x-2">
-          <button
-            onClick={() => setIsConfiguring(true)}
-            className="p-1.5 text-gray-400 hover:text-gray-600"
-            title="Settings"
-          >
-            <Settings className="w-4 h-4" />
-          </button>
-        </div>
-      </div>
-      
-      {/* Error Display */}
-      {error && (
-        <div className="p-4 bg-red-50 border-b border-red-200">
-          <div className="text-xs text-red-600">
-            <div className="font-medium">Connection Error:</div>
-            <div className="mt-1">{error}</div>
-            <div className="mt-2 text-xs text-red-500">
-              • Make sure the sheet is shared with "Anyone with the link can view"<br/>
-              • Check that the sheet has data in it
+    <div className="mb-0 h-full flex flex-col">
+      {/* Card Container matches ChatInterface white area */}
+      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden flex flex-col">
+        {/* Header inside the card so the light grey border wraps around */}
+        <div className="flex items-center justify-between p-4 bg-gray-50 border-b border-gray-200">
+          <div className="flex items-center space-x-3">
+            <div className="w-8 h-8 rounded-lg flex items-center justify-center">
+              <FileSpreadsheet className="w-4 h-4 text-green-600" />
+            </div>
+            <div className="flex items-center space-x-2">
+              {isRenaming ? (
+                <input
+                  type="text"
+                  value={editName}
+                  onChange={handleNameChange}
+                  onBlur={commitRename}
+                  onKeyDown={handleNameKeyDown}
+                  className="text-sm font-medium text-gray-900 bg-white border border-blue-300 rounded px-1 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  autoFocus
+                />
+              ) : (
+                <h3
+                  className="text-sm font-medium text-gray-900 cursor-pointer hover:bg-gray-100 rounded px-1 py-0.5"
+                  onDoubleClick={handleNameDoubleClick}
+                  title="Double-click to rename"
+                >
+                  {currentSpreadsheetName || 'Google Sheets'}
+                </h3>
+              )}
+              <span className="text-xs text-gray-500 ml-2">
+                {syncStatus === 'syncing' && 'Synchronizing...'}
+                {syncStatus === 'saving' && 'Saving...'}
+                {(syncStatus === 'saved' || (!syncStatus && lastSync)) && 'Saved'}
+                {!syncStatus && !lastSync && 'Google Sheets view'}
+              </span>
             </div>
           </div>
+          
+          <div className="flex items-center space-x-2">
+            {/*
+            <button
+              onClick={fetchSheetData}
+              className="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 rounded border border-gray-300 flex items-center space-x-1"
+              title="Sync now"
+            >
+              <RefreshCw className="w-3 h-3" />
+              <span>Sync</span>
+            </button>
+            */}
+            {config.isConfigured && config.sheetId && (
+              <a
+                href={`https://docs.google.com/spreadsheets/d/${config.sheetId}/edit`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="p-1.5 text-gray-400 hover:text-gray-600"
+                title="Open in new tab"
+              >
+                <ExternalLink className="w-4 h-4" />
+              </a>
+            )}
+          </div>
         </div>
-      )}
-      
-      
-      
-      {/* Google Sheets Embed */}
-      {config.isConfigured && config.sheetId && !error && (
-        <div className="relative">
-          <iframe
-            src={`https://docs.google.com/spreadsheets/d/${config.sheetId}/edit?usp=sharing&rm=minimal&widget=true&headers=false&embedded=true`}
-            width="100%"
-            height="600"
-            frameBorder="0"
-            className="w-full"
-            title="Google Sheets Embed"
-            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
-            onLoad={() => {
-              console.log('Google Sheets iframe loaded')
-            }}
-            onError={() => {
-              console.error('Google Sheets iframe failed to load')
-              setError('Failed to load Google Sheets. Please check the URL and permissions.')
-            }}
-          />
-        </div>
-      )}
-      
-      {/* Status Footer */}
-      <div className="px-4 py-2 bg-gray-50 border-t border-gray-200 text-xs text-gray-500">
+
+        {/* White Content Area with Border - exactly like ChatInterface */}
+        <div className="flex-1 flex flex-col">
+        {/* Loading indicator for Google Sheet creation */}
+        {isCreatingSheet && (
+          <div className="p-4 bg-blue-50 border-b border-blue-200">
+            <div className="text-xs text-blue-600 flex items-center space-x-2">
+              <div className="animate-spin w-3 h-3 border border-blue-600 border-t-transparent rounded-full"></div>
+              <span>Creating Google Sheet...</span>
+            </div>
+          </div>
+        )}
+        
+        {/* Error Display */}
         {error && (
-          <span className="text-red-600">Connection failed - check settings</span>
+          <div className="p-4 bg-red-50 border-b border-red-200">
+            <div className="text-xs text-red-600">
+              <div className="font-medium">Connection Error:</div>
+              <div className="mt-1">{error}</div>
+              <div className="mt-2 text-xs text-red-500">
+                • Make sure the sheet is shared with "Anyone with the link can view"<br/>
+                • Check that the sheet has data in it
+              </div>
+            </div>
+          </div>
         )}
-        {!config.isConfigured && (
-          <span>Configure Google Sheets to get started</span>
-        )}
-        {config.isConfigured && !error && (
-          <span>
-            {lastSync ? `Last sync: ${lastSync.toLocaleTimeString()}` : 'Starting sync...'} 
-            {syncStatus && ` - ${syncStatus}`}
-            {!syncStatus && lastSync && ' - Auto-sync active'}
-          </span>
-        )}
+        
+        {/* Content area - like Messages in ChatInterface */}
+        <div className="flex-1 min-h-0 p-4">
+          {/* Minimal placeholder area (no panel) */}
+          {config.isConfigured && config.sheetId && !error && (
+            <div className="h-full" />
+          )}
+        </div>
+        
+        {/* Status Footer - like Input in ChatInterface */}
+        <div className="p-4 border-t border-gray-200 bg-white text-xs text-gray-500">
+          {error && (
+            <span className="text-red-600">Connection failed - check settings</span>
+          )}
+          {!config.isConfigured && (
+            <span>Configure Google Sheets to get started</span>
+          )}
+          {config.isConfigured && !error && (
+            <span>
+              {lastSync ? `updated: ${lastSync.toLocaleTimeString()}` : 'Ready'}
+              {syncStatus === 'syncing' && ' - Synchronizing...'}
+            </span>
+          )}
+        </div>
+        </div>
       </div>
     </div>
   )
@@ -797,7 +1071,10 @@ GoogleSheetsEmbed.propTypes = {
   isVisible: PropTypes.bool,
   onToggleVisibility: PropTypes.func,
   currentSpreadsheetId: PropTypes.oneOfType([PropTypes.string, PropTypes.number]),
-  userId: PropTypes.oneOfType([PropTypes.string, PropTypes.number])
+  userId: PropTypes.oneOfType([PropTypes.string, PropTypes.number]),
+  userEmail: PropTypes.string,
+  currentSpreadsheetName: PropTypes.string,
+  onSpreadsheetRename: PropTypes.func
 }
 
 export default GoogleSheetsEmbed
