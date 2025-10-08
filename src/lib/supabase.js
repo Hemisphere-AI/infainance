@@ -23,8 +23,8 @@ export const spreadsheetService = {
       .from('spreadsheets')
       .insert({
         user_id: userId,
-        name: name,
-        data: [] // Start with empty spreadsheet
+        name: name
+        // Note: data column was removed - cell data is stored in spreadsheet_cells table
       })
       .select()
       .single()
@@ -85,6 +85,19 @@ export const spreadsheetService = {
 
   // Update spreadsheet name
   async updateSpreadsheetName(spreadsheetId, userId, newName) {
+    // First, get the Google Sheet ID before updating the record
+    const { data: spreadsheet, error: fetchError } = await supabase
+      .from('spreadsheets')
+      .select('google_sheet_id')
+      .eq('id', spreadsheetId)
+      .eq('user_id', userId)
+      .single()
+
+    if (fetchError) {
+      console.warn('Could not fetch spreadsheet for Google Drive rename:', fetchError)
+    }
+
+    // Update the database record
     const { data, error } = await supabase
       .from('spreadsheets')
       .update({
@@ -97,11 +110,75 @@ export const spreadsheetService = {
       .single()
 
     if (error) throw error
+
+    // Update the Google Drive file name if it exists
+    if (spreadsheet?.google_sheet_id) {
+      try {
+        console.log('📝 Renaming Google Sheet file:', spreadsheet.google_sheet_id, 'to:', newName)
+        const response = await fetch('http://localhost:3001/api/sheets/rename', {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            spreadsheetId: spreadsheet.google_sheet_id,
+            newName: newName
+          })
+        })
+
+        if (response.ok) {
+          const result = await response.json()
+          if (result.success) {
+            console.log('✅ Google Sheet file renamed successfully')
+          } else {
+            console.warn('⚠️ Google Sheet rename failed:', result.error)
+          }
+        } else {
+          console.warn('⚠️ Failed to rename Google Sheet:', response.status)
+        }
+      } catch (renameError) {
+        console.warn('⚠️ Error renaming Google Sheet:', renameError)
+        // Don't throw error - database update succeeded
+      }
+    }
+
     return data
   },
 
   // Delete spreadsheet
   async deleteSpreadsheet(spreadsheetId, userId) {
+    console.log('🗑️ Starting complete deletion of spreadsheet:', spreadsheetId)
+    
+    // First, get the Google Sheet ID before deleting the record
+    const { data: spreadsheet, error: fetchError } = await supabase
+      .from('spreadsheets')
+      .select('google_sheet_id')
+      .eq('id', spreadsheetId)
+      .eq('user_id', userId)
+      .single()
+
+    if (fetchError) {
+      console.warn('Could not fetch spreadsheet for Google Sheet deletion:', fetchError)
+    }
+
+    // First, delete all associated spreadsheet_cells data
+    try {
+      console.log('🗑️ Deleting spreadsheet cells for spreadsheet:', spreadsheetId)
+      const { error: cellsError } = await supabase
+        .from('spreadsheet_cells')
+        .delete()
+        .eq('spreadsheet_id', spreadsheetId)
+
+      if (cellsError) {
+        console.warn('⚠️ Error deleting spreadsheet cells:', cellsError)
+      } else {
+        console.log('✅ Spreadsheet cells deleted successfully')
+      }
+    } catch (cellsDeleteError) {
+      console.warn('⚠️ Error deleting spreadsheet cells:', cellsDeleteError)
+    }
+
+    // Delete the database record
     const { error } = await supabase
       .from('spreadsheets')
       .delete()
@@ -109,6 +186,38 @@ export const spreadsheetService = {
       .eq('user_id', userId)
 
     if (error) throw error
+
+    // Delete the Google Sheet file if it exists
+    if (spreadsheet?.google_sheet_id) {
+      try {
+        console.log('🗑️ Deleting Google Sheet:', spreadsheet.google_sheet_id)
+        const response = await fetch('http://localhost:3001/api/sheets/delete', {
+          method: 'DELETE',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            spreadsheetId: spreadsheet.google_sheet_id
+          })
+        })
+
+        if (response.ok) {
+          const result = await response.json()
+          if (result.success) {
+            console.log('✅ Google Sheet deleted successfully')
+          } else {
+            console.warn('⚠️ Google Sheet deletion failed:', result.error)
+          }
+        } else {
+          console.warn('⚠️ Failed to delete Google Sheet:', response.status)
+        }
+      } catch (deleteError) {
+        console.warn('⚠️ Error deleting Google Sheet:', deleteError)
+        // Don't throw error - database deletion succeeded
+      }
+    }
+    
+    console.log('✅ Complete deletion finished for spreadsheet:', spreadsheetId)
   },
 
   // Subscribe to real-time updates for a spreadsheet
@@ -236,18 +345,111 @@ export const userService = {
   }
 }
 
+// Helper function to evaluate formulas (comprehensive version)
+const evaluateFormula = (formula, spreadsheetData) => {
+  try {
+    // Remove the = sign
+    const expression = formula.substring(1)
+    
+    // Convert cell references to values
+    const evaluateExpression = (expr) => {
+      // Replace cell references like A1, B2, etc. with their values
+      return expr.replace(/([A-Z]+)(\d+)/g, (match, col, row) => {
+        const colIndex = col.split('').reduce((acc, char) => acc * 26 + (char.charCodeAt(0) - 64), 0) - 1
+        const rowIndex = parseInt(row) - 1
+        
+        const cell = spreadsheetData[rowIndex]?.[colIndex]
+        if (cell && cell.value !== undefined && cell.value !== null) {
+          // If it's a formula, evaluate it recursively
+          if (String(cell.value).startsWith('=')) {
+            return evaluateFormula(cell.value, spreadsheetData)
+          }
+          // Return the numeric value
+          const numValue = parseFloat(cell.value)
+          return isNaN(numValue) ? 0 : numValue
+        }
+        return 0
+      })
+    }
+    
+    // Handle SUM function
+    if (expression.toUpperCase().includes('SUM')) {
+      const rangeMatch = expression.match(/SUM\(([A-Z]+\d+):([A-Z]+\d+)\)/i)
+      if (rangeMatch) {
+        const [, startCell, endCell] = rangeMatch
+        
+        // Convert cell references to indices
+        const startCol = startCell.match(/([A-Z]+)/)[1]
+        const startRow = parseInt(startCell.match(/(\d+)/)[1])
+        const endCol = endCell.match(/([A-Z]+)/)[1]
+        const endRow = parseInt(endCell.match(/(\d+)/)[1])
+        
+        const startColIndex = startCol.split('').reduce((acc, char) => acc * 26 + (char.charCodeAt(0) - 64), 0) - 1
+        const endColIndex = endCol.split('').reduce((acc, char) => acc * 26 + (char.charCodeAt(0) - 64), 0) - 1
+        
+        let sum = 0
+        for (let r = startRow - 1; r < endRow; r++) {
+          for (let c = startColIndex; c <= endColIndex; c++) {
+            const cell = spreadsheetData[r]?.[c]
+            if (cell && cell.value !== undefined && cell.value !== null) {
+              if (String(cell.value).startsWith('=')) {
+                // Recursively evaluate formula cells
+                sum += evaluateFormula(cell.value, spreadsheetData)
+              } else {
+                const numValue = parseFloat(cell.value)
+                if (!isNaN(numValue)) {
+                  sum += numValue
+                }
+              }
+            }
+          }
+        }
+        return sum
+      }
+    }
+    
+    // Handle basic arithmetic operations
+    const evaluatedExpr = evaluateExpression(expression)
+    
+    // Safe evaluation of the expression
+    try {
+      const result = Function('"use strict"; return (' + evaluatedExpr + ')')()
+      return isNaN(result) ? 0 : result
+    } catch (evalError) {
+      console.warn('Could not evaluate expression:', evaluatedExpr, evalError)
+      return 0
+    }
+    
+  } catch (error) {
+    console.error('Error evaluating formula:', error)
+    return 0
+  }
+}
+
 // Cell service for optimized spreadsheet cell storage
 export const cellService = {
   // Save a single cell
-  async saveCell(spreadsheetId, rowIndex, colIndex, cellData) {
+  async saveCell(spreadsheetId, rowIndex, colIndex, cellData, spreadsheetData = []) {
     const isFormula = cellData.value && String(cellData.value).startsWith('=')
+    
+    let displayValue = cellData.value
+    
+    // If it's a formula, calculate the result
+    if (isFormula) {
+      try {
+        displayValue = evaluateFormula(cellData.value, spreadsheetData)
+      } catch (error) {
+        console.error('Error evaluating formula:', error)
+        displayValue = '#ERROR'
+      }
+    }
     
     const cellRecord = {
       spreadsheet_id: spreadsheetId,
       row_index: rowIndex,
       col_index: colIndex,
       formula: isFormula ? cellData.value : null,
-      display_value: cellData.value, // Will be calculated if formula
+      display_value: displayValue,
       cell_type: isFormula ? 'formula' : 'text',
       formatting: cellData.formatting || null,
       decimal_places: cellData.decimalPlaces || null,
@@ -257,15 +459,18 @@ export const cellService = {
       is_date: cellData.isDate || false
     }
     
-    // If it's a formula, we'll calculate the result on the client side
-    // For now, store the formula and let the client handle evaluation
-    if (isFormula) {
-      cellRecord.display_value = cellData.value // Store formula as display_value for now
-    } else {
-      // For non-formula cells, try to parse as number
+    // For non-formula cells, determine the cell type
+    if (!isFormula) {
+      // For non-formula cells, determine the cell type
+      // If it's currency, set as number type
+      if (cellData.isCurrency) {
+        cellRecord.cell_type = 'number'
+      } else {
+        // Try to parse as number for regular numeric values
       const numValue = parseFloat(cellData.value)
       if (!isNaN(numValue)) {
         cellRecord.cell_type = 'number'
+        }
       }
     }
     
@@ -281,20 +486,40 @@ export const cellService = {
   
   // Save multiple cells in batch
   async saveCells(spreadsheetId, cellsData) {
+    // First, get all existing cells for this spreadsheet to track deletions
+    const existingCells = await this.loadSpreadsheetCells(spreadsheetId)
+    const existingCellKeys = new Set(existingCells.map(cell => `${cell.row_index}-${cell.col_index}`))
+    
     const cellRecords = []
+    const cellsToDelete = []
     
     for (const [rowIndex, row] of cellsData.entries()) {
       for (const [colIndex, cell] of row.entries()) {
-        // Only save cells that have actual content (not empty strings)
-        if (cell && cell.value !== undefined && cell.value !== '' && cell.value !== null) {
+        const cellKey = `${rowIndex}-${colIndex}`
+        const hasContent = cell && cell.value !== undefined && cell.value !== '' && cell.value !== null
+        
+        if (hasContent) {
+          // Cell has content - save it
           const isFormula = cell.value && String(cell.value).startsWith('=')
+          
+          let displayValue = cell.value
+          
+          // If it's a formula, calculate the result
+          if (isFormula) {
+            try {
+              displayValue = evaluateFormula(cell.value, cellsData)
+            } catch (error) {
+              console.error('Error evaluating formula in batch:', error)
+              displayValue = '#ERROR'
+            }
+          }
           
           const cellRecord = {
             spreadsheet_id: spreadsheetId,
             row_index: rowIndex,
             col_index: colIndex,
             formula: isFormula ? cell.value : null,
-            display_value: cell.value,
+            display_value: displayValue,
             cell_type: isFormula ? 'formula' : 'text',
             formatting: cell.formatting || null,
             decimal_places: cell.decimalPlaces || null,
@@ -304,23 +529,54 @@ export const cellService = {
             is_date: cell.isDate || false
           }
           
-          // For non-formula cells, try to parse as number
+          // For non-formula cells, determine the cell type
           if (!isFormula) {
+            // If it's currency, set as number type
+            if (cell.isCurrency) {
+              cellRecord.cell_type = 'number'
+            } else {
+              // Try to parse as number for regular numeric values
             const numValue = parseFloat(cell.value)
             if (!isNaN(numValue)) {
               cellRecord.cell_type = 'number'
+              }
             }
           }
           
           cellRecords.push(cellRecord)
+        } else if (existingCellKeys.has(cellKey)) {
+          // Cell is now empty but existed before - mark for deletion
+          cellsToDelete.push({ row_index: rowIndex, col_index: colIndex })
         }
       }
     }
     
-    if (cellRecords.length === 0) return []
     
-    console.log('cellService.saveCells: Attempting to save', cellRecords.length, 'cells')
-    console.log('cellService.saveCells: First cell record:', cellRecords[0])
+    // Delete cells that are now empty
+    if (cellsToDelete.length > 0) {
+      try {
+        for (const cellToDelete of cellsToDelete) {
+          const { error } = await supabase
+            .from('spreadsheet_cells')
+            .delete()
+            .eq('spreadsheet_id', spreadsheetId)
+            .eq('row_index', cellToDelete.row_index)
+            .eq('col_index', cellToDelete.col_index)
+          
+          if (error) {
+            console.warn('cellService.saveCells: Error deleting cell:', cellToDelete, error)
+          }
+        }
+      } catch (error) {
+        console.error('cellService.saveCells: Failed to delete cells:', error)
+      }
+    }
+    
+    // Save cells with content
+    if (cellRecords.length === 0) {
+      return []
+    }
+    
     
     // Use upsert to handle duplicate key constraints properly
     try {
@@ -383,7 +639,6 @@ export const cellService = {
       throw error
     }
     
-    console.log(`Loaded ${data?.length || 0} cells for spreadsheet ${spreadsheetId}`)
     return data || []
   },
   
@@ -399,29 +654,22 @@ export const cellService = {
   
   // Convert database cells to spreadsheet format
   convertCellsToSpreadsheetFormat(cells) {
-    console.log('🔄 convertCellsToSpreadsheetFormat called with', cells?.length || 0, 'cells')
     
     // Always create a 100x20 grid, regardless of how many cells are in the database
     const spreadsheetData = this.createEmptyGrid(100, 20)
     
     if (!cells || cells.length === 0) {
-      console.log('📝 No cells found, returning empty grid')
       return spreadsheetData
     }
     
     // Fill in the actual cell data
     cells.forEach(cell => {
-      console.log('📝 Processing cell:', { 
-        row: cell.row_index, 
-        col: cell.col_index, 
-        value: cell.display_value, 
-        formula: cell.formula 
-      })
-      // For formulas, use the formula as the value, for others use display_value
+      // For formulas, use the formula as the value (for editing), but store display_value for computed result
       const cellValue = cell.formula || cell.display_value || ''
       
       const cellData = {
         value: cellValue,
+        displayValue: cell.display_value, // Include the pre-calculated display value
         cellType: cell.cell_type,
         formatting: cell.formatting,
         decimalPlaces: cell.decimal_places,
@@ -447,18 +695,10 @@ export const cellService = {
       
       // Only fill in the cell if it's within our 100x20 grid bounds
       if (cell.row_index < 100 && cell.col_index < 20) {
-        console.log('✅ Placing cell in grid:', { 
-          row: cell.row_index, 
-          col: cell.col_index, 
-          value: cellData.value 
-        })
         spreadsheetData[cell.row_index][cell.col_index] = cellData
-      } else {
-        console.log('❌ Cell outside grid bounds:', { 
-          row: cell.row_index, 
-          col: cell.col_index 
-        })
-      }
+  } else {
+    // no-op
+  }
     })
     
     console.log('📊 Final grid created with', spreadsheetData.length, 'rows')

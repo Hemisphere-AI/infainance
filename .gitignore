@@ -1,7 +1,9 @@
 node_modules
+#keys
+zenith-473020-e866f7cc8bb7.json
 .env
 dist/
-src/assets/Map2.xlsx
+
 
 #Ignore cursor AI rules
 .cursor/rules/codacy.mdc

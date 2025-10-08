@@ -1,11 +1,10 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react'
 import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from 'react-router-dom'
-import { FileSpreadsheet, Download, Calculator } from 'lucide-react'
-import * as XLSX from 'xlsx'
+// import { FileSpreadsheet } from 'lucide-react'
 import PropTypes from 'prop-types'
-import ReactSpreadsheet from './Spreadsheet'
 import ChatInterface from './components/ChatInterface'
 import Sidebar from './components/Sidebar'
+import GoogleSheetsEmbed from './components/GoogleSheetsEmbed'
 import { SupabaseAuthProvider, useSupabaseAuth } from './contexts/SupabaseAuthContext'
 import { useSpreadsheet, useUserSpreadsheets } from './hooks/useSpreadsheet'
 import LoginPage from './components/LoginPage'
@@ -13,6 +12,7 @@ import LandingPage from './components/LandingPage'
 import TermsOfService from './components/TermsOfService'
 import PrivacyPolicy from './components/PrivacyPolicy'
 import UserProfile from './components/UserProfile'
+import GoogleOAuthCallback from './components/GoogleOAuthCallback'
 import { LLMService } from './services/llmService'
 
 // Editable spreadsheet name component
@@ -89,18 +89,7 @@ EditableSpreadsheetName.propTypes = {
 function MainApp() {
   // Let Supabase handle OAuth hash fragments naturally
   useEffect(() => {
-    console.log('🔍 MainApp: Current URL:', window.location.href)
-    console.log('🔍 MainApp: Hash:', window.location.hash)
-    console.log('🔍 MainApp: Search:', window.location.search)
-    console.log('🔍 MainApp: Version 2.0 - NO hash cleanup!')
-    console.log('🚨 MainApp: If you see this message, the new code is running!')
-    
     // Don't clean up hash fragments - let Supabase handle OAuth tokens
-    if (window.location.hash && window.location.pathname === '/app') {
-      console.log('🔍 MainApp: OAuth hash fragment detected, letting Supabase process it')
-      console.log('🔍 MainApp: NOT cleaning up hash - letting Supabase handle it')
-      console.log('🚨 MainApp: Hash fragment will NOT be cleaned up!')
-    }
   }, [])
 
   return (
@@ -111,6 +100,7 @@ function MainApp() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/terms" element={<TermsOfService />} />
         <Route path="/privacy" element={<PrivacyPolicy />} />
+        <Route path="/oauth2/callback" element={<GoogleOAuthCallback />} />
         <Route 
           path="/app" 
             element={<SpreadsheetApp />} 
@@ -128,18 +118,11 @@ function SpreadsheetApp() {
   
   // Debug authentication state
   useEffect(() => {
-    console.log('🔍 SpreadsheetApp: Authentication state:', { 
-      user: !!user, 
-      authLoading, 
-      userId: user?.id,
-      email: user?.email 
-    })
   }, [user, authLoading])
   
   // Redirect to login if not authenticated
   useEffect(() => {
     if (!authLoading && !user) {
-      console.log('🔄 SpreadsheetApp: Redirecting to login - no user and not loading')
       navigate('/login')
     }
   }, [user, authLoading, navigate])
@@ -165,10 +148,19 @@ function SpreadsheetApp() {
 function MainSpreadsheetApp({ user }) {
   const [currentSpreadsheetId, setCurrentSpreadsheetId] = useState(null)
   const [spreadsheetData, setSpreadsheetData] = useState([])
-  const [formulaDisplayMode, setFormulaDisplayMode] = useState(0)
-  const [selectedCells, setSelectedCells] = useState([])
   const [isChatLoading, setIsChatLoading] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [chatCollapsed, setChatCollapsed] = useState(false)
+  const [saveStatus, setSaveStatus] = useState({ type: null, message: null }) // 'saving', 'success', 'error'
+  const [googleSheetsConfig, setGoogleSheetsConfig] = useState({
+    sheetUrl: '',
+    sheetId: '',
+    isConfigured: false,
+    isPublic: false,
+    refreshInterval: 30000,
+    autoRefresh: true
+  })
+  const [googleSheetsVisible, setGoogleSheetsVisible] = useState(true)
   const toolCallHandlerRef = useRef(null)
   const addBotMessageRef = useRef(null)
   const llmServiceRef = useRef(null)
@@ -182,6 +174,7 @@ function MainSpreadsheetApp({ user }) {
     deleteSpreadsheet
   } = useUserSpreadsheets(user.id)
 
+
   // Load current spreadsheet
   const { 
     spreadsheet, 
@@ -193,7 +186,6 @@ function MainSpreadsheetApp({ user }) {
 
   // Debug current spreadsheet ID changes
   useEffect(() => {
-    console.log('Current spreadsheet ID changed to:', currentSpreadsheetId)
   }, [currentSpreadsheetId])
 
   // Initialize with first spreadsheet or create new one
@@ -210,23 +202,24 @@ function MainSpreadsheetApp({ user }) {
     }
   }, [spreadsheets, currentSpreadsheetId, spreadsheetsLoading, createSpreadsheet, user.id])
 
+  // Auto-show Google Sheets integration when user has a spreadsheet
+  useEffect(() => {
+    if (currentSpreadsheetId && user?.id) {
+      setGoogleSheetsVisible(true)
+    }
+  }, [currentSpreadsheetId, user?.id])
+
   // Load initial spreadsheet data (only when spreadsheet ID changes, not when user edits)
   useEffect(() => {
-    console.log('🔄 useEffect triggered - spreadsheet ID:', spreadsheet?.id, 'current ID:', currentSpreadsheetId)
-    console.log('🔄 Current spreadsheetData length:', spreadsheetData.length)
     if (spreadsheet?.data && Array.isArray(spreadsheet.data)) {
-      console.log('📥 Loading initial spreadsheet data:', spreadsheet.data.length, 'rows')
       setSpreadsheetData(spreadsheet.data)
     } else if (spreadsheet && (!spreadsheet.data || !Array.isArray(spreadsheet.data))) {
-      console.log('📥 Spreadsheet has no data, setting empty array')
       setSpreadsheetData([])
     }
   }, [spreadsheet?.id]) // Only trigger when spreadsheet ID changes, not on data changes
 
   // Handle spreadsheet data changes
   const handleSpreadsheetChange = useCallback(async (newData) => {
-    console.log('📊 handleSpreadsheetChange called with data:', newData.length, 'rows')
-    console.log('📊 Current spreadsheetData length:', spreadsheetData.length)
     setSpreadsheetData(newData)
     
     // Update LLM service with new data
@@ -237,14 +230,23 @@ function MainSpreadsheetApp({ user }) {
     // Debounce saves to avoid too many database calls
     if (currentSpreadsheetId) {
       try {
-        console.log('💾 Calling saveSpreadsheet...')
+        setSaveStatus({ type: 'saving', message: 'Saving changes...' })
         await saveSpreadsheet(newData)
-        console.log('✅ saveSpreadsheet completed')
+        setSaveStatus({ type: 'success', message: 'Changes saved successfully' })
+        
+        // Clear success message after 2 seconds
+        setTimeout(() => {
+          setSaveStatus({ type: null, message: null })
+        }, 2000)
       } catch (error) {
         console.error('❌ Error saving spreadsheet:', error)
+        setSaveStatus({ type: 'error', message: 'Failed to save changes. Please try again.' })
+        
+        // Clear error message after 5 seconds
+        setTimeout(() => {
+          setSaveStatus({ type: null, message: null })
+        }, 5000)
       }
-    } else {
-      console.log('⚠️ No currentSpreadsheetId, skipping save')
     }
   }, [currentSpreadsheetId, saveSpreadsheet])
 
@@ -255,10 +257,11 @@ function MainSpreadsheetApp({ user }) {
         spreadsheetData,
         handleSpreadsheetChange,
         toolCallHandlerRef.current,
-        user
+        user,
+        googleSheetsConfig
       )
     }
-  }, [user, spreadsheetData, handleSpreadsheetChange])
+  }, [user, spreadsheetData, handleSpreadsheetChange, googleSheetsConfig])
 
   // Handle tool call registration from ChatInterface
   const handleToolCallRegistration = useCallback((handler) => {
@@ -287,7 +290,6 @@ function MainSpreadsheetApp({ user }) {
         setTimeout(async () => {
           try {
             const updatedQuotaStatus = await llmServiceRef.current.getTokenQuotaStatus();
-            console.log('Updating token quota status after completion:', updatedQuotaStatus);
             // Dispatch a custom event to notify UserProfile component
             window.dispatchEvent(new CustomEvent('tokenQuotaUpdated', { 
               detail: updatedQuotaStatus 
@@ -318,9 +320,14 @@ function MainSpreadsheetApp({ user }) {
   // Create new spreadsheet
   const handleCreateSpreadsheet = useCallback(async () => {
     try {
+      // Create local spreadsheet first
       const newSpreadsheet = await createSpreadsheet('Untitled Spreadsheet')
       setCurrentSpreadsheetId(newSpreadsheet.id)
       setSpreadsheetData([])
+      
+      // Note: Google Sheet creation is now handled automatically by GoogleSheetsEmbed
+      // when the component detects a new spreadsheet without a Google Sheet
+      console.log('✅ Local spreadsheet created, Google Sheet will be auto-created')
     } catch (error) {
       console.error('Error creating spreadsheet:', error)
     }
@@ -328,7 +335,6 @@ function MainSpreadsheetApp({ user }) {
 
   // Handle spreadsheet selection
   const handleSpreadsheetSelect = useCallback((spreadsheetId) => {
-    console.log('Selecting spreadsheet:', spreadsheetId)
     if (spreadsheetId !== currentSpreadsheetId) {
       setCurrentSpreadsheetId(spreadsheetId)
       // Let the useEffect handle data loading when spreadsheet ID changes
@@ -349,9 +355,22 @@ function MainSpreadsheetApp({ user }) {
     }
   }, [renameSpreadsheet, updateName, currentSpreadsheetId])
 
+  // Handle Google Sheets config change
+  const handleGoogleSheetsConfigChange = useCallback((config) => {
+    setGoogleSheetsConfig(config)
+    // Update LLM service with new Google Sheets config
+    if (llmServiceRef.current) {
+      llmServiceRef.current.updateGoogleSheetsConfig(config)
+    }
+  }, [])
+
   // Handle sidebar toggle
   const handleSidebarToggle = useCallback(() => {
     setSidebarOpen(prev => !prev)
+  }, [])
+
+  const handleChatToggle = useCallback(() => {
+    setChatCollapsed(prev => !prev)
   }, [])
 
   // Handle spreadsheet delete
@@ -374,50 +393,6 @@ function MainSpreadsheetApp({ user }) {
     }
   }, [deleteSpreadsheet, currentSpreadsheetId, spreadsheets, createSpreadsheet])
 
-  // Download as spreadsheet
-  const downloadAsSpreadsheet = useCallback(() => {
-    if (!spreadsheetData.length) return
-    
-    // Create a new workbook
-    const wb = {
-      SheetNames: ['Sheet1'],
-      Sheets: {
-        'Sheet1': {}
-      }
-    }
-
-    // Convert data to worksheet format
-    const ws = {}
-    const range = { s: { c: 0, r: 0 }, e: { c: 0, r: 0 } }
-
-    spreadsheetData.forEach((row, rowIndex) => {
-      row.forEach((cell, colIndex) => {
-        if (cell && cell.value !== undefined && cell.value !== '') {
-          const cellAddress = String.fromCharCode(65 + colIndex) + (rowIndex + 1)
-          ws[cellAddress] = { v: cell.value }
-          
-          // Update range
-          if (rowIndex > range.e.r) range.e.r = rowIndex
-          if (colIndex > range.e.c) range.e.c = colIndex
-        }
-      })
-    })
-
-    ws['!ref'] = `${String.fromCharCode(65 + range.s.c)}${range.s.r + 1}:${String.fromCharCode(65 + range.e.c)}${range.e.r + 1}`
-    wb.Sheets['Sheet1'] = ws
-
-    // Convert to Excel file
-    const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
-    const blob = new Blob([wbout], { type: 'application/octet-stream' })
-    const url = URL.createObjectURL(blob)
-    
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${spreadsheet?.name || 'spreadsheet'}.xlsx`
-    a.click()
-    
-    URL.revokeObjectURL(url)
-  }, [spreadsheetData, spreadsheet])
 
 
   if (spreadsheetsLoading) {
@@ -482,83 +457,32 @@ function MainSpreadsheetApp({ user }) {
 
         {/* Content area */}
         <div className="flex-1 flex flex-col lg:flex-row px-4 py-4 min-h-0 overflow-hidden">
-          {/* Spreadsheet area */}
+          {/* Main content area */}
           <div className="flex-1 flex flex-col min-h-0 lg:mr-4 mb-4 lg:mb-0 min-w-0">
-            <div className="flex-1 bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden flex flex-col min-h-0 max-w-full">
-              <div className="p-4 border-b border-gray-200 bg-gray-50 flex-shrink-0">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-2">
-                    <FileSpreadsheet className="w-4 h-4 text-green-600" />
-                    <EditableSpreadsheetName 
-                      name={spreadsheet?.name || 'Untitled Spreadsheet'}
-                      onRename={(newName) => handleSpreadsheetRename(currentSpreadsheetId, newName)}
-                    />
-                    {saving && (
-                      <span className="text-xs text-gray-500">Saving...</span>
-                    )}
-                  </div>
-                  
-                  {/* Formatting buttons - positioned to the right of spreadsheet title */}
-                  <div className="flex items-center space-x-2">
-                    {/* Formula display mode button */}
-                    <button
-                      onClick={() => setFormulaDisplayMode((prev) => (prev + 1) % 3)}
-                      className={`px-2 py-1 text-xs rounded border transition-colors flex items-center space-x-1 ${
-                        formulaDisplayMode === 0
-                          ? 'bg-gray-100 border-gray-300 text-gray-700 hover:bg-gray-200'
-                          : formulaDisplayMode === 1
-                          ? 'bg-green-100 border-green-300 text-green-700'
-                          : 'bg-blue-100 border-blue-300 text-blue-700'
-                      }`}
-                      title={
-                        formulaDisplayMode === 0
-                          ? 'Click to highlight formula cells'
-                          : formulaDisplayMode === 1
-                          ? 'Click to show all formulas'
-                          : 'Click to reset to normal view'
-                      }
-                    >
-                      <Calculator className="w-3 h-3" />
-                      <span>fx</span>
-                    </button>
-                    
-                    {/* Download button */}
-                    <button
-                      onClick={downloadAsSpreadsheet}
-                      className="px-2 py-1 text-xs rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-200 transition-colors flex items-center space-x-1"
-                      title="Download spreadsheet file"
-                    >
-                      <Download className="w-3 h-3" />
-                      <span>Export</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-                
-              <div className="flex-1 overflow-hidden min-h-0">
-                {spreadsheetLoading ? (
-                  <div className="p-8 text-center text-gray-500">
-                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 mx-auto mb-4"></div>
-                    <p>Loading spreadsheet...</p>
-                  </div>
-                ) : (
-                  <ReactSpreadsheet 
-                    data={spreadsheetData}
-                    allSheetsData={{}}
-                    currentSheetName="Sheet1"
-                    onDataChange={handleSpreadsheetChange}
-                    formulaDisplayMode={formulaDisplayMode}
-                    selectedCells={selectedCells}
-                    onSelectedCellsChange={setSelectedCells}
-                    highlightedBlock={null}
-                  />
-                )}
-              </div>
-            </div>
+            {/* Google Sheets Integration - Now integrated into the main flow */}
+            {googleSheetsVisible && (
+              <GoogleSheetsEmbed
+                onSheetDataUpdate={(data, headers) => {
+                  // Update the spreadsheet data with Google Sheets data
+                  setSpreadsheetData(data)
+                  console.log('Google Sheets data updated:', { data, headers })
+                }}
+                onConfigChange={handleGoogleSheetsConfigChange}
+                isVisible={googleSheetsVisible}
+                onToggleVisibility={() => setGoogleSheetsVisible(!googleSheetsVisible)}
+                currentSpreadsheetId={currentSpreadsheetId}
+                userId={user?.id}
+                userEmail={user?.email}
+                currentSpreadsheetName={spreadsheet?.name}
+                onSpreadsheetRename={handleSpreadsheetRename}
+              />
+            )}
+
+
           </div>
 
           {/* Chat interface */}
-          <div className="w-full lg:w-80 flex-shrink-0">
+          <div className="flex-shrink-0 w-full lg:w-auto">
             <ChatInterface 
               onSendMessage={handleSendMessage}
               isLoading={isChatLoading}
@@ -566,6 +490,8 @@ function MainSpreadsheetApp({ user }) {
               onCancel={handleCancel}
               llmService={llmServiceRef.current}
               onAddBotMessage={handleBotMessageRegistration}
+              isCollapsed={chatCollapsed}
+              onToggleCollapse={handleChatToggle}
             />
           </div>
         </div>

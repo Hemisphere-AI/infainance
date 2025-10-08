@@ -185,7 +185,65 @@ GRANT EXECUTE ON FUNCTION get_spreadsheet_data(UUID) TO authenticated;
 COMMENT ON TABLE spreadsheet_cells IS 'Optimized cell storage: raw_value deprecated (use display_value), number_format renamed to formatting';
 COMMENT ON TABLE spreadsheets IS 'Spreadsheet metadata only. Cell data is stored in spreadsheet_cells table for optimal performance.';
 
--- Step 15: Verify the changes
+-- ============================================================================
+-- PART 8: Add graphs table
+-- ============================================================================
+
+-- Step 16: Create graphs table
+CREATE TABLE IF NOT EXISTS "public"."graphs" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "spreadsheet_id" "uuid" NOT NULL,
+    "user_id" "uuid" NOT NULL,
+    "title" "text" NOT NULL,
+    "label_range" "text" NOT NULL,
+    "value_range" "text" NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"(),
+    "updated_at" timestamp with time zone DEFAULT "now"()
+);
+
+-- Step 17: Add primary key
+ALTER TABLE ONLY "public"."graphs"
+    ADD CONSTRAINT "graphs_pkey" PRIMARY KEY ("id");
+
+-- Step 18: Add foreign key constraints
+ALTER TABLE ONLY "public"."graphs"
+    ADD CONSTRAINT "graphs_spreadsheet_id_fkey" FOREIGN KEY ("spreadsheet_id") REFERENCES "public"."spreadsheets"("id") ON DELETE CASCADE;
+
+ALTER TABLE ONLY "public"."graphs"
+    ADD CONSTRAINT "graphs_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."user_profiles"("id") ON DELETE CASCADE;
+
+-- Step 19: Add indexes for better performance
+CREATE INDEX "idx_graphs_spreadsheet_id" ON "public"."graphs" USING "btree" ("spreadsheet_id");
+CREATE INDEX "idx_graphs_user_id" ON "public"."graphs" USING "btree" ("user_id");
+
+-- Step 20: Add update trigger
+CREATE OR REPLACE TRIGGER "update_graphs_updated_at" BEFORE UPDATE ON "public"."graphs" FOR EACH ROW EXECUTE FUNCTION "public"."update_updated_at_column"();
+
+-- Step 21: Add RLS policies
+ALTER TABLE "public"."graphs" ENABLE ROW LEVEL SECURITY;
+
+-- Policy: Users can view their own graphs
+CREATE POLICY "Users can view own graphs" ON "public"."graphs" FOR SELECT USING (("user_id" = "auth"."uid"()));
+
+-- Policy: Users can insert their own graphs
+CREATE POLICY "Users can insert own graphs" ON "public"."graphs" FOR INSERT WITH CHECK (("user_id" = "auth"."uid"()));
+
+-- Policy: Users can update their own graphs
+CREATE POLICY "Users can update own graphs" ON "public"."graphs" FOR UPDATE USING (("user_id" = "auth"."uid"()));
+
+-- Policy: Users can delete their own graphs
+CREATE POLICY "Users can delete own graphs" ON "public"."graphs" FOR DELETE USING (("user_id" = "auth"."uid"()));
+
+-- Step 22: Add comments
+COMMENT ON TABLE "public"."graphs" IS 'Stores graph configurations for spreadsheets';
+COMMENT ON COLUMN "public"."graphs"."title" IS 'Graph title (cell reference or text)';
+COMMENT ON COLUMN "public"."graphs"."label_range" IS 'X-axis range for labels (e.g., C1:H1)';
+COMMENT ON COLUMN "public"."graphs"."value_range" IS 'Y-axis range for values (e.g., C4:H4)';
+
+-- Step 23: Grant permissions
+GRANT SELECT, INSERT, UPDATE, DELETE ON "public"."graphs" TO authenticated;
+
+-- Step 24: Verify the changes
 SELECT 
     'Migration completed successfully' as status,
     COUNT(*) as total_cells

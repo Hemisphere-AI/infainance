@@ -1,8 +1,8 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import PropTypes from 'prop-types';
-import { Send, Bot, User, Loader2, Square, ChevronDown, ChevronUp, Plus, X } from 'lucide-react';
+import { Send, Bot, User, Loader2, Square, ChevronDown, ChevronUp, ChevronRight, ChevronLeft, Plus, X } from 'lucide-react';
 
-const ChatInterface = ({ onSendMessage, isLoading = false, onToolCall = null, onCancel = null, onAddBotMessage = null }) => {
+const ChatInterface = ({ onSendMessage, isLoading = false, onToolCall = null, onCancel = null, onAddBotMessage = null, isCollapsed = false, onToggleCollapse = null }) => {
   const [message, setMessage] = useState('');
   
   // Chat tabs management
@@ -338,49 +338,80 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onToolCall = null, on
   };
 
   return (
-    <div className="flex flex-col h-full">
-
-      {/* Chat Tabs */}
-      <div className="px-4 pt-2 pb-0">
-        <div className="flex items-end space-x-0.5">
-          {Object.values(chats).map((chat) => (
-            <div
-              key={chat.id}
-              className={`flex items-center space-x-2 px-3 py-2 rounded-t-lg border border-gray-200 transition-colors relative ${
-                activeChatId === chat.id
-                  ? 'bg-white text-gray-800 border-b-0 -mb-px z-10'
-                  : 'bg-gray-200 text-gray-600 hover:bg-gray-300 border-b border-gray-200'
-              }`}
-            >
-              <button
-                onClick={() => switchToChat(chat.id)}
-                className="text-sm font-medium"
-              >
-                {chat.name}
-              </button>
-              {Object.keys(chats).length > 1 && (
-                <button
-                  onClick={() => closeChat(chat.id)}
-                  className="ml-1 p-1 hover:bg-gray-300 rounded-full transition-colors"
-                  title="Close chat"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              )}
-            </div>
-          ))}
+    <div className="flex h-full">
+      {/* Collapsed Chat (10px) */}
+      <div className={`w-2.5 flex flex-col items-center py-0.5 transition-all duration-300 ${
+        isCollapsed ? 'flex' : 'hidden'
+      }`}>
+        {onToggleCollapse && (
           <button
-            onClick={addNewChat}
-            className="flex items-center px-3 py-2 rounded-t-lg bg-gray-200 hover:bg-gray-300 text-gray-600 transition-colors border border-gray-200 border-b border-gray-200"
-            title="Add new chat"
+            onClick={onToggleCollapse}
+            className="px-1 py-2 hover:bg-gray-100 rounded-lg transition-colors"
+            title="Open chat"
           >
-            <Plus className="w-4 h-4" />
+            <ChevronRight className="w-4 h-4" />
           </button>
-        </div>
+        )}
       </div>
 
-      {/* White Content Area with Border */}
-      <div className="flex-1 bg-white border border-gray-200 rounded-lg overflow-hidden flex flex-col">
+      {/* Expanded Chat */}
+      <div className={`w-full lg:w-80 flex flex-col transition-all duration-300 ${
+        isCollapsed ? 'hidden' : 'flex'
+      }`}>
+        {/* Chat Tabs */}
+        <div className="px-4 pt-2 pb-0">
+          <div className="flex items-end justify-between">
+            <div className="flex items-end space-x-0.5">
+              {Object.values(chats).map((chat) => (
+                <div
+                  key={chat.id}
+                  className={`flex items-center space-x-2 px-3 py-2 rounded-t-lg border border-gray-200 transition-colors relative ${
+                    activeChatId === chat.id
+                      ? 'bg-white text-gray-800 border-b-0 -mb-px z-10'
+                      : 'bg-gray-200 text-gray-600 hover:bg-gray-300 border-b border-gray-200'
+                  }`}
+                >
+                  <button
+                    onClick={() => switchToChat(chat.id)}
+                    className="text-sm font-medium"
+                  >
+                    {chat.name}
+                  </button>
+                  {Object.keys(chats).length > 1 && (
+                    <button
+                      onClick={() => closeChat(chat.id)}
+                      className="ml-1 p-1 hover:bg-gray-300 rounded-full transition-colors"
+                      title="Close chat"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+              ))}
+              <button
+                onClick={addNewChat}
+                className="flex items-center px-3 py-2 rounded-t-lg bg-gray-200 hover:bg-gray-300 text-gray-600 transition-colors border border-gray-200 border-b border-gray-200"
+                title="Add new chat"
+              >
+                <Plus className="w-4 h-4" />
+              </button>
+            </div>
+            
+            {/* Collapse Button - positioned on the right side of the header */}
+            {onToggleCollapse && (
+              <button
+                onClick={onToggleCollapse}
+                className="p-1 hover:bg-gray-100 rounded transition-colors"
+                title="Close chat"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* White Content Area with Border */}
+        <div className="flex-1 bg-white border border-gray-200 rounded-lg overflow-hidden flex flex-col">
         {/* Messages */}
         <div 
           ref={messagesContainerRef}
@@ -563,6 +594,7 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onToolCall = null, on
           </button>
           </form>
         </div>
+        </div>
       </div>
     </div>
   );
@@ -574,7 +606,9 @@ ChatInterface.propTypes = {
   onToolCall: PropTypes.func,
   llmService: PropTypes.object,
   onCancel: PropTypes.func,
-  onAddBotMessage: PropTypes.func
+  onAddBotMessage: PropTypes.func,
+  isCollapsed: PropTypes.bool,
+  onToggleCollapse: PropTypes.func
 };
 
 export default ChatInterface;

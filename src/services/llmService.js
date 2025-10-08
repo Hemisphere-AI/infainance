@@ -3,6 +3,8 @@ import { tools, SYSTEM_PROMPT } from '../utils/tools.js';
 import { addrToRC, rcToAddr, sliceRange, getColumnIndex } from '../utils/a1Helpers.js';
 import { tokenSortJaroWinkler } from '../utils/similarity.js';
 import { userService } from '../lib/supabase.js';
+// import { googleSheetsService } from './googleSheetsService.js';
+import { updateUserCell } from '../api/sheets.js';
 
 /**
  * Database-based Token Tracking System for OpenAI API usage
@@ -120,7 +122,7 @@ if (!apiKey || apiKey === 'your_openai_api_key_here') {
  * LLM Service for spreadsheet interaction
  */
 export class LLMService {
-  constructor(spreadsheetData, onDataChange, onToolCall = null, user = null) {
+  constructor(spreadsheetData, onDataChange, onToolCall = null, user = null, googleSheetsConfig = null) {
     this.spreadsheetData = spreadsheetData;
     this.onDataChange = onDataChange;
     this.onToolCall = onToolCall; // Callback for tool call visibility
@@ -129,6 +131,7 @@ export class LLMService {
     this.isCancelled = false; // Flag to track cancellation
     this.tokenTracker = user ? new DatabaseTokenTracker(user.id) : null; // Database-based token tracking
     this.user = user; // Store user information
+    this.googleSheetsConfig = googleSheetsConfig; // Google Sheets configuration for sync
   }
 
   /**
@@ -672,7 +675,7 @@ export class LLMService {
   /**
    * Update a cell value
    */
-  updateCell(address, newValue) {
+  async updateCell(address, newValue) {
     const { r, c } = addrToRC(address);
     
     // Ensure the row exists
@@ -737,6 +740,9 @@ export class LLMService {
         // We don't need to do anything special here as the component handles it
       }
     }
+
+    // Sync to Google Sheets if configured
+    await this.syncToGoogleSheets(address, processedValue, r-1, c-1);
     
     return { 
       address, 
@@ -744,6 +750,43 @@ export class LLMService {
       success: true, 
       message: `Cell ${address} successfully updated to ${JSON.stringify(processedValue)}` 
     };
+  }
+
+  /**
+   * Sync cell update to Google Sheets via service account
+   */
+  async syncToGoogleSheets(address, value, rowIndex, colIndex) {
+    // Check if user is available for service account sync
+    if (!this.user?.id) {
+      console.log('No user ID available for Google Sheets sync, skipping')
+      return
+    }
+
+    try {
+      console.log(`🔄 Syncing cell ${address} to Google Sheets via service account:`, value)
+      
+      const result = await updateUserCell(
+        this.user.id,
+        rowIndex,
+        colIndex,
+        value
+      )
+
+      if (result.success) {
+        console.log(`✅ Successfully synced cell ${address} to Google Sheets`)
+      } else {
+        console.warn(`⚠️ Failed to sync cell ${address} to Google Sheets:`, result.error)
+      }
+    } catch (error) {
+      console.error(`❌ Error syncing cell ${address} to Google Sheets:`, error)
+    }
+  }
+
+  /**
+   * Update Google Sheets configuration
+   */
+  updateGoogleSheetsConfig(config) {
+    this.googleSheetsConfig = config
   }
 
   /**
@@ -1027,9 +1070,9 @@ export class LLMService {
           // Protocol guard: Check if conclude is being called without data read
           if (call.function.name === 'conclude') {
             const usedDataRead = () => {
-              // Check for direct data reading tools
+              // Check for direct data reading tools or update operations
               const hasDataRead = toolOutputs.some(t => 
-                ["read_cell"].includes(t.tool_name)
+                ["read_cell", "update_cell"].includes(t.tool_name)
               );
               
               
@@ -1505,9 +1548,9 @@ export class LLMService {
           // Protocol guard: Check if conclude is being called without data read
           if (call.function.name === 'conclude') {
             const usedDataRead = () => {
-              // Check for direct data reading tools
+              // Check for direct data reading tools or update operations
               const hasDataRead = toolOutputs.some(t => 
-                ["read_cell"].includes(t.tool_name)
+                ["read_cell", "update_cell"].includes(t.tool_name)
               );
               return hasDataRead;
             };

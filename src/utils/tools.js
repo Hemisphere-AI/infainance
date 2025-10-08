@@ -87,6 +87,7 @@ The spreadsheet data is always organized in a 2D grid:
 
 **IMPORTANT TOOL USAGE RULES:**
 - When update_cell returns success: true, the task is complete - call conclude immediately
+- When updating a direct coordinate where the value and/or formula is clear, you don't need to read spreadsheet data before concluding
 - Do NOT repeat the same tool call multiple times unless there's an error
 - Always check tool results for success/failure status before proceeding
 
