@@ -2,6 +2,7 @@ import React, { useState, useCallback, useEffect, useRef } from 'react'
 import PropTypes from 'prop-types'
 import { ExternalLink, X, FileSpreadsheet, LogIn } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import ReactSpreadsheet from '../Spreadsheet.jsx'
 import { googleOAuthService } from '../services/googleOAuthService.js'
 import { googleSheetsService } from '../services/googleSheetsService.js'
 
@@ -1027,10 +1028,10 @@ const GoogleSheetsEmbed = ({
         )}
         
         {/* Content area - like Messages in ChatInterface */}
-        <div className="flex-1 min-h-0 p-4">
-          {/* Minimal placeholder area (no panel) */}
-          {config.isConfigured && config.sheetId && !error && (
-            <div className="h-full" />
+        <div className="flex-1 min-h-0 p-0">
+          {/* Read-only spreadsheet view from database */}
+          {config.isConfigured && currentSpreadsheetId && !error && (
+            <ReadOnlySheet spreadsheetId={currentSpreadsheetId} />
           )}
         </div>
         
@@ -1068,3 +1069,83 @@ GoogleSheetsEmbed.propTypes = {
 }
 
 export default GoogleSheetsEmbed
+
+// Internal read-only sheet renderer
+function ReadOnlySheet({ spreadsheetId }) {
+  const [grid, setGrid] = React.useState([])
+  const [loading, setLoading] = React.useState(true)
+  const [err, setErr] = React.useState(null)
+
+  React.useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      try {
+        setLoading(true)
+        setErr(null)
+        // Fetch cells from Supabase and build a dense 2D grid
+        const { data, error } = await supabase
+          .from('spreadsheet_cells')
+          .select('row_index,col_index,formula,display_value,cell_type,is_currency,currency_symbol,is_percentage,formatting,decimal_places')
+          .eq('spreadsheet_id', spreadsheetId)
+
+        if (error) throw error
+
+        const maxRow = (data?.length ? Math.max(...data.map(c => c.row_index)) : 0) || 0
+        const maxCol = (data?.length ? Math.max(...data.map(c => c.col_index)) : 0) || 0
+        const rows = Math.max(maxRow + 1, 20)
+        const cols = Math.max(maxCol + 1, 10)
+
+        const next = Array.from({ length: rows }, () => (
+          Array.from({ length: cols }, () => ({
+            value: '', displayValue: '', computedValue: '', cellType: 'text'
+          }))
+        ))
+
+        for (const cell of data || []) {
+          const r = cell.row_index
+          const c = cell.col_index
+          const val = cell.formula ? cell.formula : (cell.display_value ?? '')
+          next[r][c] = {
+            value: val,
+            displayValue: cell.display_value ?? '',
+            computedValue: cell.display_value ?? '',
+            cellType: cell.cell_type || 'text',
+            isCurrency: !!cell.is_currency,
+            currencySymbol: cell.currency_symbol || null,
+            isPercentage: !!cell.is_percentage,
+            formatting: cell.formatting || null,
+            decimalPlaces: cell.decimal_places ?? null,
+            isFormula: !!cell.formula
+          }
+        }
+
+        if (!cancelled) setGrid(next)
+      } catch (e) {
+        if (!cancelled) setErr(e.message)
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [spreadsheetId])
+
+  if (loading) return <div className="text-xs text-gray-500">Loading...</div>
+  if (err) return <div className="text-xs text-red-600">{err}</div>
+
+  return (
+    <div className="h-full">
+      <ReactSpreadsheet
+        data={grid}
+        allSheetsData={{}}
+        currentSheetName={'Sheet1'}
+        onDataChange={() => {}}
+        formulaDisplayMode={0}
+        selectedCells={[]}
+        onSelectedCellsChange={() => {}}
+        highlightedBlock={null}
+        readOnly={true}
+      />
+    </div>
+  )
+}
