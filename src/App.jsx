@@ -14,6 +14,7 @@ import PrivacyPolicy from './components/PrivacyPolicy'
 import UserProfile from './components/UserProfile'
 import GoogleOAuthCallback from './components/GoogleOAuthCallback'
 import { LLMService } from './services/llmService'
+import { supabase } from './lib/supabase'
 
 // Editable spreadsheet name component
 const EditableSpreadsheetName = ({ name, onRename }) => {
@@ -350,6 +351,28 @@ function MainSpreadsheetApp({ user }) {
       }
       // Also update the spreadsheets list
       await renameSpreadsheet(spreadsheetId, newName)
+      
+      // Also update the Google Sheet title if this spreadsheet has a Google Sheet configured
+      try {
+        const { data: spreadsheet, error } = await supabase
+          .from('spreadsheets')
+          .select('google_sheet_id')
+          .eq('id', spreadsheetId)
+          .single()
+        
+        if (!error && spreadsheet?.google_sheet_id) {
+          const { googleSheetsService } = await import('./services/googleSheetsService.js')
+          const result = await googleSheetsService.updateSpreadsheetTitle(spreadsheet.google_sheet_id, newName)
+          if (result.success) {
+            console.log('✅ Successfully updated Google Sheet title from sidebar rename')
+          } else {
+            console.warn('⚠️ Failed to update Google Sheet title from sidebar rename:', result.error)
+          }
+        }
+      } catch (error) {
+        console.warn('⚠️ Error updating Google Sheet title from sidebar rename:', error)
+        // Don't throw here - we still want the local rename to succeed
+      }
     } catch (error) {
       console.error('Error renaming spreadsheet:', error)
     }

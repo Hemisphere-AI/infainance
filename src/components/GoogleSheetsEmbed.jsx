@@ -738,6 +738,22 @@ const GoogleSheetsEmbed = ({
       if (onSpreadsheetRename) {
         await onSpreadsheetRename(currentSpreadsheetId, trimmed)
       }
+      
+      // Also update the Google Sheet title if we have a configured Google Sheet
+      if (config.sheetId && config.isConfigured) {
+        try {
+          const result = await googleSheetsService.updateSpreadsheetTitle(config.sheetId, trimmed)
+          if (result.success) {
+            console.log('✅ Successfully updated Google Sheet title')
+          } else {
+            console.warn('⚠️ Failed to update Google Sheet title:', result.error)
+          }
+        } catch (error) {
+          console.warn('⚠️ Error updating Google Sheet title:', error)
+          // Don't throw here - we still want the local rename to succeed
+        }
+      }
+      
       setIsRenaming(false)
     } catch (e) {
       console.error('Error renaming spreadsheet:', e)
