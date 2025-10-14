@@ -1,6 +1,6 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react'
+import React, { useState, useCallback, useRef } from 'react'
 import PropTypes from 'prop-types'
-import { ExternalLink, X, FileSpreadsheet, LogIn } from 'lucide-react'
+import { ExternalLink, X, FileSpreadsheet, LogIn, Settings } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import ReactSpreadsheet from '../Spreadsheet.jsx'
 import { googleOAuthService } from '../services/googleOAuthService.js'

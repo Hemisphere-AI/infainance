@@ -1,14 +1,15 @@
 import React, { useState, useCallback } from 'react';
 import PropTypes from 'prop-types';
-import { FileSpreadsheet, Plus, ChevronLeft, ChevronRight, X } from 'lucide-react';
+import { CheckSquare, Plus, ChevronLeft, ChevronRight, X } from 'lucide-react';
 
+// TODO: Enable tooltip when multiple components
 const Sidebar = ({ 
-  spreadsheets = [], 
-  currentSpreadsheetId, 
-  onSpreadsheetSelect, 
-  onCreateSpreadsheet, 
-  onRenameSpreadsheet,
-  onDeleteSpreadsheet,
+  checks = [], 
+  currentCheckId, 
+  onCheckSelect, 
+  onCreateCheck, 
+  onRenameCheck,
+  onDeleteCheck,
   isOpen = false,
   onToggle 
 }) => {
@@ -16,19 +17,19 @@ const Sidebar = ({
   const [editingName, setEditingName] = useState('');
   const [hoveredId, setHoveredId] = useState(null);
 
-  const handleRenameStart = useCallback((e, spreadsheet) => {
+  const handleRenameStart = useCallback((e, check) => {
     e.stopPropagation();
-    setEditingId(spreadsheet.id);
-    setEditingName(spreadsheet.name);
+    setEditingId(check.id);
+    setEditingName(check.name);
   }, []);
 
   const handleRenameSave = useCallback(async () => {
-    if (editingName.trim() && editingId && onRenameSpreadsheet) {
-      await onRenameSpreadsheet(editingId, editingName.trim());
+    if (editingName.trim() && editingId && onRenameCheck) {
+      await onRenameCheck(editingId, editingName.trim());
     }
     setEditingId(null);
     setEditingName('');
-  }, [editingName, editingId, onRenameSpreadsheet]);
+  }, [editingName, editingId, onRenameCheck]);
 
   const handleRenameCancel = useCallback(() => {
     setEditingId(null);
@@ -43,12 +44,12 @@ const Sidebar = ({
     }
   }, [handleRenameSave, handleRenameCancel]);
 
-  const handleDelete = useCallback((e, spreadsheetId) => {
+  const handleDelete = useCallback((e, checkId) => {
     e.stopPropagation();
-    if (onDeleteSpreadsheet) {
-      onDeleteSpreadsheet(spreadsheetId);
+    if (onDeleteCheck) {
+      onDeleteCheck(checkId);
     }
-  }, [onDeleteSpreadsheet]);
+  }, [onDeleteCheck]);
 
   return (
     <div className="flex h-full">
@@ -65,25 +66,25 @@ const Sidebar = ({
         </button>
         
         <div className="flex-1 flex flex-col items-center space-y-2 mt-4">
-          {spreadsheets.slice(0, 5).map((spreadsheet) => (
+          {checks.slice(0, 5).map((check) => (
             <button
-              key={spreadsheet.id}
-              onClick={() => onSpreadsheetSelect(spreadsheet.id)}
+              key={check.id}
+              onClick={() => onCheckSelect(check.id)}
               className={`p-2 rounded-lg transition-colors ${
-                currentSpreadsheetId === spreadsheet.id
+                currentCheckId === check.id
                   ? 'bg-blue-100 text-blue-600'
                   : 'hover:bg-gray-100'
               }`}
-              title={spreadsheet.name}
+              title={check.name}
             >
-              <FileSpreadsheet className="w-4 h-4 text-green-600" />
+              <CheckSquare className="w-4 h-4 text-green-600" />
             </button>
           ))}
           
           <button
-            onClick={onCreateSpreadsheet}
+            onClick={onCreateCheck}
             className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-            title="Add new spreadsheet"
+            title="Add new check"
           >
             <Plus className="w-4 h-4 text-gray-500" />
           </button>
@@ -105,24 +106,24 @@ const Sidebar = ({
           </button>
         </div>
 
-        {/* Spreadsheet List */}
+        {/* Checks List */}
         <div className="flex-1 overflow-y-auto">
           <div className="p-2 space-y-1">
-            {spreadsheets.map((spreadsheet) => (
+            {checks.map((check) => (
               <div
-                key={spreadsheet.id}
+                key={check.id}
                 className={`group relative flex items-center space-x-2 p-2 rounded-lg cursor-pointer transition-colors ${
-                  currentSpreadsheetId === spreadsheet.id
+                  currentCheckId === check.id
                     ? 'bg-blue-50 border border-blue-200'
                     : 'hover:bg-gray-50 border border-transparent'
                 }`}
-                onClick={() => onSpreadsheetSelect(spreadsheet.id)}
-                onMouseEnter={() => setHoveredId(spreadsheet.id)}
+                onClick={() => onCheckSelect(check.id)}
+                onMouseEnter={() => setHoveredId(check.id)}
                 onMouseLeave={() => setHoveredId(null)}
               >
-                <FileSpreadsheet className="w-4 h-4 text-green-600 flex-shrink-0" />
+                <CheckSquare className="w-4 h-4 text-green-600 flex-shrink-0" />
                 <div className="flex-1 min-w-0">
-                  {editingId === spreadsheet.id ? (
+                  {editingId === check.id ? (
                     <input
                       type="text"
                       value={editingName}
@@ -136,20 +137,20 @@ const Sidebar = ({
                   ) : (
                     <div
                       className="text-sm font-medium text-gray-800 truncate"
-                      onDoubleClick={(e) => handleRenameStart(e, spreadsheet)}
+                      onDoubleClick={(e) => handleRenameStart(e, check)}
                       title="Double-click to rename"
                     >
-                      {spreadsheet.name}
+                      {check.name}
                     </div>
                   )}
                 </div>
                 
                 {/* Delete button - only show on hover */}
-                {hoveredId === spreadsheet.id && editingId !== spreadsheet.id && (
+                {hoveredId === check.id && editingId !== check.id && (
                   <button
-                    onClick={(e) => handleDelete(e, spreadsheet.id)}
+                    onClick={(e) => handleDelete(e, check.id)}
                     className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-100 text-red-500 rounded transition-all duration-200"
-                    title="Delete spreadsheet"
+                    title="Delete check"
                   >
                     <X className="w-3 h-3" />
                   </button>
@@ -157,9 +158,9 @@ const Sidebar = ({
               </div>
             ))}
             
-            {/* Add New Spreadsheet - positioned after the list */}
+            {/* Add New Check - positioned after the list */}
             <button
-              onClick={onCreateSpreadsheet}
+              onClick={onCreateCheck}
               className="w-full flex items-center space-x-2 p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-50 rounded-lg transition-colors mt-2"
             >
               <Plus className="w-4 h-4" />
@@ -173,15 +174,17 @@ const Sidebar = ({
 };
 
 Sidebar.propTypes = {
-  spreadsheets: PropTypes.arrayOf(PropTypes.shape({
+  checks: PropTypes.arrayOf(PropTypes.shape({
     id: PropTypes.string.isRequired,
-    name: PropTypes.string.isRequired
+    name: PropTypes.string.isRequired,
+    description: PropTypes.string,
+    status: PropTypes.oneOf(['active', 'completed', 'cancelled']).isRequired
   })).isRequired,
-  currentSpreadsheetId: PropTypes.string,
-  onSpreadsheetSelect: PropTypes.func.isRequired,
-  onCreateSpreadsheet: PropTypes.func.isRequired,
-  onRenameSpreadsheet: PropTypes.func.isRequired,
-  onDeleteSpreadsheet: PropTypes.func,
+  currentCheckId: PropTypes.string,
+  onCheckSelect: PropTypes.func.isRequired,
+  onCreateCheck: PropTypes.func.isRequired,
+  onRenameCheck: PropTypes.func.isRequired,
+  onDeleteCheck: PropTypes.func,
   isOpen: PropTypes.bool,
   onToggle: PropTypes.func.isRequired
 };

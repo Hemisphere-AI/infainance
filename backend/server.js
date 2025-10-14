@@ -10,10 +10,10 @@ import { google } from 'googleapis'
 import dotenv from 'dotenv'
 
 // Load environment variables
-dotenv.config({ path: '../.env' })
+dotenv.config({ path: '.env' })
 
 const app = express()
-const PORT = process.env.PORT || 3001
+const PORT = process.env.PORT || 3002
 
 // Middleware
 app.use(cors({
@@ -32,6 +32,72 @@ app.get('/test', (req, res) => {
   console.log('🧪 Test route called')
   res.json({ message: 'Test route working' })
 })
+
+// MCP Odoo Integration endpoints
+app.get('/api/odoo/config', (req, res) => {
+  try {
+    const config = {
+      url: process.env.ODOO_URL,
+      db: process.env.ODOO_DB,
+      apiKey: process.env.ODOO_API_KEY
+    }
+    res.json(config)
+  } catch (error) {
+    console.error('Error getting Odoo config:', error)
+    res.status(500).json({ error: 'Failed to get Odoo configuration' })
+  }
+})
+
+app.get('/api/odoo/test', async (req, res) => {
+  try {
+    // Test Odoo connection using the MCP service
+    const OdooMcpService = (await import('./services/odooMcpService.js')).default
+    const odooMcp = new OdooMcpService()
+    const initialized = await odooMcp.initialize()
+    
+    if (initialized) {
+      res.json({ success: true, message: 'Odoo connection successful' })
+    } else {
+      res.status(500).json({ success: false, error: 'Failed to connect to Odoo' })
+    }
+  } catch (error) {
+    console.error('Odoo connection test failed:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+})
+
+app.post('/api/odoo/execute', async (req, res) => {
+  try {
+    const { queries } = req.body
+    
+    if (!queries || !Array.isArray(queries)) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Queries array is required' 
+      })
+    }
+    
+    // Initialize Odoo MCP service
+    const odooMcp = new (await import('./services/odooMcpService.js')).default()
+    const initialized = await odooMcp.initialize()
+    
+    if (!initialized) {
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Failed to connect to Odoo. Please check your configuration.' 
+      })
+    }
+    
+    // Execute queries
+    const result = await odooMcp.executeQueries(queries)
+    res.json(result)
+  } catch (error) {
+    console.error('MCP query execution failed:', error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+})
+
+// MCP integration is now handled by the OdooMcpService class
 
 // Initialize Google APIs with service account
 let sheets, drive, auth
