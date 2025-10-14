@@ -33,21 +33,12 @@ backend/integrations/odoo/
 
 ## 🚀 Quick Start
 
-### 1. Configure Odoo Connection
+### Seed Dummy Bookkeeping Data
 ```bash
-cd backend/integrations/odoo/scripts
-python3 configure_odoo.py
+cd backend/integrations/odoo/dummy/scripts
+python3 dummy_ingest.py
 ```
-
-### 2. Test Connection
-```bash
-python3 test_odoo_mcp.py
-```
-
-### 3. Run Example
-```bash
-python3 odoo_mcp_example.py
-```
+This creates and posts a few revenue and expense entries so they are visible in Odoo.
 
 ## 📊 Dummy Data Scripts
 
@@ -80,16 +71,19 @@ python3 check_journal_entries.py
 
 ## 🔧 Configuration
 
-The main configuration file is `config/odoo_config.json`:
+Configuration is done via environment variables in the root `.env` file:
 
-```json
-{
-  "url": "https://your-odoo-instance.com",
-  "db": "your-database-name",
-  "username": "your-username",
-  "password": "your-password-or-api-key"
-}
+```bash
+ODOO_URL=https://your-odoo-instance.com
+ODOO_DB=your-database-name
+ODOO_USERNAME=your-username
+ODOO_PASSWORD=your-password-or-api-key
 ```
+
+The scripts automatically load these variables from the root `.env` file.
+
+## 📚 Notes
+- Legacy helper scripts have been removed. Use `dummy_ingest.py` for seeding data.
 
 ## 📚 Documentation
 
