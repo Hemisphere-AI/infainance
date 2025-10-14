@@ -8,3 +8,4 @@ dist/
 #Ignore cursor AI rules
 .cursor/rules/codacy.mdc
 .codacy/
+.env

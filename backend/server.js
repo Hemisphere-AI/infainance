@@ -10,7 +10,7 @@ import { google } from 'googleapis'
 import dotenv from 'dotenv'
 
 // Load environment variables
-dotenv.config({ path: './server.env' })
+dotenv.config({ path: '../.env' })
 
 const app = express()
 const PORT = process.env.PORT || 3001
