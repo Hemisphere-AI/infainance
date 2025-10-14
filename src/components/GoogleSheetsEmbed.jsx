@@ -277,7 +277,7 @@ const GoogleSheetsEmbed = ({
       setIsCreatingSheet(true)
       
       try {
-        const response = await fetch('http://localhost:3001/api/sheets/create-for-user', {
+        const response = await fetch('http://localhost:3002/api/sheets/create-for-user', {
           method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -366,7 +366,7 @@ const GoogleSheetsEmbed = ({
 
     try {
       // Use our backend API instead of direct Google Sheets CSV export
-      const response = await fetch(`http://localhost:3001/api/sheets/read?spreadsheetId=${config.sheetId}&range=A1:Z1000`)
+      const response = await fetch(`http://localhost:3002/api/sheets/read?spreadsheetId=${config.sheetId}&range=A1:Z1000`)
       
       if (!response.ok) {
         throw new Error(`Failed to fetch sheet data: ${response.status} ${response.statusText}`)
