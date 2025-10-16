@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import PropTypes from 'prop-types';
 import { 
   Play, 
   ChevronDown, 
@@ -10,30 +11,30 @@ import {
   Clock,
   Cpu,
   Eye,
-  FileText,
+  // FileText, // Unused import
   Loader2,
   CheckCircle,
   AlertTriangle
 } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+// import { supabase } from '../lib/supabase'; // Unused import
 import { formatMarkdown } from '../utils/markdownFormatter';
 
 const CheckResult = ({
   checks = [],
   currentCheckId,
-  onCheckSelect,
-  onCreateCheck,
+  // onCheckSelect, // Unused parameter
+  // onCreateCheck, // Unused parameter
   onRenameCheck,
-  onDeleteCheck,
+  // onDeleteCheck, // Unused parameter
   onToggleCheck,
-  onUpdateDescription,
-  onRunAnalysis,
-  user
+  onUpdateDescription
+  // onRunAnalysis, // Unused parameter
+  // user // Unused parameter
 }) => {
   const [expandedChecks, setExpandedChecks] = useState(new Set());
   const [expandedRecords, setExpandedRecords] = useState(new Set());
   const [checkResults, setCheckResults] = useState({});
-  const [modelMetadata, setModelMetadata] = useState({});
+  // const [modelMetadata, setModelMetadata] = useState({}); // Unused state
   const [executionSteps, setExecutionSteps] = useState({});
   const [descriptionTexts, setDescriptionTexts] = useState({});
   const [runningChecks, setRunningChecks] = useState(new Set());
@@ -101,7 +102,7 @@ const CheckResult = ({
     
     // Convert model name to Odoo URL format
     // e.g., "account.move" -> "account_move"
-    const modelUrl = model.replace(/\./g, '_');
+    // const modelUrl = model.replace(/\./g, '_'); // Unused variable
     
     // Ensure URL doesn't end with slash to avoid double slashes
     const baseUrl = odooConfig.url.replace(/\/$/, '');
@@ -674,6 +675,19 @@ const CheckResult = ({
       </div>
     </div>
   );
+};
+
+CheckResult.propTypes = {
+  checks: PropTypes.array,
+  currentCheckId: PropTypes.string,
+  onCheckSelect: PropTypes.func,
+  onCreateCheck: PropTypes.func,
+  onRenameCheck: PropTypes.func,
+  onDeleteCheck: PropTypes.func,
+  onToggleCheck: PropTypes.func,
+  onUpdateDescription: PropTypes.func,
+  onRunAnalysis: PropTypes.func,
+  user: PropTypes.object
 };
 
 export default CheckResult;

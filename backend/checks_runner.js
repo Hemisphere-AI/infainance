@@ -1,3 +1,4 @@
+/* eslint-env node */
 // Odoo Checks Runner
 // Loads checks from YAML catalog and executes them using MCP client
 

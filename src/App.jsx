@@ -1,12 +1,12 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react'
 import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useParams } from 'react-router-dom'
 // import { FileSpreadsheet } from 'lucide-react'
-import { CheckSquare } from 'lucide-react'
+// import { CheckSquare } from 'lucide-react' // Unused import
 import PropTypes from 'prop-types'
 // TODO: enable chat interface when chatting with AI Agent is possible
 // import ChatInterface from './components/ChatInterface'
 import Sidebar from './components/Sidebar'
-import Checks from './components/Checks'
+// import Checks from './components/Checks' // Unused import
 import CheckResult from './components/CheckResult'
 import OrganizationManagement from './components/OrganizationManagement'
 // TODO: enable when in platform spreadsheets are available

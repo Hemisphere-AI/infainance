@@ -6,13 +6,13 @@ import MCPIntegration from './MCPIntegration';
 const Checks = ({
   checks = [],
   currentCheckId,
-  onCheckSelect,
-  onCreateCheck,
+  // onCheckSelect, // Unused parameter
+  // onCreateCheck, // Unused parameter
   onRenameCheck,
-  onDeleteCheck,
+  // onDeleteCheck, // Unused parameter
   onToggleCheck,
-  onUpdateDescription,
-  onRunAnalysis
+  onUpdateDescription
+  // onRunAnalysis // Unused parameter
 }) => {
   const [editingId, setEditingId] = useState(null);
   const [editingName, setEditingName] = useState('');
@@ -38,7 +38,7 @@ const Checks = ({
     setEditingName('');
   }, []);
 
-  const handleRenameInputBlur = useCallback((e) => {
+  const handleRenameInputBlur = useCallback(() => {
     setTimeout(() => {
       if (editingId) {
         handleRenameSave();

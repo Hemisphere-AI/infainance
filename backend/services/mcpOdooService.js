@@ -1,3 +1,4 @@
+/* eslint-env node */
 // MCP Odoo Service - Real integration with Odoo XML-RPC
 import fetch from 'node-fetch';
 import xml2js from 'xml2js';
@@ -17,12 +18,12 @@ const envPaths = [
   path.join(process.cwd(), '../.env')        // From parent of current working directory
 ];
 
-let envLoaded = false;
+// let envLoaded = false;
 for (const envPath of envPaths) {
   try {
     dotenv.config({ path: envPath });
     if (process.env.ODOO_URL) {
-      envLoaded = true;
+      // envLoaded = true;
       break;
     }
   } catch (error) {

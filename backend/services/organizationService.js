@@ -1,3 +1,4 @@
+/* eslint-env node */
 /**
  * Organization Service
  * Handles organization and integration management
@@ -185,12 +186,14 @@ class OrganizationService {
       }
 
       // First, try to find existing integration
-      const { data: existing, error: findError } = await this.supabase
+      const { data: existing } = await this.supabase
         .from('organization_integrations')
         .select('id')
         .eq('organization_id', organizationId)
         .eq('integration_name', integrationName)
         .single()
+
+      // Note: We don't check for findError since we want to proceed regardless
 
       let data, error
 

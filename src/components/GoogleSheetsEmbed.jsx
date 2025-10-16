@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react'
+import React, { useState, useCallback, useRef, useEffect } from 'react'
 import PropTypes from 'prop-types'
 import { ExternalLink, X, FileSpreadsheet, LogIn, Settings } from 'lucide-react'
 import { supabase } from '../lib/supabase'
@@ -216,7 +216,7 @@ const GoogleSheetsEmbed = ({
   }, [config.sheetId, userId])
 
   // Load configuration on mount
-  React.useEffect(() => {
+  useEffect(() => {
     setConfigLoaded(false) // Reset config loaded state
     loadExistingConfig()
     // Reset creation attempt flag when spreadsheet changes
@@ -226,7 +226,7 @@ const GoogleSheetsEmbed = ({
   }, [currentSpreadsheetId])
 
   // Auto-sync when config is loaded
-  React.useEffect(() => {
+  useEffect(() => {
     if (config.isConfigured && config.sheetId && userId) {
       // Trigger auto-sync check after a short delay
       const timeoutId = setTimeout(() => {
@@ -238,7 +238,7 @@ const GoogleSheetsEmbed = ({
   }, [config.isConfigured, config.sheetId, userId, checkAndAutoSync])
 
   // Periodic polling for changes (every 30 seconds)
-  React.useEffect(() => {
+  useEffect(() => {
     if (config.isConfigured && config.sheetId && userId) {
       const intervalId = setInterval(() => {
         console.log('🔄 Periodic sync check...')
@@ -255,7 +255,7 @@ const GoogleSheetsEmbed = ({
   const [isCreatingSheet, setIsCreatingSheet] = useState(false)
   const lastSyncTimeRef = useRef(0)
   
-  React.useEffect(() => {
+  useEffect(() => {
     const autoCreateGoogleSheet = async () => {
       // Only create if we have all required data AND no existing config AND config has been loaded
       if (!currentSpreadsheetId || !userId || !userEmail) return
@@ -590,7 +590,7 @@ const GoogleSheetsEmbed = ({
   }, [config.sheetId, config.isConfigured, onSheetDataUpdate])
 
   // Save data to database
-  const saveToDatabase = useCallback(async (spreadsheetData, headers) => {
+  const saveToDatabase = useCallback(async (spreadsheetData) => {
     try {
       console.log('💾 Saving Google Sheets data to database...')
       
@@ -713,7 +713,7 @@ const GoogleSheetsEmbed = ({
   }, [currentSpreadsheetId])
 
   // One-time initial sync after configuration; no periodic auto-sync
-  React.useEffect(() => {
+  useEffect(() => {
     if (!config.isConfigured) return
     fetchSheetData()
   }, [config.isConfigured]) // Removed fetchSheetData from dependencies to prevent loop
@@ -868,7 +868,7 @@ const GoogleSheetsEmbed = ({
                 <p className="text-green-600">✅ Valid Google Sheets URL detected</p>
               )}
               {config.sheetUrl && !extractSheetId(config.sheetUrl) && (
-                <p className="text-red-600">❌ Invalid URL format. Make sure it contains "/spreadsheets/d/"</p>
+                <p className="text-red-600">❌ Invalid URL format. Make sure it contains &quot;/spreadsheets/d/&quot;</p>
               )}
             </div>
           </div>
@@ -1084,6 +1084,10 @@ GoogleSheetsEmbed.propTypes = {
   onSpreadsheetRename: PropTypes.func
 }
 
+ReadOnlySheet.propTypes = {
+  spreadsheetId: PropTypes.string
+}
+
 export default GoogleSheetsEmbed
 
 // Internal read-only sheet renderer
@@ -1092,7 +1096,7 @@ function ReadOnlySheet({ spreadsheetId }) {
   const [loading, setLoading] = React.useState(true)
   const [err, setErr] = React.useState(null)
 
-  React.useEffect(() => {
+  useEffect(() => {
     let cancelled = false
     const load = async () => {
       try {
@@ -1164,4 +1168,16 @@ function ReadOnlySheet({ spreadsheetId }) {
       />
     </div>
   )
+}
+
+GoogleSheetsEmbed.propTypes = {
+  onSheetDataUpdate: PropTypes.func,
+  onConfigChange: PropTypes.func,
+  isVisible: PropTypes.bool,
+  onToggleVisibility: PropTypes.func,
+  currentSpreadsheetId: PropTypes.string,
+  userId: PropTypes.string,
+  userEmail: PropTypes.string,
+  currentSpreadsheetName: PropTypes.string,
+  onSpreadsheetRename: PropTypes.func
 }

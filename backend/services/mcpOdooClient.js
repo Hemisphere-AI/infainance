@@ -43,13 +43,13 @@ class MCPOdooClient {
    */
   log(level, message, context = {}) {
     const timestamp = new Date().toISOString();
-    const logEntry = {
-      timestamp,
-      level,
-      service: 'MCPOdooClient',
-      message,
-      ...context
-    };
+    // const logEntry = {
+    //   timestamp,
+    //   level,
+    //   service: 'MCPOdooClient',
+    //   message,
+    //   ...context
+    // };
 
     // Console logging based on level
     switch (level) {

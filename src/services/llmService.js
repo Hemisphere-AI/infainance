@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { tools, SYSTEM_PROMPT } from '../utils/tools.js';
 import { userService } from '../lib/supabase.js';
+import { addrToRC } from '../utils/a1Helpers.js';
 
 /**
  * Database-based Token Tracking System for OpenAI API usage
@@ -165,7 +166,7 @@ export class LLMService {
    * Read a cell by address
    */
   readCell(address) {
-    const { addrToRC } = require('../utils/a1Helpers.js');
+    // const { addrToRC } = require('../utils/a1Helpers.js'); // Now imported at top
     const { r, c } = addrToRC(address);
     const cell = this.spreadsheetData[r-1]?.[c-1] ?? { value: "" };
     const isFormula = typeof cell.value === "string" && String(cell.value).startsWith("=");
@@ -186,7 +187,7 @@ export class LLMService {
    * Update a cell value
    */
   async updateCell(address, newValue) {
-    const { addrToRC } = require('../utils/a1Helpers.js');
+    // const { addrToRC } = require('../utils/a1Helpers.js'); // Now imported at top
     const { r, c } = addrToRC(address);
     
     // Ensure the row exists

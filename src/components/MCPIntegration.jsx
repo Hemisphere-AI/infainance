@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import PropTypes from 'prop-types';
-import { Play, Loader2, Brain } from 'lucide-react';
+// import { Play, Loader2, Brain } from 'lucide-react'; // Unused imports
 import { LLMErpService } from '../services/llmErpService';
 import { formatMarkdown } from '../utils/markdownFormatter';
 

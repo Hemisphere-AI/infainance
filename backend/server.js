@@ -6,7 +6,7 @@
 
 import express from 'express'
 import cors from 'cors'
-import { google } from 'googleapis'
+// import { google } from 'googleapis' // Disabled - Google Sheets API endpoints are disabled
 import dotenv from 'dotenv'
 
 // Load environment variables
@@ -26,9 +26,9 @@ app.use(express.json())
 let mcpOdooClientInstance = null
 let initializationPromise = null
 
-// Initialize Checks Runner once
-let checksRunnerInstance = null
-let checksRunnerPromise = null
+// Initialize Checks Runner once - DISABLED
+// let checksRunnerInstance = null
+// let checksRunnerPromise = null
 
 async function getMCPOdooClient() {
   if (!mcpOdooClientInstance) {
@@ -48,23 +48,23 @@ async function getMCPOdooClient() {
   return mcpOdooClientInstance
 }
 
-async function getChecksRunner() {
-  if (!checksRunnerInstance) {
-    if (!checksRunnerPromise) {
-      checksRunnerPromise = (async () => {
-        const ChecksRunner = (await import('./checks_runner.js')).default
-        const instance = new ChecksRunner()
-        const initialized = await instance.initialize()
-        if (!initialized) {
-          throw new Error('Failed to initialize Checks Runner')
-        }
-        return instance
-      })()
-    }
-    checksRunnerInstance = await checksRunnerPromise
-  }
-  return checksRunnerInstance
-}
+// async function getChecksRunner() {
+//   if (!checksRunnerInstance) {
+//     if (!checksRunnerPromise) {
+//       checksRunnerPromise = (async () => {
+//         const ChecksRunner = (await import('./checks_runner.js')).default
+//         const instance = new ChecksRunner()
+//         const initialized = await instance.initialize()
+//         if (!initialized) {
+//           throw new Error('Failed to initialize Checks Runner')
+//         }
+//         return instance
+//       })()
+//     }
+//     checksRunnerInstance = await checksRunnerPromise
+//   }
+//   return checksRunnerInstance
+// }
 
 // Initialize Odoo AI Agent once
 let odooAiAgentInstance = null
@@ -556,7 +556,7 @@ app.post('/api/checks/run', async (req, res) => {
 // MCP integration is now handled by the MCPOdooClient class
 
 // Initialize Google APIs with service account - DISABLED
-let sheets, drive, auth
+// let sheets, drive, auth
 
 // try {
 //   console.log('🔧 Initializing Google Service Account...')
