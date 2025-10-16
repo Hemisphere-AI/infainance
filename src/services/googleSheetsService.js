@@ -281,6 +281,51 @@ export class GoogleSheetsService {
       console.warn('Error moving spreadsheet to folder:', error)
     }
   }
+
+  /**
+   * Update the title of a Google Sheet
+   */
+  async updateSpreadsheetTitle(spreadsheetId, newTitle) {
+    if (!this.isReady()) {
+      console.warn('GoogleSheetsService: Not authenticated, cannot update spreadsheet title')
+      return { success: false, error: 'Not authenticated' }
+    }
+
+    try {
+      const accessToken = await googleOAuthService.getValidAccessToken()
+      
+      // Update spreadsheet properties using Google Sheets API
+      const url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          requests: [{
+            updateSpreadsheetProperties: {
+              properties: {
+                title: newTitle
+              },
+              fields: 'title'
+            }
+          }]
+        })
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(`Failed to update spreadsheet title: ${errorData.error?.message || response.statusText}`)
+      }
+
+      console.log(`✅ Updated Google Sheet title to: ${newTitle}`)
+      return { success: true }
+    } catch (error) {
+      console.error('❌ Error updating Google Sheet title:', error)
+      return { success: false, error: error.message }
+    }
+  }
 }
 
 // Create a singleton instance

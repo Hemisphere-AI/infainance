@@ -115,7 +115,7 @@ export const spreadsheetService = {
     if (spreadsheet?.google_sheet_id) {
       try {
         console.log('📝 Renaming Google Sheet file:', spreadsheet.google_sheet_id, 'to:', newName)
-        const response = await fetch('http://localhost:3001/api/sheets/rename', {
+        const response = await fetch('http://localhost:3002/api/sheets/rename', {
           method: 'PUT',
           headers: {
             'Content-Type': 'application/json',
@@ -191,7 +191,7 @@ export const spreadsheetService = {
     if (spreadsheet?.google_sheet_id) {
       try {
         console.log('🗑️ Deleting Google Sheet:', spreadsheet.google_sheet_id)
-        const response = await fetch('http://localhost:3001/api/sheets/delete', {
+        const response = await fetch('http://localhost:3002/api/sheets/delete', {
           method: 'DELETE',
           headers: {
             'Content-Type': 'application/json',

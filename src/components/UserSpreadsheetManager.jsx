@@ -6,7 +6,6 @@ import { ExternalLink, FileSpreadsheet, Plus } from 'lucide-react'
 const UserSpreadsheetManager = ({ 
   userId, 
   userEmail, 
-  currentSpreadsheetId,
   onSpreadsheetCreated 
 }) => {
   const [userSpreadsheet, setUserSpreadsheet] = useState(null)
@@ -175,7 +174,6 @@ const UserSpreadsheetManager = ({
 UserSpreadsheetManager.propTypes = {
   userId: PropTypes.string,
   userEmail: PropTypes.string,
-  currentSpreadsheetId: PropTypes.string,
   onSpreadsheetCreated: PropTypes.func
 }
 

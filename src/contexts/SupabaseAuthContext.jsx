@@ -68,7 +68,7 @@ export const SupabaseAuthProvider = ({ children }) => {
       setLoading(true)
       setError(null)
       
-      const { data, error } = await supabase.auth.signInWithOAuth({
+      const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
           redirectTo: `${window.location.origin}/app`,
@@ -126,6 +126,7 @@ SupabaseAuthProvider.propTypes = {
   children: PropTypes.node.isRequired
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const useSupabaseAuth = () => {
   const context = useContext(SupabaseAuthContext)
   if (!context) {

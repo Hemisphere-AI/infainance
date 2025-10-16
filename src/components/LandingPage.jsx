@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import PropTypes from 'prop-types'
 import { Link } from 'react-router-dom'
-import { ArrowRight, CheckCircle, Shield, FileSpreadsheet, Wand2, AlertTriangle, TrendingUp, Timer, ChevronDown, ChevronUp } from 'lucide-react'
+import { ArrowRight, CheckCircle, Shield, FileSpreadsheet, Wand2, AlertTriangle, ChevronDown, ChevronUp, DollarSign, Star } from 'lucide-react'
 import { useSupabaseAuth } from '../contexts/SupabaseAuthContext'
 import landingPageHeader from '../assets/landing_page_header.png'
 
@@ -45,22 +45,22 @@ const LandingPage = () => {
   
   const benefits = [
     {
-      id: 'financial-control',
-      icon: <Shield className="w-6 h-6 text-green-600" />,
-      title: "Financial Control",
-      description: "Understand when you need to take action in time, minimizing cost of taking no action or even worse chance of bankruptcy."
+      id: 'minimize-costs',
+      icon: <DollarSign className="w-6 h-6 text-green-600" />,
+      title: "Minimizing expensive hours",
+      description: "Minimize expensive hours of checking and also the expensive hours of making human mistakes and correcting them by seeing them too late."
     },
     {
-      id: 'capital-raising',
-      icon: <TrendingUp className="w-6 h-6 text-blue-600" />,
-      title: "Faster Capital Raising",
-      description: "Shorter time spent on cap raising and financial DD with quick Q&A with your financial model."
+      id: 'relevant-alerts',
+      icon: <AlertTriangle className="w-6 h-6 text-blue-600" />,
+      title: "Only alert customers with relevant alerts",
+      description: "Only ping your customers when there is something to be flagged that is important."
     },
     {
-      id: 'build-models',
-      icon: <Timer className="w-6 h-6 text-purple-600" />,
-      title: "Build financial models in no time",
-      description: "Spend less time building strong financial models with AI assistance."
+      id: 'better-quality',
+      icon: <Star className="w-6 h-6 text-purple-600" />,
+      title: "Better quality",
+      description: "Achieve higher levels of bookkeeping with smarter checks."
     }
   ]
 
@@ -137,7 +137,7 @@ const LandingPage = () => {
                 Welcome back, {user.name?.split(' ')[0] || 'User'}!
               </h1>
               <p className="text-xl text-white/90 mb-8 max-w-3xl mx-auto drop-shadow-md">
-                Ready to continue working on your financial models? Upload a spreadsheet and start analyzing your data.
+                Remove the hassle of checking your client bookkeeping. With Zenith, you keep clients informed about what matters most: the financial health of their business.
               </p>
               <div className="flex flex-col sm:flex-row gap-4 justify-center">
                 <Link
@@ -152,10 +152,10 @@ const LandingPage = () => {
           ) : (
             <>
               <h1 className="text-4xl md:text-6xl font-bold text-white mb-6 drop-shadow-lg">
-                Your north star for financial planning
+                Your north star for being in-control
               </h1>
               <p className="text-xl text-white/90 mb-8 max-w-3xl mx-auto drop-shadow-md">
-                Your CFO for startups who is always on. Understand complex financial models in no time and run financial scenarios to get grip on your financial position.
+                Remove the hassle of checking your client bookkeeping. With Zenith, you keep clients informed about what matters most: the financial health of their business.
               </p>
               <div className="flex flex-col sm:flex-row gap-4 justify-center">
                 <Link
@@ -184,7 +184,7 @@ const LandingPage = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center mb-12">
             <h2 className="text-3xl font-bold text-gray-900 mb-4">The Solution</h2>
-            <p className="text-lg text-gray-600 mb-8">Startups fail not because of bad ideas, but because they run out of cash. Most founders lack the financial controls to make informed decisions when it matters most. Without proper scenario planning and real-time insights, beautiful ideas with traction get stopped as they run out of cash. Here is how we solve it:</p>
+            <p className="text-lg text-gray-600 mb-8">Add the checks you want to monitor. Zenith integrates with your bookkeeping software to run these checks on a schedule and sends you proactive alerts when abnormalities occur.</p>
           </div>
           <div className="max-w-4xl mx-auto">
             <div className="relative bg-gray-100 rounded-lg overflow-hidden shadow-lg">
@@ -196,7 +196,7 @@ const LandingPage = () => {
                     </svg>
                   </div>
                   <p className="text-lg font-medium">Demo Video Coming Soon</p>
-                  <p className="text-sm opacity-90">See how Zenith transforms your financial planning</p>
+                  <p className="text-sm opacity-90">See how Zenith transforms your accountancy office into a control tower</p>
                 </div>
               </div>
             </div>
@@ -216,21 +216,21 @@ const LandingPage = () => {
                 <FileSpreadsheet className="w-8 h-8 text-blue-600" />
               </div>
               <h3 className="text-xl font-semibold text-gray-900 mb-2">Connects with your own sources</h3>
-              <p className="text-gray-600">Google Sheets, and more. Use in places where you are.</p>
+              <p className="text-gray-600">Your standard bookkeeping software package</p>
             </div>
             <div className="text-center p-6 bg-white rounded-lg shadow-sm">
               <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
                 <Wand2 className="w-8 h-8 text-green-600" />
               </div>
-              <h3 className="text-xl font-semibold text-gray-900 mb-2">Understands complex financial models</h3>
-              <p className="text-gray-600">AI-powered analysis of your most sophisticated financial structures.</p>
+              <h3 className="text-xl font-semibold text-gray-900 mb-2">Simple to setup</h3>
+              <p className="text-gray-600">AI-powered analysis of your most sophisticated checks, written in plain text</p>
             </div>
             <div className="text-center p-6 bg-white rounded-lg shadow-sm">
               <div className="w-16 h-16 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-4">
                 <AlertTriangle className="w-8 h-8 text-orange-600" />
               </div>
-              <h3 className="text-xl font-semibold text-gray-900 mb-2">Smart alerts when unfortunate scenarios become real</h3>
-              <p className="text-gray-600">Get notified when your financial assumptions need attention.</p>
+              <h3 className="text-xl font-semibold text-gray-900 mb-2">Smart alerts</h3>
+              <p className="text-gray-600">Get notified when your checks are not passed.</p>
             </div>
           </div>
         </div>
@@ -247,10 +247,7 @@ const LandingPage = () => {
             <div className="bg-gradient-to-br from-indigo-50 to-blue-50 p-8 rounded-lg">
               <h3 className="text-2xl font-bold text-gray-900 mb-4">Why Zenith Matters</h3>
               <p className="text-lg text-gray-700 leading-relaxed">
-                In an age where the future is determined by the problem solvers of today, at Zenith we believe they should focus maximum on problem solving and have the financial controls at their fingertips.
-              </p>
-              <p className="text-lg text-gray-700 leading-relaxed mt-4">
-                With better informed decisions and scenario planning, founders would have made different choices and beautiful ideas would still exist.
+                At Zenith, we believe bookkeepers have a leading position in making businesses aware of their financial health. With Zenith, a bookkeeping company can monitor hundreds of checks in a blink of an eye.
               </p>
             </div>
             
@@ -275,7 +272,7 @@ const LandingPage = () => {
       <section className="py-16 bg-white">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center mb-12">
-            <h2 className="text-3xl font-bold text-gray-900 mb-4">Simple Pricing</h2>
+            <h2 className="text-3xl font-bold text-gray-900 mb-4">Pricing</h2>
             <p className="text-lg text-gray-600">Choose the plan that works for you</p>
           </div>
           <div className="grid md:grid-cols-2 gap-8 max-w-4xl mx-auto">
@@ -290,7 +287,7 @@ const LandingPage = () => {
                 <ul className="space-y-3 mb-8 flex-grow">
                   <li className="flex items-center">
                     <CheckCircle className="w-5 h-5 text-green-500 mr-3 flex-shrink-0" />
-                    <span className="text-gray-700">Financial scenario planning</span>
+                    <span className="text-gray-700">Smart bookkeeping checks</span>
                   </li>
                   <li className="flex items-center">
                     <CheckCircle className="w-5 h-5 text-green-500 mr-3 flex-shrink-0" />
@@ -328,7 +325,7 @@ const LandingPage = () => {
                 <ul className="space-y-3 mb-8 flex-grow">
                   <li className="flex items-center">
                     <CheckCircle className="w-5 h-5 text-green-500 mr-3 flex-shrink-0" />
-                    <span className="text-gray-700">Financial scenario planning</span>
+                    <span className="text-gray-700">Smart bookkeeping checks</span>
                   </li>
                   <li className="flex items-center">
                     <CheckCircle className="w-5 h-5 text-green-500 mr-3 flex-shrink-0" />
@@ -366,22 +363,22 @@ const LandingPage = () => {
             <div className="space-y-4">
               <BenefitItem
                 icon={<FileSpreadsheet className="w-6 h-6 text-black" />}
-                title="How does Zenith connect to my existing spreadsheets?"
-                description="Zenith seamlessly integrates with Google Sheets and other popular spreadsheet platforms. Simply connect your account and Zenith will automatically sync with your financial models, providing real-time analysis and insights without disrupting your existing workflow."
+                title="How does Zenith connect to my bookkeeping?"
+                description="Zenith seamlessly integrates with standard bookkeeping packages like Odoo, QuickBooks and Yuki. Simply connect your account and Zenith will automatically sync with your clients' bookkeeping, providing real-time analysis and insights without disrupting your existing workflow."
                 isExpanded={expandedBenefit === 'faq-1'}
                 onClick={() => handleBenefitClick('faq-1')}
               />
               <BenefitItem
                 icon={<Wand2 className="w-6 h-6 text-green-600" />}
-                title="What types of financial models can Zenith analyze?"
-                description="Zenith can analyze complex financial models including cash flow projections, P&L statements, balance sheets, and scenario planning models. Our AI understands sophisticated financial structures and can provide insights on everything from startup burn rates to enterprise-level financial planning."
+                title="What types of checks can Zenith address?"
+                description="Zenith can analyze complex checks like the number of debit creditors, supplier invoices in concept. Our AI understands the sophisticated structure of bookkeeping and can provide insights for SMEs in any industry."
                 isExpanded={expandedBenefit === 'faq-2'}
                 onClick={() => handleBenefitClick('faq-2')}
               />
               <BenefitItem
                 icon={<AlertTriangle className="w-6 h-6 text-orange-600" />}
                 title="How do the smart alerts work?"
-                description="Zenith continuously monitors your financial models and alerts you when key metrics deviate from your projections. You'll receive notifications about cash runway concerns, unexpected spending patterns, or when your assumptions need attention, helping you take action before problems become critical."
+                description="Zenith continuously monitors your financial models and alerts you when key metrics deviate from your projections. You'll receive notifications when checks are not passed, unexpected spending patterns, or when your assumptions need attention, helping you take action before problems become critical."
                 isExpanded={expandedBenefit === 'faq-3'}
                 onClick={() => handleBenefitClick('faq-3')}
               />

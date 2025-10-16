@@ -1,12 +1,13 @@
 import React from 'react'
 import PropTypes from 'prop-types'
 
+// TODO: enable when in platform spreadsheets are available
 // Minimal read-only spreadsheet grid
 // - Renders a 2D array with row/column headers
 // - All editing/formatting/export logic removed
 // - TODO: Add tabs UI when sheet names are available
 
-const ReactSpreadsheet = ({ data = [], allSheetsData = {}, currentSheetName = 'Sheet1', onTabChange = () => {} }) => {
+const ReactSpreadsheet = ({ data = [] }) => {
   const columnCount = data[0]?.length || 0
   const rowCount = data.length || 0
 
@@ -38,7 +39,7 @@ const ReactSpreadsheet = ({ data = [], allSheetsData = {}, currentSheetName = 'S
 
       <div style={{ width: '100%', height: '100%', overflow: 'auto' }}>
         <table className="excel-grid w-full border-collapse">
-          <thead className="sticky top-0 bg-white z-30">
+          <thead className="sticky top-0 bg-white z-10">
             <tr>
               <th className="bg-gray-100 border border-gray-300 text-center text-xs font-medium text-gray-700 py-2" />
               {Array.from({ length: columnCount }, (_, colIndex) => (
@@ -72,10 +73,7 @@ const ReactSpreadsheet = ({ data = [], allSheetsData = {}, currentSheetName = 'S
 }
 
 ReactSpreadsheet.propTypes = {
-  data: PropTypes.arrayOf(PropTypes.arrayOf(PropTypes.object)),
-  allSheetsData: PropTypes.object,
-  currentSheetName: PropTypes.string,
-  onTabChange: PropTypes.func
+  data: PropTypes.arrayOf(PropTypes.arrayOf(PropTypes.object))
 }
 
 export default ReactSpreadsheet

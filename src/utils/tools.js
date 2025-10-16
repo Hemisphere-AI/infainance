@@ -18,13 +18,18 @@ export const tools = [
             description: "Confidence level in the answer",
             enum: ["high", "medium", "low"]
           },
-          sources: {
-            type: "array",
-            items: { type: "string" },
-            description: "List of cell addresses or data sources used to reach this conclusion"
+
+          acceptance_criteria: {
+            type: "string",
+            description: "The acceptance criteria for this check - what conditions must be met for the check to pass"
+          },
+          status: {
+            type: "string",
+            description: "The status of the check based on the analysis and acceptance criteria",
+            enum: ["passed", "failed", "unknown", "warning"]
           }
         },
-        required: ["answer", "confidence"]
+        required: ["answer", "confidence", "acceptance_criteria", "status"]
       }
     }
   },
@@ -69,27 +74,25 @@ export const tools = [
 ];
 
 // System prompt for the LLM
-export const SYSTEM_PROMPT = `You are SpreadsheetCopilot for a Excel-like app.
+// export const SYSTEM_PROMPT = `You are SpreadsheetCopilot for a Excel-like app.
 
-## SPREADSHEET DATA STRUCTURE
-The spreadsheet data is always organized in a 2D grid:
-- **X-axis (columns)**: Could represent a unit of time  i.e. week, month, year, etc. but not exclusively.
-- **Y-axis (rows)**: Represent different entities, categories, but not exclusively.
+// ## SPREADSHEET DATA STRUCTURE
+// The spreadsheet data is always organized in a 2D grid:
+// - **X-axis (columns)**: Could represent a unit of time  i.e. week, month, year, etc. but not exclusively.
+// - **Y-axis (rows)**: Represent different entities, categories, but not exclusively.
 
-## CORE RULES
-**CRITICAL: You MUST use end with the 'conclude' tool to provide your final answer. Before using conclude: You MUST verify there are no open ends left in your analysis.**
+// ## CORE RULES
+// **CRITICAL: You MUST use end with the 'conclude' tool to provide your final answer. Before using conclude: You MUST verify there are no open ends left in your analysis.**
 
-**WORKFLOW IS MANDATORY:**
-1. **PLAN**: Create a step wise plan how to best answer the question, what tools to use and in what order.  
-2. **EXECUTE**: Use appropriate tools to execute the plan. 
-3. **ANALYZE**: Review all tool outputs and results and check if there are any open ends left in your analysis or some tools need to be called again or recursively.
-4. **CONCLUDE**: Call the 'conclude' tool with your final answer.
+// **WORKFLOW IS MANDATORY:**
+// 1. **PLAN**: Create a step wise plan how to best answer the question, what tools to use and in what order.  
+// 2. **EXECUTE**: Use appropriate tools to execute the plan. 
+// 3. **ANALYZE**: Review all tool outputs and results and check if there are any open ends left in your analysis or some tools need to be called again or recursively.
+// 4. **CONCLUDE**: Call the 'conclude' tool with your final answer.
 
-**IMPORTANT TOOL USAGE RULES:**
-- When update_cell returns success: true, the task is complete - call conclude immediately
-- When updating a direct coordinate where the value and/or formula is clear, you don't need to read spreadsheet data before concluding
-- Do NOT repeat the same tool call multiple times unless there's an error
-- Always check tool results for success/failure status before proceeding
-
-`;
+// **IMPORTANT TOOL USAGE RULES:**
+// - When update_cell returns success: true, the task is complete - call conclude immediately
+// - When updating a direct coordinate where the value and/or formula is clear, you don't need to read spreadsheet data before concluding
+// - Do NOT repeat the same tool call multiple times unless there's an error
+// - Always check tool results for success/failure status before proceeding
 
