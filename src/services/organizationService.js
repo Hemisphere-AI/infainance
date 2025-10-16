@@ -120,7 +120,7 @@ class OrganizationService {
   /**
    * Create or update organization integration
    */
-  async upsertOrganizationIntegration(organizationId, integrationName, apiKey, config = {}, userId) {
+  async upsertOrganizationIntegration(organizationId, integrationName, apiKey, config = {}, userId, odooUrl, odooDb, odooUsername) {
     try {
       // console.log('🔍 OrganizationService: Creating integration for:', { organizationId, integrationName, userId })
       const response = await fetch(`${BACKEND_URL}/api/organizations/${organizationId}/integrations`, {
@@ -132,7 +132,10 @@ class OrganizationService {
           userId,
           integrationName,
           apiKey,
-          config
+          config,
+          odooUrl,
+          odooDb,
+          odooUsername
         })
       })
       

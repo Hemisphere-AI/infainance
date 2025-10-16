@@ -70,7 +70,19 @@ async function getMCPOdooClient() {
 let odooAiAgentInstance = null
 let odooAiAgentPromise = null
 
-async function getOdooAiAgent() {
+async function getOdooAiAgent(customConfig = null) {
+  // If custom config is provided, create a new instance with that config
+  if (customConfig) {
+    const { OdooAiAgent } = await import('./services/odooAiAgent.js')
+    const instance = new OdooAiAgent(customConfig)
+    const initialized = await instance.initialize()
+    if (!initialized) {
+      throw new Error('Failed to initialize Odoo AI Agent with custom config')
+    }
+    return instance
+  }
+  
+  // Use cached instance for default configuration
   if (!odooAiAgentInstance) {
     if (!odooAiAgentPromise) {
       odooAiAgentPromise = (async () => {
@@ -117,12 +129,42 @@ app.get('/test', (req, res) => {
 })
 
 // MCP Odoo Integration endpoints
-app.get('/api/odoo/config', (req, res) => {
+app.get('/api/odoo/config', async (req, res) => {
   try {
+    const { organizationId } = req.query;
+    
+    // If organizationId is provided, try to get organization-specific config
+    if (organizationId) {
+      try {
+        const orgService = await getOrganizationService();
+        const result = await orgService.getOrganizationIntegrations(organizationId, 'system'); // Use system user for config lookup
+        
+        if (result.success && result.integrations) {
+          const odooIntegration = result.integrations.find(integration => 
+            integration.integration_name === 'odoo' && integration.is_active
+          );
+          
+          if (odooIntegration) {
+            const config = {
+              url: odooIntegration.odoo_url || process.env.ODOO_URL,
+              db: odooIntegration.odoo_db || process.env.ODOO_DB,
+              apiKey: odooIntegration.api_key || process.env.ODOO_API_KEY,
+              username: odooIntegration.odoo_username || process.env.ODOO_USERNAME
+            };
+            return res.json(config);
+          }
+        }
+      } catch (orgError) {
+        console.warn('Failed to get organization-specific Odoo config, falling back to environment:', orgError.message);
+      }
+    }
+    
+    // Fallback to environment variables
     const config = {
       url: process.env.ODOO_URL,
       db: process.env.ODOO_DB,
-      apiKey: process.env.ODOO_API_KEY
+      apiKey: process.env.ODOO_API_KEY,
+      username: process.env.ODOO_USERNAME
     }
     res.json(config)
   } catch (error) {
@@ -331,9 +373,10 @@ app.get('/api/mcp/record/:model/:id', async (req, res) => {
 // AI-driven Odoo check execution endpoint
 app.post('/api/odoo/check', async (req, res) => {
   try {
-    const { checkDescription, checkTitle, checkId } = req.body
+    const { checkDescription, checkTitle, checkId, organizationId, acceptanceCriteria } = req.body
     
-    console.log('Received AI check request:', { checkDescription, checkTitle, checkId });
+    console.log('🎯 API request:', checkTitle);
+    console.log('🔍 Organization ID:', organizationId);
     
     if (!checkDescription) {
       return res.status(400).json({ 
@@ -342,11 +385,62 @@ app.post('/api/odoo/check', async (req, res) => {
       })
     }
     
-    // Get the AI Agent
-    const aiAgent = await getOdooAiAgent()
+    // Get organization-specific Odoo configuration if organizationId is provided
+    let odooConfig = null;
+    if (organizationId) {
+      try {
+        console.log('🔍 Fetching organization integrations for ID:', organizationId);
+        const orgService = await getOrganizationService();
+        const result = await orgService.getOrganizationIntegrations(organizationId, 'system');
+        
+        console.log('📊 Organization integrations result:', {
+          success: result.success,
+          integrationsCount: result.integrations?.length || 0,
+          integrations: result.integrations
+        });
+        
+        if (result.success && result.integrations) {
+          const odooIntegration = result.integrations.find(integration => 
+            integration.integration_name === 'odoo' && integration.is_active
+          );
+          
+          console.log('🎯 Found Odoo integration:', odooIntegration);
+          
+          if (odooIntegration) {
+            odooConfig = {
+              url: odooIntegration.odoo_url || process.env.ODOO_URL,
+              db: odooIntegration.odoo_db || process.env.ODOO_DB,
+              apiKey: odooIntegration.api_key || process.env.ODOO_API_KEY,
+              username: odooIntegration.odoo_username || process.env.ODOO_USERNAME
+            };
+            console.log('🔧 Using organization-specific Odoo config:', {
+              url: odooConfig.url,
+              db: odooConfig.db,
+              hasApiKey: !!odooConfig.apiKey,
+              username: odooConfig.username,
+              apiKeyValue: odooConfig.apiKey // Log the actual API key for debugging
+            });
+          } else {
+            console.log('⚠️ No active Odoo integration found for organization');
+          }
+        } else {
+          console.log('❌ Failed to get organization integrations:', result.error);
+        }
+      } catch (orgError) {
+        console.warn('Failed to get organization-specific Odoo config, using default:', orgError.message);
+      }
+    } else {
+      console.log('⚠️ No organizationId provided, using environment variables');
+    }
+    
+    // Get the AI Agent (will use organization-specific config if available)
+    const aiAgent = await getOdooAiAgent(odooConfig)
     
     // Execute AI-driven check
-    const result = await aiAgent.executeCheck(checkDescription, checkTitle)
+    const result = await aiAgent.executeCheck(checkDescription, checkTitle, acceptanceCriteria || '')
+    console.log('🧠 Agent conclude status:', result?.status || 'unknown')
+    
+    console.log('✅ API response sent');
     
     // Save results to database if checkId is provided (always save, regardless of success)
     if (checkId) {
@@ -360,7 +454,7 @@ app.post('/api/odoo/check', async (req, res) => {
           
           const resultData = {
             check_id: checkId,
-            status: result.success ? 'completed' : 'failed',
+            status: result.status || 'unknown',
             executed_at: new Date().toISOString(),
             duration: result.duration || 0,
             success: result.success || false,
@@ -382,6 +476,18 @@ app.post('/api/odoo/check', async (req, res) => {
             console.error('Result data:', JSON.stringify(resultData, null, 2))
           } else {
             console.log('✅ Check results saved to database')
+            console.log('🧩 Saved check_result status:', resultData.status)
+            // Also update root check status if we have a status from the agent
+            if (result.status) {
+              const { error: updateCheckError } = await supabase
+                .from('checks')
+                .update({ status: result.status, updated_at: new Date().toISOString() })
+                .eq('id', checkId)
+              if (updateCheckError) {
+                console.error('Failed to update root check status:', updateCheckError)
+              }
+              console.log('📦 Updated root check status:', result.status)
+            }
           }
         } else {
           console.warn('⚠️ Supabase configuration missing - results not saved to database')
@@ -553,7 +659,52 @@ app.post('/api/checks/run', async (req, res) => {
   }
 });
 
-// MCP integration is now handled by the MCPOdooClient class
+// Clear check results for a specific check (to force fresh analysis)
+app.delete('/api/checks/:checkId/results', async (req, res) => {
+  try {
+    const { checkId } = req.params;
+    
+    const { createClient } = await import('@supabase/supabase-js');
+    const supabaseUrl = process.env.VITE_SUPABASE_URL;
+    const supabaseKey = process.env.VITE_SUPABASE_ANON_KEY;
+    
+    if (!supabaseUrl || !supabaseKey) {
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Database configuration missing' 
+      });
+    }
+    
+    const supabase = createClient(supabaseUrl, supabaseKey);
+    
+    // Delete all results for this check
+    const { error } = await supabase
+      .from('checks_results')
+      .delete()
+      .eq('check_id', checkId);
+    
+    if (error) {
+      console.error('Failed to clear check results:', error);
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Failed to clear check results',
+        details: error.message
+      });
+    }
+    
+    res.json({
+      success: true,
+      message: 'Check results cleared successfully'
+    });
+  } catch (error) {
+    console.error('Clear check results failed:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
 
 // Initialize Google APIs with service account - DISABLED
 // let sheets, drive, auth
@@ -594,10 +745,10 @@ app.post('/api/checks/run', async (req, res) => {
 //   process.exit(1)
 // }
 
-console.log('⚠️ Google Sheets API endpoints are disabled')
+// console.log('⚠️ Google Sheets API endpoints are disabled')
 
 // API Routes
-console.log('🔧 Setting up API routes...')
+// console.log('🔧 Setting up API routes...')
 
 /**
  * Create a new spreadsheet for a user - DISABLED
@@ -1041,7 +1192,6 @@ app.get('/api/organizations/:organizationId/checks-mock', async (req, res) => {
           name: 'Test Check 1',
           description: 'This is a test check',
           status: 'active',
-          is_checked: false,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString()
         },
@@ -1051,7 +1201,6 @@ app.get('/api/organizations/:organizationId/checks-mock', async (req, res) => {
           name: 'Test Check 2',
           description: 'Another test check',
           status: 'completed',
-          is_checked: true,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString()
         }
@@ -1157,7 +1306,6 @@ app.post('/api/organizations/:organizationId/checks-mock', async (req, res) => {
         name: name,
         description: description || '',
         status: 'active',
-        is_checked: false,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       }
@@ -1273,7 +1421,7 @@ app.get('/api/organizations/:organizationId/integrations', async (req, res) => {
 app.post('/api/organizations/:organizationId/integrations', async (req, res) => {
   try {
     const { organizationId } = req.params
-    const { userId, integrationName, apiKey, config } = req.body
+    const { userId, integrationName, apiKey, config, odooUrl, odooDb, odooUsername } = req.body
     
     if (!userId || !integrationName || !apiKey) {
       return res.status(400).json({ 
@@ -1288,7 +1436,10 @@ app.post('/api/organizations/:organizationId/integrations', async (req, res) => 
       integrationName, 
       apiKey, 
       config || {}, 
-      userId
+      userId,
+      odooUrl,
+      odooDb,
+      odooUsername
     )
     
     res.json(result)
@@ -1380,7 +1531,7 @@ app.post('/api/organizations/:organizationId/checks', async (req, res) => {
 app.put('/api/checks/:checkId', async (req, res) => {
   try {
     const { checkId } = req.params
-    const { userId, name, description, status, is_checked } = req.body
+    const { userId, name, description, status } = req.body
 
     if (!userId) {
       return res.status(400).json({
@@ -1394,7 +1545,6 @@ app.put('/api/checks/:checkId', async (req, res) => {
     if (name !== undefined) updates.name = name
     if (description !== undefined) updates.description = description
     if (status !== undefined) updates.status = status
-    if (is_checked !== undefined) updates.is_checked = is_checked
 
     const result = await orgService.updateOrganizationCheck(checkId, updates, userId)
 

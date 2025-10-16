@@ -315,9 +315,13 @@ const ChatInterface = ({ onSendMessage, isLoading = false, onToolCall = null, on
         const answer = toolCall.result?.answer || 'No answer provided';
         const confidence = toolCall.result?.confidence || 'unknown';
         const sources = toolCall.result?.sources || [];
+        const acceptanceCriteria = toolCall.result?.acceptance_criteria || 'No acceptance criteria provided';
+        const status = toolCall.result?.status || 'unknown';
         return [
           `🎯 Final Answer: ${answer.length > 100 ? answer.substring(0, 100) + '...' : answer}`,
           `🎯 Confidence: ${confidence}`,
+          `📋 Acceptance Criteria: ${acceptanceCriteria.length > 100 ? acceptanceCriteria.substring(0, 100) + '...' : acceptanceCriteria}`,
+          `📊 Status: ${status}`,
           ...(sources.length > 0 ? [`📚 Sources: ${sources.length} references`] : [])
         ];
       } else if (toolCall.tool === 'read_cell') {

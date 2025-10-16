@@ -125,7 +125,7 @@ const OrganizationManagement = ({
     setIsEditingName(false);
   }, [organization?.name]);
 
-  const handleIntegrationSave = useCallback(async (integrationName, apiKey) => {
+  const handleIntegrationSave = useCallback(async (integrationName, apiKey, odooUrl, odooDb, odooUsername) => {
     if (!organization?.id || !integrationName || !apiKey || !user?.id) return;
 
     try {
@@ -139,7 +139,10 @@ const OrganizationManagement = ({
         integrationName,
         apiKey,
         {},
-        userId
+        userId,
+        odooUrl,
+        odooDb,
+        odooUsername
       );
       
       if (result.success) {
@@ -259,10 +262,16 @@ const IntegrationCard = ({ integration, onUpdate }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [integrationName, setIntegrationName] = useState(integration.integration_name);
   const [apiKey, setApiKey] = useState('••••••••••••••••');
+  // eslint-disable-next-line react/prop-types
+  const [odooUrl, setOdooUrl] = useState(integration.odoo_url || '');
+  // eslint-disable-next-line react/prop-types
+  const [odooDb, setOdooDb] = useState(integration.odoo_db || '');
+  // eslint-disable-next-line react/prop-types
+  const [odooUsername, setOdooUsername] = useState(integration.odoo_username || '');
 
   const handleSave = () => {
     if (integrationName && apiKey && apiKey !== '••••••••••••••••') {
-      onUpdate(integrationName, apiKey);
+      onUpdate(integrationName, apiKey, odooUrl, odooDb, odooUsername);
       setIsEditing(false);
     }
   };
@@ -270,6 +279,12 @@ const IntegrationCard = ({ integration, onUpdate }) => {
   const handleCancel = () => {
     setIntegrationName(integration.integration_name);
     setApiKey('••••••••••••••••');
+    // eslint-disable-next-line react/prop-types
+    setOdooUrl(integration.odoo_url || '');
+    // eslint-disable-next-line react/prop-types
+    setOdooDb(integration.odoo_db || '');
+    // eslint-disable-next-line react/prop-types
+    setOdooUsername(integration.odoo_username || '');
     setIsEditing(false);
   };
 
@@ -303,6 +318,46 @@ const IntegrationCard = ({ integration, onUpdate }) => {
                   className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
+              {integrationName === 'odoo' && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Odoo URL
+                    </label>
+                    <input
+                      type="url"
+                      value={odooUrl}
+                      onChange={(e) => setOdooUrl(e.target.value)}
+                      placeholder="your-app.odoo.com"
+                      className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Odoo Database
+                    </label>
+                    <input
+                      type="text"
+                      value={odooDb}
+                      onChange={(e) => setOdooDb(e.target.value)}
+                      placeholder="database1"
+                      className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Odoo Username
+                    </label>
+                    <input
+                      type="text"
+                      value={odooUsername}
+                      onChange={(e) => setOdooUsername(e.target.value)}
+                      placeholder="your-email@email.com"
+                      className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                </>
+              )}
               <div className="flex space-x-2">
                 <button
                   onClick={handleSave}
@@ -322,6 +377,13 @@ const IntegrationCard = ({ integration, onUpdate }) => {
             <div>
               <h4 className="font-medium text-gray-900 capitalize">{integration.integration_name}</h4>
               <p className="text-sm text-gray-500">API Key: {apiKey}</p>
+              {integrationName === 'odoo' && (
+                <div className="mt-2 space-y-1">
+                  <p className="text-sm text-gray-500">URL: {odooUrl || 'Not configured'}</p>
+                  <p className="text-sm text-gray-500">Database: {odooDb || 'Not configured'}</p>
+                  <p className="text-sm text-gray-500">Username: {odooUsername || 'Not configured'}</p>
+                </div>
+              )}
               <p className="text-xs text-gray-400 mt-1">
                 {integration.is_active ? 'Active' : 'Inactive'} • 
                 Updated {new Date(integration.updated_at).toLocaleDateString()}
@@ -347,12 +409,18 @@ const IntegrationForm = ({ onSave }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [integrationName, setIntegrationName] = useState('odoo');
   const [apiKey, setApiKey] = useState('');
+  const [odooUrl, setOdooUrl] = useState('');
+  const [odooDb, setOdooDb] = useState('');
+  const [odooUsername, setOdooUsername] = useState('');
 
   const handleSave = () => {
     if (integrationName && apiKey) {
-      onSave(integrationName, apiKey);
+      onSave(integrationName, apiKey, odooUrl, odooDb, odooUsername);
       setIntegrationName('odoo');
       setApiKey('');
+      setOdooUrl('');
+      setOdooDb('');
+      setOdooUsername('');
       setIsOpen(false);
     }
   };
@@ -360,6 +428,9 @@ const IntegrationForm = ({ onSave }) => {
   const handleCancel = () => {
     setIntegrationName('odoo');
     setApiKey('');
+    setOdooUrl('');
+    setOdooDb('');
+    setOdooUsername('');
     setIsOpen(false);
   };
 
@@ -403,6 +474,46 @@ const IntegrationForm = ({ onSave }) => {
             className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
+        {integrationName === 'odoo' && (
+          <>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Odoo URL
+              </label>
+              <input
+                type="url"
+                value={odooUrl}
+                onChange={(e) => setOdooUrl(e.target.value)}
+                placeholder="your-app.odoo.com"
+                className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Odoo Database
+              </label>
+              <input
+                type="text"
+                value={odooDb}
+                onChange={(e) => setOdooDb(e.target.value)}
+                placeholder="database1"
+                className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Odoo Username
+              </label>
+              <input
+                type="text"
+                value={odooUsername}
+                onChange={(e) => setOdooUsername(e.target.value)}
+                placeholder="your-email@email.com"
+                className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+          </>
+        )}
         <div className="flex space-x-2">
           <button
             onClick={handleSave}
@@ -420,6 +531,21 @@ const IntegrationForm = ({ onSave }) => {
       </div>
     </div>
   );
+};
+
+IntegrationCard.propTypes = {
+  integration: PropTypes.shape({
+    id: PropTypes.string.isRequired,
+    integration_name: PropTypes.string.isRequired,
+    api_key: PropTypes.string,
+    odoo_url: PropTypes.string,
+    odoo_db: PropTypes.string,
+    odoo_username: PropTypes.string,
+    is_active: PropTypes.bool,
+    created_at: PropTypes.string,
+    updated_at: PropTypes.string
+  }).isRequired,
+  onUpdate: PropTypes.func.isRequired
 };
 
 OrganizationManagement.propTypes = {

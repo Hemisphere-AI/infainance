@@ -280,46 +280,40 @@ function MainSpreadsheetApp({ user }) {
     return () => {
       isMounted = false
     }
-  }, [user?.id, currentOrganizationId, loadOrganizationChecksForSidebar])
+  }, [user?.id, currentOrganizationId, loadOrganizationChecksForSidebar, organizationId])
 
   // Load checks for current organization
-  useEffect(() => {
-    let isMounted = true
-    const loadOrganizationChecks = async () => {
-      if (!currentOrganizationId || !user?.id) {
-        return
-      }
+  const loadOrganizationChecks = useCallback(async () => {
+    if (!currentOrganizationId || !user?.id) {
+      return
+    }
 
-      try {
-        const result = await organizationService.getOrganizationChecks(currentOrganizationId, user.id)
-        if (!isMounted) return
-        
-        if (result.success) {
-          setChecks(prev => {
-            // Remove existing checks for this organization and add new ones
-            const otherChecks = prev.filter(check => check.organization_id !== currentOrganizationId)
-            return [...otherChecks, ...(result.checks || [])]
-          })
-          // Auto-select first check if none selected
-          if (result.checks?.length > 0 && !currentCheckId) {
-            setCurrentCheckId(result.checks[0].id)
-          } else if (result.checks?.length === 0) {
-            setCurrentCheckId(null)
-          }
-        } else {
-          console.error('Failed to load checks:', result.error)
+    try {
+      const result = await organizationService.getOrganizationChecks(currentOrganizationId, user.id)
+      
+      if (result.success) {
+        setChecks(prev => {
+          // Remove existing checks for this organization and add new ones
+          const otherChecks = prev.filter(check => check.organization_id !== currentOrganizationId)
+          return [...otherChecks, ...(result.checks || [])]
+        })
+        // Auto-select first check if none selected
+        if (result.checks?.length > 0 && !currentCheckId) {
+          setCurrentCheckId(result.checks[0].id)
+        } else if (result.checks?.length === 0) {
+          setCurrentCheckId(null)
         }
-      } catch (err) {
-        console.error('Failed to load organization checks:', err)
+      } else {
+        console.error('Failed to load checks:', result.error)
       }
+    } catch (err) {
+      console.error('Failed to load organization checks:', err)
     }
+  }, [currentOrganizationId, user?.id, currentCheckId])
 
+  useEffect(() => {
     loadOrganizationChecks()
-
-    return () => {
-      isMounted = false
-    }
-  }, [currentOrganizationId, user?.id])
+  }, [loadOrganizationChecks])
 
   // TODO: enable when in platform spreadsheets are available
   // Load user's spreadsheets
@@ -716,17 +710,19 @@ function MainSpreadsheetApp({ user }) {
     try {
       const target = checks.find(c => c.id === checkId)
       if (!target) return
-      const nextChecked = !target.is_checked
+      
+      // Toggle between 'passed' (checked) and 'active' (unchecked) status
+      const nextStatus = target.status === 'passed' ? 'active' : 'passed'
 
       const { error } = await supabase
         .from('checks')
-        .update({ is_checked: nextChecked })
+        .update({ status: nextStatus })
         .eq('id', checkId)
         .eq('organization_id', currentOrganizationId)
       if (error) throw error
       setChecks(prev => prev.map(check => 
         check.id === checkId 
-          ? { ...check, is_checked: nextChecked, updated_at: new Date().toISOString() }
+          ? { ...check, status: nextStatus, updated_at: new Date().toISOString() }
           : check
       ))
     } catch (err) {
@@ -749,6 +745,24 @@ function MainSpreadsheetApp({ user }) {
       ))
     } catch (err) {
       console.error('Failed to update description:', err)
+    }
+  }, [currentOrganizationId])
+
+  const handleUpdateAcceptanceCriteria = useCallback(async (checkId, newAcceptanceCriteria) => {
+    try {
+      const { error } = await supabase
+        .from('checks')
+        .update({ acceptance_criteria: newAcceptanceCriteria })
+        .eq('id', checkId)
+        .eq('organization_id', currentOrganizationId)
+      if (error) throw error
+      setChecks(prev => prev.map(check => 
+        check.id === checkId 
+          ? { ...check, acceptance_criteria: newAcceptanceCriteria, updated_at: new Date().toISOString() }
+          : check
+      ))
+    } catch (err) {
+      console.error('Failed to update acceptance criteria:', err)
     }
   }, [currentOrganizationId])
 
@@ -838,13 +852,16 @@ function MainSpreadsheetApp({ user }) {
                 <CheckResult 
                   checks={checks}
                   currentCheckId={currentCheckId}
+                  organizationId={currentOrganizationId}
                   onCheckSelect={handleCheckSelect}
                   onCreateCheck={handleCreateCheck}
                   onRenameCheck={handleRenameCheck}
                   onDeleteCheck={handleDeleteCheck}
                   onToggleCheck={handleToggleCheck}
                   onUpdateDescription={handleUpdateDescription}
+                  onUpdateAcceptanceCriteria={handleUpdateAcceptanceCriteria}
                   onRunAnalysis={handleRunAnalysis}
+                  onRefreshChecks={loadOrganizationChecks}
                   user={user}
                 />
               ) : currentOrganizationId && user?.id ? (

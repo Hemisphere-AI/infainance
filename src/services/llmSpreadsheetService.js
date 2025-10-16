@@ -432,15 +432,16 @@ export class LLMSpreadsheetService {
   /**
    * Conclude the analysis with a final answer
    */
-  conclude(answer, confidence, sources = []) {
-    console.log(`Concluding analysis with answer: ${answer}, confidence: ${confidence}`);
+  conclude(answer, confidence, sources = [], acceptanceCriteria = '', status = 'unknown') {
+    console.log(`Concluding analysis with answer: ${answer}, confidence: ${confidence}, status: ${status}`);
     
     return {
       answer: answer,
       confidence: confidence,
       sources: sources,
-      timestamp: new Date().toISOString(),
-      status: "concluded"
+      acceptance_criteria: acceptanceCriteria,
+      status: status,
+      timestamp: new Date().toISOString()
     };
   }
 

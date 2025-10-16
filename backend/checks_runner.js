@@ -292,7 +292,7 @@ class ChecksRunner {
       
       const resultData = {
         check_id: checkId,
-        status: result.success ? 'completed' : 'failed',
+        status: result.status || 'unknown',
         executed_at: result.timestamp || new Date().toISOString(),
         duration: result.duration || 0,
         success: result.success || false,
@@ -315,6 +315,16 @@ class ChecksRunner {
         return false;
       } else {
         console.log('✅ Check results saved to database');
+        // Update root check status when agent provides one
+        if (result.status) {
+          const { error: updateCheckError } = await supabase
+            .from('checks')
+            .update({ status: result.status, updated_at: new Date().toISOString() })
+            .eq('id', checkId);
+          if (updateCheckError) {
+            console.error('Failed to update root check status:', updateCheckError);
+          }
+        }
         return true;
       }
     } catch (error) {

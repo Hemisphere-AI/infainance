@@ -1,6 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import PropTypes from 'prop-types';
-import { CheckSquare, Square, Plus, ChevronLeft, ChevronRight, X, Building2, ChevronDown, ChevronRight as ChevronRightIcon } from 'lucide-react';
+import { Square, Plus, ChevronLeft, ChevronRight, Building2, ChevronDown, ChevronRight as ChevronRightIcon, X } from 'lucide-react';
+import { getStatusIcon } from '../utils/statusIcons.jsx';
 
 // TODO: Enable tooltip when multiple components
 const Sidebar = ({ 
@@ -118,20 +119,53 @@ const Sidebar = ({
         </button>
         
         <div className="flex-1 flex flex-col items-center space-y-2 mt-4">
-          {organizations.slice(0, 3).map((organization) => (
-            <button
-              key={organization.id}
-              onClick={() => onOrganizationSelect && onOrganizationSelect(organization.id)}
-              className={`p-2 rounded-lg transition-colors ${
-                currentOrganizationId === organization.id
-                  ? 'bg-blue-100 text-blue-600'
-                  : 'hover:bg-gray-100'
-              }`}
-              title={organization.name}
-            >
-              <Building2 className="w-5 h-5 text-gray-500" />
-            </button>
-          ))}
+          {organizations.slice(0, 3).map((organization) => {
+            const orgChecks = checks.filter(check => check.organization_id === organization.id);
+            const isOrgExpanded = expandedOrganizations.has(organization.id);
+            const shouldShowChecks = isOrgExpanded && orgChecks.length > 0;
+            
+            return (
+              <div key={organization.id} className="flex flex-col items-center space-y-1">
+                {/* Organization button */}
+                <button
+                  onClick={() => onOrganizationSelect && onOrganizationSelect(organization.id)}
+                  className={`p-2 rounded-lg transition-colors ${
+                    currentOrganizationId === organization.id
+                      ? 'bg-blue-100 text-blue-600'
+                      : 'hover:bg-gray-100'
+                  }`}
+                  title={organization.name}
+                >
+                  <Building2 className="w-5 h-5 text-gray-500" />
+                </button>
+                
+                {/* Check icons below organization */}
+                {shouldShowChecks && (
+                  <div className="flex flex-col items-center space-y-1">
+                    {orgChecks.map((check) => {
+                      const icon = getStatusIcon(check.status, 'w-4 h-4');
+                      const displayIcon = icon || <Square className="w-4 h-4 text-blue-600" />;
+                      
+                      return (
+                        <button
+                          key={check.id}
+                          onClick={() => onCheckSelect && onCheckSelect(check.id)}
+                          className={`p-1 rounded transition-colors ${
+                            currentCheckId === check.id
+                              ? 'bg-blue-100'
+                              : 'hover:bg-gray-100'
+                          }`}
+                          title={`${check.name} - ${check.status || 'open'}`}
+                        >
+                          {displayIcon}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
           
           <button
             onClick={onCreateOrganization}
@@ -259,11 +293,7 @@ const Sidebar = ({
                             className="flex-shrink-0 p-1 hover:bg-blue-100 rounded transition-colors"
                             title="Toggle check status"
                           >
-                            {check.is_checked ? (
-                              <CheckSquare className="w-4 h-4 text-blue-600" />
-                            ) : (
-                              <Square className="w-4 h-4 text-blue-600" />
-                            )}
+                            {getStatusIcon(check.status, 'w-4 h-4')}
                           </button>
                           <div className="flex-1 min-w-0">
                             {editingId === check.id ? (
@@ -341,8 +371,7 @@ Sidebar.propTypes = {
     id: PropTypes.string.isRequired,
     name: PropTypes.string.isRequired,
     description: PropTypes.string,
-    status: PropTypes.oneOf(['active', 'completed', 'cancelled']).isRequired,
-    is_checked: PropTypes.bool,
+    status: PropTypes.oneOf(['active', 'completed', 'cancelled', 'passed', 'failed', 'unknown', 'warning']).isRequired,
     organization_id: PropTypes.string.isRequired
   })).isRequired,
   currentCheckId: PropTypes.string,

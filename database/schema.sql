@@ -62,14 +62,20 @@ CREATE TABLE IF NOT EXISTS "public"."organization_integrations" (
     UNIQUE ("organization_id", "integration_name")
 );
 
+-- Add Odoo-specific fields to organization_integrations table
+ALTER TABLE "public"."organization_integrations" 
+ADD COLUMN IF NOT EXISTS "odoo_url" "text",
+ADD COLUMN IF NOT EXISTS "odoo_db" "text",
+ADD COLUMN IF NOT EXISTS "odoo_username" "text";
+
 -- Create checks table
 CREATE TABLE IF NOT EXISTS "public"."checks" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "organization_id" "uuid" NOT NULL,
     "name" "text" NOT NULL,
     "description" "text" DEFAULT '',
+    "acceptance_criteria" "text" DEFAULT '',
     "status" "text" DEFAULT 'active',
-    "is_checked" boolean DEFAULT false,
     "created_at" timestamp with time zone DEFAULT "now"(),
     "updated_at" timestamp with time zone DEFAULT "now"(),
     PRIMARY KEY ("id"),
@@ -121,7 +127,6 @@ CREATE INDEX IF NOT EXISTS "idx_organization_integrations_is_active" ON "public"
 -- Checks indexes
 CREATE INDEX IF NOT EXISTS "idx_checks_organization_id" ON "public"."checks" ("organization_id");
 CREATE INDEX IF NOT EXISTS "idx_checks_status" ON "public"."checks" ("status");
-CREATE INDEX IF NOT EXISTS "idx_checks_is_checked" ON "public"."checks" ("is_checked");
 
 -- Checks results indexes
 CREATE INDEX IF NOT EXISTS "idx_checks_results_check_id" ON "public"."checks_results" ("check_id");
@@ -284,7 +289,11 @@ COMMENT ON TABLE "public"."checks_results" IS 'Results from running checks';
 COMMENT ON COLUMN "public"."organization_integrations"."integration_name" IS 'Name of the integration (e.g., "odoo", "salesforce")';
 COMMENT ON COLUMN "public"."organization_integrations"."api_key" IS 'API key or authentication token for the integration';
 COMMENT ON COLUMN "public"."organization_integrations"."config" IS 'Additional configuration data as JSON';
+COMMENT ON COLUMN "public"."organization_integrations"."odoo_url" IS 'Odoo instance URL (e.g., "https://hemisphere1.odoo.com/")';
+COMMENT ON COLUMN "public"."organization_integrations"."odoo_db" IS 'Odoo database name (e.g., "hemisphere1")';
+COMMENT ON COLUMN "public"."organization_integrations"."odoo_username" IS 'Odoo username for authentication';
 COMMENT ON COLUMN "public"."checks"."organization_id" IS 'Organization that owns this check';
+COMMENT ON COLUMN "public"."checks"."acceptance_criteria" IS 'Acceptance criteria for the check';
 COMMENT ON COLUMN "public"."checks_results"."duration" IS 'Execution duration in milliseconds';
 COMMENT ON COLUMN "public"."checks_results"."success" IS 'Whether the check execution was successful';
 COMMENT ON COLUMN "public"."checks_results"."query_plan" IS 'AI-generated query plan as JSON';

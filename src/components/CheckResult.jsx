@@ -1,33 +1,33 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import PropTypes from 'prop-types';
 import { 
-  Play, 
   ChevronDown, 
   ChevronRight, 
-  CheckSquare,
-  Square,
   Database,
   Brain,
   Clock,
   Cpu,
   Eye,
-  // FileText, // Unused import
   Loader2,
   CheckCircle,
   AlertTriangle
 } from 'lucide-react';
 // import { supabase } from '../lib/supabase'; // Unused import
 import { formatMarkdown } from '../utils/markdownFormatter';
+import { getStatusIcon } from '../utils/statusIcons.jsx';
 
 const CheckResult = ({
   checks = [],
   currentCheckId,
+  organizationId,
   // onCheckSelect, // Unused parameter
   // onCreateCheck, // Unused parameter
   onRenameCheck,
   // onDeleteCheck, // Unused parameter
   onToggleCheck,
-  onUpdateDescription
+  onUpdateDescription,
+  onUpdateAcceptanceCriteria,
+  onRefreshChecks
   // onRunAnalysis, // Unused parameter
   // user // Unused parameter
 }) => {
@@ -37,6 +37,7 @@ const CheckResult = ({
   // const [modelMetadata, setModelMetadata] = useState({}); // Unused state
   const [executionSteps, setExecutionSteps] = useState({});
   const [descriptionTexts, setDescriptionTexts] = useState({});
+  const [acceptanceCriteriaTexts, setAcceptanceCriteriaTexts] = useState({});
   const [runningChecks, setRunningChecks] = useState(new Set());
   const [editingCheckId, setEditingCheckId] = useState(null);
   const [editingCheckName, setEditingCheckName] = useState('');
@@ -49,7 +50,7 @@ const CheckResult = ({
     const loadOdooConfig = async () => {
       try {
         const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3002';
-        const response = await fetch(`${backendUrl}/api/odoo/config`);
+        const response = await fetch(`${backendUrl}/api/odoo/config?organizationId=${organizationId}`);
         if (response.ok) {
           const config = await response.json();
           setOdooConfig(config);
@@ -59,8 +60,10 @@ const CheckResult = ({
       }
     };
     
-    loadOdooConfig();
-  }, []);
+    if (organizationId) {
+      loadOdooConfig();
+    }
+  }, [organizationId]);
 
   // Load check results history when currentCheckId changes
   useEffect(() => {
@@ -98,17 +101,16 @@ const CheckResult = ({
 
   // Generate Odoo URL for a record
   const getOdooRecordUrl = useCallback((model, recordId) => {
-    if (!odooConfig?.url) return null;
-    
-    // Convert model name to Odoo URL format
-    // e.g., "account.move" -> "account_move"
-    // const modelUrl = model.replace(/\./g, '_'); // Unused variable
+    if (!odooConfig?.url) {
+      return null;
+    }
     
     // Ensure URL doesn't end with slash to avoid double slashes
     const baseUrl = odooConfig.url.replace(/\/$/, '');
     
-    // Construct the Odoo record URL
-    return `${baseUrl}/web#id=${recordId}&model=${model}&view_type=form`;
+    // Construct the Odoo record URL in the format: /odoo/model/id
+    const url = `${baseUrl}/odoo/${model}/${recordId}`;
+    return url;
   }, [odooConfig]);
 
   const handleDescriptionChange = useCallback((checkId, text) => {
@@ -127,6 +129,22 @@ const CheckResult = ({
     }
   }, [onUpdateDescription]);
 
+  const handleAcceptanceCriteriaChange = useCallback((checkId, text) => {
+    setAcceptanceCriteriaTexts(prev => ({
+      ...prev,
+      [checkId]: text
+    }));
+    
+    // Auto-save acceptance criteria after a short delay
+    if (onUpdateAcceptanceCriteria) {
+      const timeoutId = setTimeout(() => {
+        onUpdateAcceptanceCriteria(checkId, text);
+      }, 1000); // 1 second delay
+      
+      return () => clearTimeout(timeoutId);
+    }
+  }, [onUpdateAcceptanceCriteria]);
+
   const getTextareaRows = useCallback((text) => {
     if (!text || !text.trim()) return 1;
     const lines = text.split('\n').length;
@@ -144,7 +162,7 @@ const CheckResult = ({
         [checkId]: {
           status: 'running',
           steps: [
-            { id: 'init', name: 'Initializing check execution', status: 'running', timestamp: new Date() },
+            { id: 'init', name: 'Initializing check execution', status: 'running' },
             { id: 'connect', name: 'Connecting to Odoo database', status: 'pending' },
             { id: 'query', name: 'Executing database query', status: 'pending' },
             { id: 'analyze', name: 'Analyzing results with LLM', status: 'pending' },
@@ -168,10 +186,10 @@ const CheckResult = ({
       const requestBody = {
         checkDescription: check.description || 'Analyze this check',
         checkTitle: check.name || 'Custom Check',
-        checkId: check.id
+        checkId: check.id,
+        organizationId: organizationId,
+        acceptanceCriteria: check.acceptance_criteria || ''
       };
-      
-      console.log('Sending AI check request:', requestBody);
       
       const response = await fetch(`${backendUrl}/api/odoo/check`, {
         method: 'POST',
@@ -184,39 +202,142 @@ const CheckResult = ({
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
         console.error('Backend error response:', errorData);
-        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+        
+        // Handle connection errors - only mark the connect step as failed, others as pending
+        await updateStep(checkId, 'connect', 'error');
+        await updateStep(checkId, 'query', 'pending');
+        await updateStep(checkId, 'analyze', 'pending');
+        await updateStep(checkId, 'complete', 'pending');
+        
+        // Store error result
+        setCheckResults(prev => ({
+          ...prev,
+          [checkId]: {
+            success: false,
+            error: errorData.error || `HTTP error! status: ${response.status}`,
+            connectionError: true,
+            count: 0,
+            duration: 0,
+            tokensUsed: 0,
+            llmAnalysis: errorData.error || 'Connection failed',
+            records: [],
+            queryPlan: null,
+            steps: [],
+            executedAt: new Date()
+          }
+        }));
+        
+        // Expand the check to show results
+        setExpandedChecks(prev => new Set([...prev, checkId]));
+        return; // Exit early for connection errors
       }
 
       const data = await response.json();
       
       if (!data.success) {
-        throw new Error(data.error || 'Check execution failed');
+        // Handle API-level errors - mark connect as completed, query as failed, others as pending
+        await updateStep(checkId, 'connect', 'completed');
+        await updateStep(checkId, 'query', 'error');
+        await updateStep(checkId, 'analyze', 'pending');
+        await updateStep(checkId, 'complete', 'pending');
+        
+        // Store error result
+        setCheckResults(prev => ({
+          ...prev,
+          [checkId]: {
+            success: false,
+            error: data.error || 'Check execution failed',
+            connectionError: true,
+            count: 0,
+            duration: 0,
+            tokensUsed: 0,
+            llmAnalysis: data.error || 'Check execution failed',
+            records: [],
+            queryPlan: null,
+            steps: [],
+            executedAt: new Date()
+          }
+        }));
+        
+        // Expand the check to show results
+        setExpandedChecks(prev => new Set([...prev, checkId]));
+        return; // Exit early for API errors
       }
 
-      // Update steps based on AI agent response
-      if (data.result.steps) {
-        for (const step of data.result.steps) {
-          await updateStep(checkId, step.step, step.status);
-          // Add a small delay for better UX
-          await new Promise(resolve => setTimeout(resolve, 200));
+      // Check for connection errors
+      if (data.result.connectionError || (data.result.success === false && data.result.error)) {
+        // Handle connection error - mark connect as failed, others as pending
+        await updateStep(checkId, 'connect', 'error');
+        await updateStep(checkId, 'query', 'pending');
+        await updateStep(checkId, 'analyze', 'pending');
+        await updateStep(checkId, 'complete', 'pending');
+        
+        // Store error result
+        setCheckResults(prev => ({
+          ...prev,
+          [checkId]: {
+            success: false,
+            error: data.result.error,
+            connectionError: true,
+            count: 0,
+            duration: data.result.duration || 0,
+            tokensUsed: 0,
+            llmAnalysis: data.result.error || 'Connection failed',
+            records: [],
+            queryPlan: data.result.queryPlan || null,
+            steps: data.result.steps || [],
+            executedAt: new Date(data.result.timestamp || new Date().toISOString())
+          }
+        }));
+      } else {
+        // Update steps based on AI agent response for successful connections
+        if (data.result.steps) {
+          for (const step of data.result.steps) {
+            await updateStep(checkId, step.step, step.status);
+            // Add a small delay for better UX
+            await new Promise(resolve => setTimeout(resolve, 200));
+          }
         }
+
+        // Store real results from AI agent
+        setCheckResults(prev => ({
+          ...prev,
+          [checkId]: {
+            success: data.result.success,
+            count: data.result.count,
+            duration: data.result.duration,
+            tokensUsed: data.result.tokensUsed,
+            llmAnalysis: data.result.llmAnalysis,
+            records: data.result.records || [],
+            queryPlan: data.result.queryPlan,
+            steps: data.result.steps,
+            executedAt: new Date(data.result.timestamp)
+          }
+        }));
       }
 
-      // Store real results from AI agent
-      setCheckResults(prev => ({
-        ...prev,
-        [checkId]: {
-          success: data.result.success,
-          count: data.result.count,
-          duration: data.result.duration,
-          tokensUsed: data.result.tokensUsed,
-          llmAnalysis: data.result.llmAnalysis,
-          records: data.result.records || [],
-          queryPlan: data.result.queryPlan,
-          steps: data.result.steps,
-          executedAt: new Date(data.result.timestamp)
+      // Update check status if backend (agent) provided it
+      const statusFromAgent = data?.result?.status;
+      if (statusFromAgent) {
+        try {
+          const { createClient } = await import('@supabase/supabase-js');
+          const supabase = createClient(
+            import.meta.env.VITE_SUPABASE_URL,
+            import.meta.env.VITE_SUPABASE_ANON_KEY
+          );
+          const { error: updateError } = await supabase
+            .from('checks')
+            .update({ status: statusFromAgent, updated_at: new Date().toISOString() })
+            .eq('id', checkId);
+          if (updateError) {
+            console.error('Failed to update check status:', updateError);
+          } else if (onRefreshChecks) {
+            onRefreshChecks();
+          }
+        } catch (err) {
+          console.error('Failed to update check status (agent):', err);
         }
-      }));
+      }
 
       // Expand the check to show results
       setExpandedChecks(prev => new Set([...prev, checkId]));
@@ -270,7 +391,7 @@ const CheckResult = ({
       const steps = prev[checkId]?.steps || [];
       const updatedSteps = steps.map(step => 
         step.id === stepId 
-          ? { ...step, status, timestamp: new Date() }
+          ? { ...step, status }
           : step
       );
       
@@ -311,6 +432,24 @@ const CheckResult = ({
     });
   };
 
+  // Convert milliseconds to hh:mm:ss format
+  const formatDuration = (ms) => {
+    if (!ms || ms === 0) return '0:00:00';
+    
+    const seconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    
+    const remainingMinutes = minutes % 60;
+    const remainingSeconds = seconds % 60;
+    
+    if (hours > 0) {
+      return `${hours}:${remainingMinutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
+    } else {
+      return `${remainingMinutes}:${remainingSeconds.toString().padStart(2, '0')}`;
+    }
+  };
+
   const handleToggleCheck = useCallback(async (checkId) => {
     if (onToggleCheck) {
       await onToggleCheck(checkId);
@@ -340,6 +479,7 @@ const CheckResult = ({
       case 'completed': return <CheckCircle className="w-4 h-4 text-green-500" />;
       case 'running': return <Clock className="w-4 h-4 text-blue-500 animate-spin" />;
       case 'error': return <AlertTriangle className="w-4 h-4 text-red-500" />;
+      case 'pending': return <div className="w-4 h-4 rounded-full border-2 border-gray-300" />;
       default: return <div className="w-4 h-4 rounded-full border-2 border-gray-300" />;
     }
   };
@@ -389,6 +529,7 @@ const CheckResult = ({
   const steps = executionSteps[currentCheck.id];
   const isRunning = runningChecks.has(currentCheck.id);
   const descriptionText = descriptionTexts[currentCheck.id] || currentCheck.description || '';
+  const acceptanceCriteriaText = acceptanceCriteriaTexts[currentCheck.id] || currentCheck.acceptance_criteria || '';
   const history = checkResultsHistory[currentCheck.id] || [];
   const selectedVersionId = selectedResultVersion[currentCheck.id];
 
@@ -414,11 +555,7 @@ const CheckResult = ({
                   onClick={() => handleToggleCheck(currentCheck.id)}
                   className="p-1 hover:bg-gray-100 rounded"
                 >
-                  {currentCheck.is_checked ? (
-                    <CheckSquare className="w-5 h-5 text-blue-600" />
-                  ) : (
-                    <Square className="w-5 h-5 text-blue-600" />
-                  )}
+                  {getStatusIcon(currentCheck.status, 'w-5 h-5')}
                 </button>
                 {editingCheckId === currentCheck.id ? (
                   <input
@@ -468,51 +605,72 @@ const CheckResult = ({
               )}
             </div>
             
-            {/* Description textarea with play button */}
-            <div className="flex items-center space-x-2">
-              <div className="flex-1 text-sm text-gray-600 bg-white p-3 rounded-lg border border-gray-200">
-                <textarea
-                  value={descriptionText}
-                  onChange={(e) => handleDescriptionChange(currentCheck.id, e.target.value)}
-                  className="w-full text-sm text-gray-600 bg-transparent border-none outline-none focus:ring-0 resize-none"
-                  rows={getTextareaRows(descriptionText)}
-                  placeholder="Enter description for this check..."
-                />
-              </div>
-              {/* Play button */}
+            {/* Description textarea */}
+            <div className="text-sm text-gray-600 bg-white p-3 rounded-lg border border-gray-200">
+              <textarea
+                value={descriptionText}
+                onChange={(e) => handleDescriptionChange(currentCheck.id, e.target.value)}
+                className="w-full text-sm text-gray-600 bg-transparent border-none outline-none focus:ring-0 resize-none"
+                rows={getTextareaRows(descriptionText)}
+                placeholder="Enter description for this check..."
+              />
+            </div>
+
+            {/* Acceptance Criteria textarea */}
+            <div className="text-sm text-gray-600 bg-white p-3 rounded-lg border border-gray-200">
+              <textarea
+                value={acceptanceCriteriaText}
+                onChange={(e) => handleAcceptanceCriteriaChange(currentCheck.id, e.target.value)}
+                className="w-full text-sm text-gray-600 bg-transparent border-none outline-none focus:ring-0 resize-none"
+                rows={getTextareaRows(acceptanceCriteriaText)}
+                placeholder="Enter acceptance criteria for this check..."
+              />
+            </div>
+
+            {/* Quick Stats with Run button */}
+            <div className="flex items-center justify-between">
+              {result && (
+                <div className="flex items-center space-x-4 text-sm">
+                  {result.connectionError ? (
+                    <div className="flex items-center space-x-1 text-red-600">
+                      <AlertTriangle className="w-4 h-4" />
+                      <span>Connection failed</span>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex items-center space-x-1">
+                        <Database className="w-4 h-4 text-gray-500" />
+                        <span>{result.count} records found</span>
+                      </div>
+                      <div className="flex items-center space-x-1">
+                        <Clock className="w-4 h-4 text-gray-500" />
+                        <span>{formatDuration(result.duration)}</span>
+                      </div>
+                      {result.tokensUsed && (
+                        <div className="flex items-center space-x-1">
+                          <Brain className="w-4 h-4 text-gray-500" />
+                          <span>{result.tokensUsed} tokens</span>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+              {/* Run button */}
               <button
                 onClick={() => runCheck(currentCheck)}
                 disabled={isRunning}
-                className="w-8 h-8 bg-gray-300 text-gray-600 rounded-full hover:bg-gray-400 transition-colors flex items-center justify-center flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-3 py-1 bg-blue-600 text-white rounded text-xs font-medium hover:bg-blue-700 transition-colors flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
+                style={{ width: '100px' }}
                 title="Run Check"
               >
                 {isRunning ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <Loader2 className="w-3 h-3 animate-spin" />
                 ) : (
-                  <Play className="w-4 h-4" />
+                  "Run"
                 )}
               </button>
             </div>
-
-            {/* Quick Stats */}
-            {result && (
-              <div className="flex items-center space-x-4 text-sm">
-                <div className="flex items-center space-x-1">
-                  <Database className="w-4 h-4 text-gray-500" />
-                  <span>{result.count} records found</span>
-                </div>
-                <div className="flex items-center space-x-1">
-                  <Clock className="w-4 h-4 text-gray-500" />
-                  <span>{result.duration}ms</span>
-                </div>
-                {result.tokensUsed && (
-                  <div className="flex items-center space-x-1">
-                    <Brain className="w-4 h-4 text-gray-500" />
-                    <span>{result.tokensUsed} tokens</span>
-                  </div>
-                )}
-              </div>
-            )}
           </div>
         </div>
 
@@ -528,11 +686,6 @@ const CheckResult = ({
                     <div key={step.id} className="flex items-center space-x-3">
                       {getStepStatusIcon(step.status)}
                       <span className="text-sm text-gray-700">{step.name}</span>
-                            {step.timestamp && (
-                              <span className="text-xs text-gray-500">
-                                {step.timestamp.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                              </span>
-                            )}
                     </div>
                   ))}
                   {steps.error && (
@@ -553,7 +706,14 @@ const CheckResult = ({
                 </h4>
                 <div className="bg-blue-50 p-3 rounded-lg">
                   <div className="text-sm text-gray-700 space-y-2">
-                    <div><strong>Model:</strong> {result.queryPlan.model}</div>
+                    <div><strong>Model:</strong> <code className="bg-white px-2 py-1 rounded text-xs">{result.queryPlan.model}</code> 
+                      <span className="ml-2 text-xs text-gray-500">
+                        {result.queryPlan.model === 'account.move' ? '(Invoices/Journals)' : 
+                         result.queryPlan.model === 'account.move.line' ? '(Accounting Lines)' :
+                         result.queryPlan.model === 'account.bank.statement.line' ? '(Bank Transactions)' :
+                         '(Other Records)'}
+                      </span>
+                    </div>
                     <div><strong>Domain:</strong> <code className="bg-white px-2 py-1 rounded text-xs">{JSON.stringify(result.queryPlan.domain)}</code></div>
                     <div><strong>Fields:</strong> <code className="bg-white px-2 py-1 rounded text-xs">{JSON.stringify(result.queryPlan.fields)}</code></div>
                     {result.queryPlan.reasoning && (
@@ -564,21 +724,35 @@ const CheckResult = ({
               </div>
             )}
 
-            {/* LLM Analysis */}
+            {/* LLM Analysis or Connection Error */}
             {result?.llmAnalysis && (
               <div className="p-4 border-b">
                 <h4 className="font-medium text-gray-900 mb-3 flex items-center space-x-2">
-                  <Brain className="w-4 h-4" />
-                  <span>LLM Analysis</span>
+                  {result.connectionError ? (
+                    <AlertTriangle className="w-4 h-4 text-red-500" />
+                  ) : (
+                    <Brain className="w-4 h-4" />
+                  )}
+                  <span>{result.connectionError ? 'Connection Error' : 'LLM Analysis'}</span>
                 </h4>
-                <div className="bg-gray-50 p-3 rounded-lg">
-                  <div className="prose prose-sm max-w-none">
-                    <div 
-                      dangerouslySetInnerHTML={{ 
-                        __html: formatMarkdown(result.llmAnalysis) 
-                      }} 
-                    />
-                  </div>
+                <div className={`p-3 rounded-lg ${result.connectionError ? 'bg-red-50 border border-red-200' : 'bg-gray-50'}`}>
+                  {result.connectionError ? (
+                    <div className="text-red-700">
+                      <div className="font-medium mb-2">Unable to connect to Odoo database</div>
+                      <div className="text-sm">{result.error}</div>
+                      <div className="text-xs text-red-600 mt-2">
+                        Please check your Odoo configuration and credentials in Organization Management.
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="prose prose-sm max-w-none">
+                      <div 
+                        dangerouslySetInnerHTML={{ 
+                          __html: formatMarkdown(result.llmAnalysis) 
+                        }} 
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -612,14 +786,17 @@ const CheckResult = ({
                               </button>
                             <div>
                               <div className="font-medium text-sm">
-                                {record.name || record.id || `Record ${index + 1}`}
+                                {record.name || 
+                                 (record.ref && record.ref !== false ? record.ref : 
+                                  record.partner_id && Array.isArray(record.partner_id) ? record.partner_id[1] :
+                                  `Record ${index + 1}`)}
                               </div>
                               <div className="text-xs text-gray-500">
                                 ID: {record.id}
-                                {getOdooRecordUrl('account.move', record.id) && (
+                                {result?.queryPlan?.model && getOdooRecordUrl(result.queryPlan.model, record.id) && (
                                   <span className="ml-2">
                                     <a 
-                                      href={getOdooRecordUrl('account.move', record.id)}
+                                      href={getOdooRecordUrl(result.queryPlan.model, record.id)}
                                       target="_blank"
                                       rel="noopener noreferrer"
                                       className="text-blue-600 hover:text-blue-800 underline"
@@ -680,13 +857,16 @@ const CheckResult = ({
 CheckResult.propTypes = {
   checks: PropTypes.array,
   currentCheckId: PropTypes.string,
+  organizationId: PropTypes.string,
   onCheckSelect: PropTypes.func,
   onCreateCheck: PropTypes.func,
   onRenameCheck: PropTypes.func,
   onDeleteCheck: PropTypes.func,
   onToggleCheck: PropTypes.func,
   onUpdateDescription: PropTypes.func,
+  onUpdateAcceptanceCriteria: PropTypes.func,
   onRunAnalysis: PropTypes.func,
+  onRefreshChecks: PropTypes.func,
   user: PropTypes.object
 };
 

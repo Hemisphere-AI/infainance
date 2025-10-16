@@ -4,9 +4,10 @@
 import MCPOdooService from './mcpOdooService.js';
 
 class MCPOdooClient {
-  constructor() {
+  constructor(customConfig = null) {
     this.odooService = null;
     this.initialized = false;
+    this.customConfig = customConfig;
     
     // Observability & Safety Configuration
     this.config = {
@@ -22,7 +23,7 @@ class MCPOdooClient {
   async initialize() {
     try {
       this.log('info', 'Initializing MCP Odoo Client...');
-      this.odooService = new MCPOdooService();
+      this.odooService = new MCPOdooService(this.customConfig);
       this.initialized = await this.odooService.initialize();
       
       if (this.initialized) {

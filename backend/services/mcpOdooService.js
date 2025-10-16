@@ -32,11 +32,19 @@ for (const envPath of envPaths) {
 }
 
 class MCPOdooService {
-  constructor() {
-    this.url = process.env.ODOO_URL;
-    this.db = process.env.ODOO_DB;
-    this.username = process.env.ODOO_USERNAME || 'admin';
-    this.apiKey = process.env.ODOO_API_KEY;
+  constructor(customConfig = null) {
+    // Use custom config if provided, otherwise fall back to environment variables
+    if (customConfig) {
+      this.url = customConfig.url;
+      this.db = customConfig.db;
+      this.username = customConfig.username || 'admin';
+      this.apiKey = customConfig.apiKey;
+    } else {
+      this.url = process.env.ODOO_URL;
+      this.db = process.env.ODOO_DB;
+      this.username = process.env.ODOO_USERNAME || 'admin';
+      this.apiKey = process.env.ODOO_API_KEY;
+    }
     this.uid = null;
   }
 

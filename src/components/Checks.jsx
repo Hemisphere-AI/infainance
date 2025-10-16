@@ -1,7 +1,8 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import PropTypes from 'prop-types';
-import { CheckSquare, Square, Play } from 'lucide-react';
+import { CheckSquare } from 'lucide-react';
 import MCPIntegration from './MCPIntegration';
+import { getStatusIcon } from '../utils/statusIcons.jsx';
 
 const Checks = ({
   checks = [],
@@ -11,12 +12,14 @@ const Checks = ({
   onRenameCheck,
   // onDeleteCheck, // Unused parameter
   onToggleCheck,
-  onUpdateDescription
+  onUpdateDescription,
+  onUpdateAcceptanceCriteria
   // onRunAnalysis // Unused parameter
 }) => {
   const [editingId, setEditingId] = useState(null);
   const [editingName, setEditingName] = useState('');
   const [descriptionText, setDescriptionText] = useState('');
+  const [acceptanceCriteriaText, setAcceptanceCriteriaText] = useState('');
   const [analyzeCheckFunction, setAnalyzeCheckFunction] = useState(null);
 
   const handleRenameStart = useCallback((e, check) => {
@@ -58,12 +61,25 @@ const Checks = ({
     setDescriptionText(e.target.value);
   }, []);
 
+  const handleAcceptanceCriteriaChange = useCallback((e) => {
+    setAcceptanceCriteriaText(e.target.value);
+    
+    // Auto-save acceptance criteria after a short delay
+    if (onUpdateAcceptanceCriteria && currentCheckId) {
+      const timeoutId = setTimeout(() => {
+        onUpdateAcceptanceCriteria(currentCheckId, e.target.value);
+      }, 1000); // 1 second delay
+      
+      return () => clearTimeout(timeoutId);
+    }
+  }, [onUpdateAcceptanceCriteria, currentCheckId]);
+
   // Calculate dynamic rows for textarea - only expand on Enter key
-  const getTextareaRows = useCallback(() => {
-    if (!descriptionText.trim()) return 1;
-    const lines = descriptionText.split('\n').length;
+  const getTextareaRows = useCallback((text) => {
+    if (!text || !text.trim()) return 1;
+    const lines = text.split('\n').length;
     return Math.max(1, Math.min(lines, 6)); // Min 1 row, max 6 rows
-  }, [descriptionText]);
+  }, []);
 
   const handleRunAnalysis = useCallback(async () => {
     if (descriptionText.trim() && currentCheckId && onUpdateDescription) {
@@ -88,10 +104,12 @@ const Checks = ({
 
   const currentCheck = checks.find(check => check.id === currentCheckId);
 
+
   // Initialize description text when check changes
   useEffect(() => {
     if (currentCheck) {
       setDescriptionText(currentCheck.description || '');
+      setAcceptanceCriteriaText(currentCheck.acceptance_criteria || '');
     }
   }, [currentCheck]);
 
@@ -120,13 +138,9 @@ const Checks = ({
                       <button
                         onClick={handleHeaderToggleCheck}
                         className="p-1 hover:bg-blue-100 rounded transition-colors"
-                        title="Toggle check status"
+                        title={`Check status: ${currentCheck.status || 'open'}`}
                       >
-                        {currentCheck.is_checked ? (
-                          <CheckSquare className="w-5 h-5 text-blue-600" />
-                        ) : (
-                          <Square className="w-5 h-5 text-blue-600" />
-                        )}
+                        {getStatusIcon(currentCheck.status, 'w-5 h-5')}
                       </button>
                       <h2
                         className="text-lg font-semibold text-gray-800 cursor-pointer"
@@ -146,18 +160,31 @@ const Checks = ({
                     value={descriptionText}
                     onChange={handleDescriptionChange}
                     className="w-full text-sm text-gray-600 bg-transparent border-none outline-none focus:ring-0 resize-none"
-                    rows={getTextareaRows()}
+                    rows={getTextareaRows(descriptionText)}
                     placeholder="Enter description for this check..."
                   />
                 </div>
-                {/* Play button for all checks - centered and light grey */}
+                {/* Run button for all checks */}
                 <button
                   onClick={handleRunAnalysis}
-                  className="w-8 h-8 bg-gray-300 text-gray-600 rounded-full hover:bg-gray-400 transition-colors flex items-center justify-center flex-shrink-0"
+                  className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center flex-shrink-0 text-sm font-semibold shadow-lg border-2 border-blue-800"
                   title="Run Analysis"
+                  style={{ minWidth: '80px', zIndex: 10 }}
+                  onMouseEnter={() => console.log('Run button hovered')}
                 >
-                  <Play className="w-4 h-4" />
+                  Run
                 </button>
+              </div>
+
+              {/* Acceptance Criteria text block */}
+              <div className="text-sm text-gray-600 bg-white p-3 rounded-lg border border-gray-200">
+                <textarea
+                  value={acceptanceCriteriaText}
+                  onChange={handleAcceptanceCriteriaChange}
+                  className="w-full text-sm text-gray-600 bg-transparent border-none outline-none focus:ring-0 resize-none"
+                  rows={getTextareaRows(acceptanceCriteriaText)}
+                  placeholder="Enter acceptance criteria for this check..."
+                />
               </div>
             </div>
           ) : (
@@ -197,8 +224,7 @@ Checks.propTypes = {
     id: PropTypes.string.isRequired,
     name: PropTypes.string.isRequired,
     description: PropTypes.string,
-    status: PropTypes.oneOf(['active', 'completed', 'cancelled']).isRequired,
-    is_checked: PropTypes.bool,
+    status: PropTypes.oneOf(['active', 'completed', 'cancelled', 'passed', 'failed', 'unknown', 'warning']).isRequired,
     created_at: PropTypes.string.isRequired,
     updated_at: PropTypes.string.isRequired
   })).isRequired,
@@ -209,6 +235,7 @@ Checks.propTypes = {
   onDeleteCheck: PropTypes.func,
   onToggleCheck: PropTypes.func.isRequired,
   onUpdateDescription: PropTypes.func.isRequired,
+  onUpdateAcceptanceCriteria: PropTypes.func,
   onRunAnalysis: PropTypes.func
 };
 

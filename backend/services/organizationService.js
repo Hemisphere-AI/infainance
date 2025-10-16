@@ -135,25 +135,40 @@ class OrganizationService {
    */
   async getOrganizationIntegrations(organizationId, userId) {
     try {
-      // Verify user has access to this organization
-      const { data: membership, error: membershipError } = await this.supabase
-        .from('organization_users')
-        .select('organization_id')
-        .eq('organization_id', organizationId)
-        .eq('user_id', userId)
-        .single()
+      console.log('🔍 getOrganizationIntegrations called with:', { organizationId, userId });
+      
+      // Skip user verification for system access
+      if (userId !== 'system') {
+        console.log('🔐 Verifying user access for non-system user');
+        // Verify user has access to this organization
+        const { data: membership, error: membershipError } = await this.supabase
+          .from('organization_users')
+          .select('organization_id')
+          .eq('organization_id', organizationId)
+          .eq('user_id', userId)
+          .single()
 
-      if (membershipError || !membership) {
-        throw new Error('User does not have access to this organization')
+        if (membershipError || !membership) {
+          throw new Error('User does not have access to this organization')
+        }
+      } else {
+        console.log('🔓 Skipping user verification for system access');
       }
 
+      console.log('📊 Querying organization_integrations table...');
       const { data, error } = await this.supabase
         .from('organization_integrations')
-        .select('id, integration_name, is_active, created_at, updated_at')
+        .select('id, integration_name, is_active, created_at, updated_at, api_key, odoo_url, odoo_db, odoo_username')
         .eq('organization_id', organizationId)
         .order('created_at', { ascending: true })
 
-      if (error) throw error
+      if (error) {
+        console.error('❌ Database query error:', error);
+        throw error;
+      }
+
+      console.log('✅ Database query successful, found integrations:', data?.length || 0);
+      console.log('📋 Integration details:', data);
 
       return {
         success: true,
@@ -171,7 +186,7 @@ class OrganizationService {
   /**
    * Create or update organization integration
    */
-  async upsertOrganizationIntegration(organizationId, integrationName, apiKey, config = {}, userId) {
+  async upsertOrganizationIntegration(organizationId, integrationName, apiKey, config = {}, userId, odooUrl = null, odooDb = null, odooUsername = null) {
     try {
       // Verify user has access to this organization
       const { data: membership, error: membershipError } = await this.supabase
@@ -199,14 +214,21 @@ class OrganizationService {
 
       if (existing) {
         // Update existing integration
+        const updateData = {
+          api_key: apiKey,
+          config: config,
+          is_active: true,
+          updated_at: new Date().toISOString()
+        };
+        
+        // Add Odoo-specific fields if provided
+        if (odooUrl !== null) updateData.odoo_url = odooUrl;
+        if (odooDb !== null) updateData.odoo_db = odooDb;
+        if (odooUsername !== null) updateData.odoo_username = odooUsername;
+        
         const result = await this.supabase
           .from('organization_integrations')
-          .update({
-            api_key: apiKey,
-            config: config,
-            is_active: true,
-            updated_at: new Date().toISOString()
-          })
+          .update(updateData)
           .eq('id', existing.id)
           .select('id, integration_name, is_active, created_at, updated_at')
           .single()
@@ -215,15 +237,22 @@ class OrganizationService {
         error = result.error
       } else {
         // Create new integration
+        const insertData = {
+          organization_id: organizationId,
+          integration_name: integrationName,
+          api_key: apiKey,
+          config: config,
+          is_active: true
+        };
+        
+        // Add Odoo-specific fields if provided
+        if (odooUrl !== null) insertData.odoo_url = odooUrl;
+        if (odooDb !== null) insertData.odoo_db = odooDb;
+        if (odooUsername !== null) insertData.odoo_username = odooUsername;
+        
         const result = await this.supabase
           .from('organization_integrations')
-          .insert({
-            organization_id: organizationId,
-            integration_name: integrationName,
-            api_key: apiKey,
-            config: config,
-            is_active: true
-          })
+          .insert(insertData)
           .select('id, integration_name, is_active, created_at, updated_at')
           .single()
         
@@ -310,7 +339,7 @@ class OrganizationService {
 
       const { data, error } = await this.supabase
         .from('checks')
-        .select('id, name, description, status, is_checked, organization_id, created_at, updated_at')
+        .select('id, name, description, acceptance_criteria, status, organization_id, created_at, updated_at')
         .eq('organization_id', organizationId)
         .order('created_at', { ascending: true })
 
@@ -391,7 +420,7 @@ class OrganizationService {
           description: checkDescription || '',
           status: 'active'
         })
-        .select('id, organization_id, name, description, status, is_checked, created_at, updated_at')
+        .select('id, organization_id, name, description, acceptance_criteria, status, created_at, updated_at')
         .single()
 
       if (error) throw error
@@ -445,7 +474,7 @@ class OrganizationService {
           updated_at: new Date().toISOString()
         })
         .eq('id', checkId)
-        .select('id, organization_id, name, description, status, is_checked, created_at, updated_at')
+        .select('id, organization_id, name, description, acceptance_criteria, status, created_at, updated_at')
         .single()
 
       if (error) throw error

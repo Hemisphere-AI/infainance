@@ -118,7 +118,7 @@ const GoogleSheetsEmbed = ({
       console.error('Error saving configuration:', error)
       setError('Failed to save configuration. Please try again.')
     }
-  }, [config, extractSheetId, onConfigChange, currentSpreadsheetId])
+  }, [config, extractSheetId, onConfigChange, currentSpreadsheetId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Handle configuration cancel
   const handleCancelConfig = useCallback(() => {
@@ -348,7 +348,7 @@ const GoogleSheetsEmbed = ({
     }
     
     autoCreateGoogleSheet()
-  }, [currentSpreadsheetId, userId, userEmail, currentSpreadsheetName, config.sheetId, config.isConfigured, hasAttemptedCreation, configLoaded])
+  }, [currentSpreadsheetId, userId, userEmail, currentSpreadsheetName, config.sheetId, config.isConfigured, hasAttemptedCreation, configLoaded]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch data from Google Sheets via backend API (service account)
   const fetchSheetData = useCallback(async () => {
@@ -587,7 +587,7 @@ const GoogleSheetsEmbed = ({
       setSyncStatus(null)
       // setIsDataChanging(false)
     }
-  }, [config.sheetId, config.isConfigured, onSheetDataUpdate])
+  }, [config.sheetId, config.isConfigured, onSheetDataUpdate]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Save data to database
   const saveToDatabase = useCallback(async (spreadsheetData) => {
@@ -716,6 +716,7 @@ const GoogleSheetsEmbed = ({
   useEffect(() => {
     if (!config.isConfigured) return
     fetchSheetData()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config.isConfigured]) // Removed fetchSheetData from dependencies to prevent loop
 
   // Inline rename handlers

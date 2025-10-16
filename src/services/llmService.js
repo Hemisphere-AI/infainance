@@ -1,5 +1,5 @@
 import OpenAI from 'openai';
-import { tools, SYSTEM_PROMPT } from '../utils/tools.js';
+import { tools } from '../utils/tools.js';
 import { userService } from '../lib/supabase.js';
 import { addrToRC } from '../utils/a1Helpers.js';
 
@@ -134,7 +134,7 @@ export class LLMService {
     try {
       switch (name) {
         case "conclude":
-          return this.conclude(args.answer, args.confidence, args.sources);
+          return this.conclude(args.answer, args.confidence, args.sources, args.acceptance_criteria, args.status);
         case "read_cell":
           return this.readCell(args.address);
         case "update_cell":
@@ -150,15 +150,16 @@ export class LLMService {
   /**
    * Conclude the analysis with a final answer
    */
-  conclude(answer, confidence, sources = []) {
-    console.log(`Concluding analysis with answer: ${answer}, confidence: ${confidence}`);
+  conclude(answer, confidence, sources = [], acceptanceCriteria = '', status = 'unknown') {
+    console.log(`Concluding analysis with answer: ${answer}, confidence: ${confidence}, status: ${status}`);
     
     return {
       answer: answer,
       confidence: confidence,
       sources: sources,
-      timestamp: new Date().toISOString(),
-      status: "concluded"
+      acceptance_criteria: acceptanceCriteria,
+      status: status,
+      timestamp: new Date().toISOString()
     };
   }
 
@@ -411,10 +412,32 @@ export class LLMService {
 
       // Build conversation messages with limited history (last 10 messages)
       const recentHistory = this.conversationHistory.slice(-10);
+      const systemPrompt = `You are SpreadsheetCopilot for an Excel-like app.
+
+## SPREADSHEET DATA STRUCTURE
+The spreadsheet data is always organized in a 2D grid:
+- **X-axis (columns)**: Could represent a unit of time i.e. week, month, year, etc. but not exclusively.
+- **Y-axis (rows)**: Represent different entities, categories, but not exclusively.
+
+## CORE RULES
+**CRITICAL: You MUST use end with the 'conclude' tool to provide your final answer. Before using conclude: You MUST verify there are no open ends left in your analysis.**
+
+**WORKFLOW IS MANDATORY:**
+1. **PLAN**: Create a step wise plan how to best answer the question, what tools to use and in what order.  
+2. **EXECUTE**: Use appropriate tools to execute the plan. 
+3. **ANALYZE**: Review all tool outputs and results and check if there are any open ends left in your analysis or some tools need to be called again or recursively.
+4. **CONCLUDE**: Call the 'conclude' tool with your final answer.
+
+**IMPORTANT TOOL USAGE RULES:**
+- When update_cell returns success: true, the task is complete - call conclude immediately
+- When updating a direct coordinate where the value and/or formula is clear, you don't need to read spreadsheet data before concluding
+- Do NOT repeat the same tool call multiple times unless there's an error
+- Always check tool results for success/failure status before proceeding`;
+
       const messages = [
         {
           role: "system",
-          content: SYSTEM_PROMPT
+          content: systemPrompt
         },
         ...recentHistory.map(msg => ({
           role: msg.role,
@@ -635,7 +658,7 @@ export class LLMService {
 
   /**
    * Handle dependency analysis with standard system prompt
-   * This method processes dependency analysis results using the standard SYSTEM_PROMPT
+   * This method processes dependency analysis results using the standard system prompt
    */
   async dependencyAnalysisChat(analysisMessage) {
     try {
@@ -671,10 +694,32 @@ export class LLMService {
       this.addToHistory("user", analysisMessage);
 
       // Build conversation messages with standard system prompt
+      const systemPrompt = `You are SpreadsheetCopilot for an Excel-like app.
+
+## SPREADSHEET DATA STRUCTURE
+The spreadsheet data is always organized in a 2D grid:
+- **X-axis (columns)**: Could represent a unit of time i.e. week, month, year, etc. but not exclusively.
+- **Y-axis (rows)**: Represent different entities, categories, but not exclusively.
+
+## CORE RULES
+**CRITICAL: You MUST use end with the 'conclude' tool to provide your final answer. Before using conclude: You MUST verify there are no open ends left in your analysis.**
+
+**WORKFLOW IS MANDATORY:**
+1. **PLAN**: Create a step wise plan how to best answer the question, what tools to use and in what order.  
+2. **EXECUTE**: Use appropriate tools to execute the plan. 
+3. **ANALYZE**: Review all tool outputs and results and check if there are any open ends left in your analysis or some tools need to be called again or recursively.
+4. **CONCLUDE**: Call the 'conclude' tool with your final answer.
+
+**IMPORTANT TOOL USAGE RULES:**
+- When update_cell returns success: true, the task is complete - call conclude immediately
+- When updating a direct coordinate where the value and/or formula is clear, you don't need to read spreadsheet data before concluding
+- Do NOT repeat the same tool call multiple times unless there's an error
+- Always check tool results for success/failure status before proceeding`;
+
       const messages = [
         {
           role: "system",
-          content: SYSTEM_PROMPT
+          content: systemPrompt
         },
         ...this.conversationHistory.map(msg => ({
           role: msg.role,
