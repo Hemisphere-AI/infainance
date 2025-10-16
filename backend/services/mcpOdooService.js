@@ -1,10 +1,40 @@
-// Odoo MCP Service - Real integration with Odoo XML-RPC
+// MCP Odoo Service - Real integration with Odoo XML-RPC
 import fetch from 'node-fetch';
+import xml2js from 'xml2js';
+import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-class OdooMcpService {
+// Load environment variables
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Try multiple possible paths for .env file
+const envPaths = [
+  path.join(__dirname, '../../.env'),        // From backend/services/ folder
+  path.join(__dirname, '../../../.env'),     // From root folder
+  path.join(process.cwd(), '.env'),          // From current working directory
+  path.join(process.cwd(), '../.env')        // From parent of current working directory
+];
+
+let envLoaded = false;
+for (const envPath of envPaths) {
+  try {
+    dotenv.config({ path: envPath });
+    if (process.env.ODOO_URL) {
+      envLoaded = true;
+      break;
+    }
+  } catch (error) {
+    // Continue to next path
+  }
+}
+
+class MCPOdooService {
   constructor() {
     this.url = process.env.ODOO_URL;
     this.db = process.env.ODOO_DB;
+    this.username = process.env.ODOO_USERNAME || 'admin';
     this.apiKey = process.env.ODOO_API_KEY;
     this.uid = null;
   }
@@ -45,7 +75,7 @@ class OdooMcpService {
   <methodName>authenticate</methodName>
   <params>
     <param><value><string>${this.db}</string></value></param>
-    <param><value><string>admin</string></value></param>
+    <param><value><string>${this.username}</string></value></param>
     <param><value><string>${this.apiKey}</string></value></param>
     <param><value><struct></struct></value></param>
   </params>
@@ -65,7 +95,7 @@ class OdooMcpService {
     }
 
     const xmlResponse = await response.text();
-    return this.parseXmlRpcResponse(xmlResponse);
+    return await this.parseXmlRpcResponse(xmlResponse);
   }
 
   async xmlRpcCall(model, method, args = [], kwargs = {}) {
@@ -85,7 +115,7 @@ class OdooMcpService {
     }
 
     const xmlResponse = await response.text();
-    return this.parseXmlRpcResponse(xmlResponse);
+    return await this.parseXmlRpcResponse(xmlResponse);
   }
 
   buildXmlRpcRequest(model, method, args, kwargs) {
@@ -127,50 +157,61 @@ class OdooMcpService {
     return '<string><![CDATA[unknown]]></string>';
   }
 
-  parseXmlRpcResponse(xmlResponse) {
-    // Simple XML parsing for the response
-    const match = xmlResponse.match(/<value>(.*?)<\/value>/s);
-    if (match) {
-      const valueXml = match[1];
+  async parseXmlRpcResponse(xmlResponse) {
+    try {
+      const parser = new xml2js.Parser({
+        explicitArray: false,
+        mergeAttrs: true,
+        explicitRoot: false
+      });
       
-      // Parse different value types
-      if (valueXml.includes('<string>')) {
-        const stringMatch = valueXml.match(/<string><!\[CDATA\[(.*?)\]\]><\/string>/s);
-        return stringMatch ? stringMatch[1] : null;
-      } else if (valueXml.includes('<double>')) {
-        const doubleMatch = valueXml.match(/<double>(.*?)<\/double>/);
-        return doubleMatch ? parseFloat(doubleMatch[1]) : null;
-      } else if (valueXml.includes('<boolean>')) {
-        const boolMatch = valueXml.match(/<boolean>(.*?)<\/boolean>/);
-        return boolMatch ? boolMatch[1] === '1' : false;
-      } else if (valueXml.includes('<array>')) {
-        // Parse array - simplified
-        const arrayMatches = valueXml.match(/<value>(.*?)<\/value>/gs);
-        if (arrayMatches) {
-          return arrayMatches.map(match => {
-            const innerValue = match.replace(/<\/?value>/g, '');
-            return this.parseXmlValue(innerValue);
-          });
-        }
+      const result = await parser.parseStringPromise(xmlResponse);
+      
+      // Extract the main value from the XML-RPC response
+      if (result && result.params && result.params.param && result.params.param.value) {
+        return this.extractValue(result.params.param.value);
       }
+      
+      return null;
+    } catch (error) {
+      console.error('XML parsing error:', error);
+      return null;
     }
-    
-    // Fallback: try to extract any meaningful data
-    const stringMatch = xmlResponse.match(/<string><!\[CDATA\[(.*?)\]\]><\/string>/);
-    return stringMatch ? stringMatch[1] : null;
   }
 
-  parseXmlValue(valueXml) {
-    if (valueXml.includes('<string>')) {
-      const match = valueXml.match(/<string><!\[CDATA\[(.*?)\]\]><\/string>/s);
-      return match ? match[1] : null;
-    } else if (valueXml.includes('<double>')) {
-      const match = valueXml.match(/<double>(.*?)<\/double>/);
-      return match ? parseFloat(match[1]) : null;
-    } else if (valueXml.includes('<boolean>')) {
-      const match = valueXml.match(/<boolean>(.*?)<\/boolean>/);
-      return match ? match[1] === '1' : false;
+  extractValue(valueObj) {
+    if (valueObj.array && valueObj.array.data) {
+      // Handle array of records
+      const data = valueObj.array.data;
+      if (Array.isArray(data.value)) {
+        return data.value.map(item => this.extractValue(item));
+      } else if (data.value) {
+        return [this.extractValue(data.value)];
+      }
+    } else if (valueObj.struct && valueObj.struct.member) {
+      // Handle struct (record)
+      const record = {};
+      const members = Array.isArray(valueObj.struct.member) 
+        ? valueObj.struct.member 
+        : [valueObj.struct.member];
+      
+      members.forEach(member => {
+        if (member.name && member.value) {
+          record[member.name] = this.extractValue(member.value);
+        }
+      });
+      
+      return record;
+    } else if (valueObj.string) {
+      return valueObj.string;
+    } else if (valueObj.int) {
+      return parseInt(valueObj.int);
+    } else if (valueObj.double) {
+      return parseFloat(valueObj.double);
+    } else if (valueObj.boolean) {
+      return valueObj.boolean === '1';
     }
+    
     return null;
   }
 
@@ -183,12 +224,42 @@ class OdooMcpService {
       for (const query of queries) {
         console.log(`🔧 Executing query: ${query.query_name}`);
         try {
-          // Execute real Odoo query
+          // Parse filters - handle both string and array formats
+          let filters = query.filters;
+          if (Array.isArray(filters) && filters.length > 0 && typeof filters[0] === 'string') {
+            // Convert string filters to array format
+            filters = filters.map(filter => {
+              if (typeof filter === 'string') {
+                // Parse string filters like "account_type = 'liability_payable'" or "balance < 0"
+                const match = filter.match(/^(\w+)\s*(=|<|>|<=|>=|!=|in|not in|ilike|like)\s*(.+)$/);
+                if (match) {
+                  const [, field, operator, value] = match;
+                  let parsedValue = value;
+                  
+                  // Parse value based on type
+                  if (value.startsWith("'") && value.endsWith("'")) {
+                    parsedValue = value.slice(1, -1); // Remove quotes
+                  } else if (value === 'true') {
+                    parsedValue = true;
+                  } else if (value === 'false') {
+                    parsedValue = false;
+                  } else if (!isNaN(value)) {
+                    parsedValue = parseFloat(value);
+                  }
+                  
+                  return [field, operator, parsedValue];
+                }
+              }
+              return filter;
+            });
+          }
+          
+          // Execute real Odoo query using search_read
           const data = await this.xmlRpcCall(
             query.table,
             'search_read',
-            [query.filters],
-            { fields: query.fields }
+            [filters],
+            { fields: query.fields, limit: query.limit || 100 }
           );
           
           results.push({
@@ -228,4 +299,4 @@ class OdooMcpService {
 
 }
 
-export default OdooMcpService;
+export default MCPOdooService;

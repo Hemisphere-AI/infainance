@@ -1,0 +1,84 @@
+# Odoo Bookkeeping Checks Catalog
+# This file defines the checks that will be executed against the Odoo database
+# Each check identifies potential issues in bookkeeping and accounting data
+
+- key: creditors_with_debit_balance
+  title: Creditors with debit balances
+  model: account.move.line
+  domain: '[["account_type","=","liability_payable"],["balance","<",0],["state","=","posted"]]'
+  fields: ["partner_id","balance","date","move_id","name","account_id"]
+  severity: high
+  description: "Identifies creditors with debit balances that may indicate duplicate payments or missing documents."
+
+- key: draft_vendor_bills
+  title: Draft vendor bills
+  model: account.move
+  domain: '[["state","=","draft"],["move_type","=","in_invoice"]]'
+  fields: ["name","ref","date","partner_id","amount_total","amount_untaxed","amount_tax","journal_id","invoice_date","invoice_date_due"]
+  severity: medium
+  description: "Draft supplier invoices that are not yet processed, potentially delaying expense recognition."
+
+- key: draft_customer_invoices
+  title: Draft customer invoices
+  model: account.move
+  domain: '[["state","=","draft"],["move_type","=","out_invoice"]]'
+  fields: ["name","ref","date","partner_id","amount_total","amount_untaxed","amount_tax","journal_id","invoice_date","invoice_date_due"]
+  severity: medium
+  description: "Unposted customer invoices that may delay revenue recognition or affect sales reporting."
+
+- key: unreconciled_bank_statements
+  title: Unreconciled bank statement lines
+  model: account.bank.statement.line
+  domain: '[["is_reconciled","=",false],["amount","!=",0]]'
+  fields: ["name","amount","date","partner_id","ref","statement_id","account_number"]
+  severity: high
+  description: "Bank transactions that have not been reconciled to invoices or payments, indicating incomplete cash accounting."
+
+- key: duplicate_invoices
+  title: Potential duplicate invoices
+  model: account.move
+  domain: '[["state","=","posted"],["move_type","in",["out_invoice","in_invoice"]]]'
+  fields: ["name","ref","date","invoice_date","partner_id","amount_total","amount_untaxed","amount_tax","move_type","journal_id"]
+  severity: critical
+  description: "Detects potentially duplicated invoices based on partner, amount, invoice number, and date."
+
+- key: unreconciled_move_lines
+  title: Unreconciled move lines
+  model: account.move.line
+  domain: '[["reconciled","=",false],["balance","!=",0]]'
+  fields: ["move_id","account_id","partner_id","date","balance","name","debit","credit"]
+  severity: high
+  description: "Open items that remain unreconciled, indicating incomplete accounting processes."
+
+- key: negative_stock_quantities
+  title: Negative stock quantities
+  model: stock.quant
+  domain: '[["quantity","<",0]]'
+  fields: ["product_id","location_id","quantity","lot_id","package_id"]
+  severity: high
+  description: "Products with negative on-hand quantities, indicating inventory discrepancies."
+
+- key: overdue_customer_invoices
+  title: Overdue customer invoices
+  model: account.move
+  domain: '[["state","=","posted"],["move_type","=","out_invoice"],["invoice_date_due","<","today"]]'
+  fields: ["name","partner_id","amount_total","invoice_date","invoice_date_due","amount_residual"]
+  severity: medium
+  description: "Customer invoices that are past their due date and may require follow-up."
+
+- key: missing_vat_numbers
+  title: Partners missing VAT numbers
+  model: res.partner
+  domain: '[["is_company","=",true],["vat","=",false],["supplier_rank",">",0]]'
+  fields: ["name","email","country_id","supplier_rank","customer_rank"]
+  severity: medium
+  description: "Company suppliers that lack a VAT number, which may be required for tax compliance."
+
+- key: unposted_journal_entries
+  title: Unposted journal entries
+  model: account.move
+  domain: '[["state","=","draft"],["move_type","=","entry"]]'
+  fields: ["name","ref","date","journal_id","amount_total","line_ids"]
+  severity: medium
+  description: "Manual journal entries that have not been posted, potentially affecting financial reporting."
+
