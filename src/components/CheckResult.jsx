@@ -156,6 +156,7 @@ const CheckResult = ({
   const runCheck = async (check) => {
     try {
       const checkId = check.id;
+      console.log('🚀 Starting check execution for:', check.name, 'ID:', checkId);
       setRunningChecks(prev => new Set([...prev, checkId]));
       
       // Initialize execution steps
@@ -184,6 +185,7 @@ const CheckResult = ({
 
       // Step 3: Execute AI-driven check via backend API
       const apiBase = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3002';
+      console.log('📡 Making API call to:', `${apiBase}/api/odoo/check`);
       
       const requestBody = {
         checkDescription: check.description || 'Analyze this check',
@@ -193,12 +195,20 @@ const CheckResult = ({
         acceptanceCriteria: check.acceptance_criteria || ''
       };
       
+      console.log('📤 Request body:', requestBody);
+      
       const response = await fetch(`${apiBase}/api/odoo/check`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(requestBody)
+      });
+
+      console.log('📥 Response received:', {
+        status: response.status,
+        ok: response.ok,
+        statusText: response.statusText
       });
 
       if (!response.ok) {
@@ -235,6 +245,12 @@ const CheckResult = ({
       }
 
       const data = await response.json();
+      console.log('📊 Response data received:', {
+        success: data.success,
+        hasResult: !!data.result,
+        resultStatus: data.result?.status,
+        stepsCount: data.result?.steps?.length
+      });
       
       if (!data.success) {
         // Handle API-level errors - mark connect as completed, query as failed, others as pending
@@ -316,6 +332,14 @@ const CheckResult = ({
             executedAt: new Date(data.result.timestamp)
           }
         }));
+        
+        console.log('✅ Check execution completed successfully:', {
+          checkId,
+          status: data.result.status,
+          count: data.result.count,
+          duration: data.result.duration,
+          stepsCompleted: data.result.steps?.length || 0
+        });
       }
 
       // Update check status if backend (agent) provided it
@@ -365,6 +389,11 @@ const CheckResult = ({
                 [checkId]: historyData.results[0].id
               }));
             }
+            
+            console.log('📚 Results history refreshed:', {
+              checkId,
+              historyCount: historyData.results.length
+            });
           }
         }
       } catch (error) {
@@ -381,6 +410,7 @@ const CheckResult = ({
         }
       }));
     } finally {
+      console.log('🏁 Check execution finished for:', check.name, 'ID:', check.id);
       setRunningChecks(prev => {
         const newSet = new Set(prev);
         newSet.delete(check.id);
