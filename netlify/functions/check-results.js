@@ -28,11 +28,19 @@ export const handler = async (event, context) => {
   }
 
   try {
-    const { httpMethod, path } = event
+    const { httpMethod, path, queryStringParameters } = event
     
-    // Extract checkId from path like /api/check-results/123
-    const pathParts = path.split('/')
-    const checkId = pathParts[pathParts.length - 1]
+    // Extract checkId from path like /api/check-results/123 or from query params
+    let checkId
+    if (path.includes('/api/checks/') && path.includes('/results')) {
+      // Extract from path like /api/checks/123/results
+      const pathParts = path.split('/')
+      const checkIndex = pathParts.findIndex(part => part === 'checks')
+      checkId = pathParts[checkIndex + 1]
+    } else {
+      // Fallback to query parameters
+      checkId = queryStringParameters?.checkId
+    }
 
     switch (httpMethod) {
       case 'GET':

@@ -19,7 +19,7 @@
 
 [[redirects]]
   from = "/api/checks/:checkId/results"
-  to = "/.netlify/functions/check-results/:checkId"
+  to = "/.netlify/functions/check-results"
   status = 200
 
 [[redirects]]
@@ -30,6 +30,16 @@
 [[redirects]]
   from = "/api/organizations/integrations/:integrationId"
   to = "/.netlify/functions/organization-integrations/:integrationId"
+  status = 200
+
+[[redirects]]
+  from = "/api/odoo/check"
+  to = "/.netlify/functions/odoo-check"
+  status = 200
+
+[[redirects]]
+  from = "/api/odoo/config"
+  to = "/.netlify/functions/odoo-config"
   status = 200
 
 # Frontend redirects
