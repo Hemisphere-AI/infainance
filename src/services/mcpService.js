@@ -3,7 +3,7 @@
 
 class MCPService {
   constructor() {
-    this.baseUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3002'; // Backend server URL
+    this.baseUrl = ''; // Use Netlify Functions
     this.odooConfig = null;
   }
 

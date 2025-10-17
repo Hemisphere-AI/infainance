@@ -7,7 +7,7 @@
 class GoogleServiceAccountService {
   constructor() {
     this.initialized = false
-    this.baseUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3002'
+    this.baseUrl = '' // Use Netlify Functions
   }
 
   /**

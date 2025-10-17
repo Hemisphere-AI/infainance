@@ -49,8 +49,8 @@ const CheckResult = ({
   useEffect(() => {
     const loadOdooConfig = async () => {
       try {
-        const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3002';
-        const response = await fetch(`${backendUrl}/api/odoo/config?organizationId=${organizationId}`);
+        const apiBase = ''; // Use Netlify Functions
+        const response = await fetch(`${apiBase}/api/odoo/config?organizationId=${organizationId}`);
         if (response.ok) {
           const config = await response.json();
           setOdooConfig(config);
@@ -71,8 +71,8 @@ const CheckResult = ({
       if (!currentCheckId) return;
       
       try {
-        const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3002';
-        const response = await fetch(`${backendUrl}/api/checks/${currentCheckId}/results`);
+        const apiBase = ''; // Use Netlify Functions
+        const response = await fetch(`${apiBase}/api/checks/${currentCheckId}/results`);
         
         if (response.ok) {
           const data = await response.json();
@@ -181,7 +181,7 @@ const CheckResult = ({
       await updateStep(checkId, 'query', 'running');
 
       // Step 3: Execute AI-driven check via backend API
-      const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3002';
+      const apiBase = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3002';
       
       const requestBody = {
         checkDescription: check.description || 'Analyze this check',
@@ -191,7 +191,7 @@ const CheckResult = ({
         acceptanceCriteria: check.acceptance_criteria || ''
       };
       
-      const response = await fetch(`${backendUrl}/api/odoo/check`, {
+      const response = await fetch(`${apiBase}/api/odoo/check`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -344,8 +344,8 @@ const CheckResult = ({
 
       // Refresh the results history to include the new result
       try {
-        const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3002';
-        const historyResponse = await fetch(`${backendUrl}/api/checks/${checkId}/results`);
+        const apiBase = ''; // Use Netlify Functions
+        const historyResponse = await fetch(`${apiBase}/api/checks/${checkId}/results`);
         
         if (historyResponse.ok) {
           const historyData = await historyResponse.json();

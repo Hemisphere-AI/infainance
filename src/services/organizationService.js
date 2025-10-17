@@ -3,7 +3,8 @@
  * Handles organization and integration management from the frontend
  */
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3002'
+// Use Netlify Functions - no need for separate backend URL
+const API_BASE = ''
 
 class OrganizationService {
   /**
@@ -12,7 +13,7 @@ class OrganizationService {
   async getUserOrganizations(userId) {
     try {
       // console.log('🔍 OrganizationService: Getting organizations for userId:', userId)
-      const response = await fetch(`${BACKEND_URL}/api/organizations?userId=${userId}`)
+      const response = await fetch(`${API_BASE}/api/organizations?userId=${userId}`)
       const data = await response.json()
       // console.log('🔍 OrganizationService: Response:', data)
       // console.log('🔍 OrganizationService: Organizations:', data.organizations)
@@ -36,7 +37,7 @@ class OrganizationService {
    */
   async createOrganization(userId, name) {
     try {
-      const response = await fetch(`${BACKEND_URL}/api/organizations`, {
+      const response = await fetch(`${API_BASE}/api/organizations`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -68,7 +69,7 @@ class OrganizationService {
    */
   async updateOrganization(organizationId, name, userId) {
     try {
-      const response = await fetch(`${BACKEND_URL}/api/organizations/${organizationId}`, {
+      const response = await fetch(`${API_BASE}/api/organizations/${organizationId}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json'
@@ -100,7 +101,7 @@ class OrganizationService {
    */
   async getOrganizationIntegrations(organizationId, userId) {
     try {
-      const response = await fetch(`${BACKEND_URL}/api/organizations/${organizationId}/integrations?userId=${userId}`)
+      const response = await fetch(`${API_BASE}/api/organizations/${organizationId}/integrations?userId=${userId}`)
       const data = await response.json()
       
       if (!response.ok) {
@@ -123,7 +124,7 @@ class OrganizationService {
   async upsertOrganizationIntegration(organizationId, integrationName, apiKey, config = {}, userId, odooUrl, odooDb, odooUsername) {
     try {
       // console.log('🔍 OrganizationService: Creating integration for:', { organizationId, integrationName, userId })
-      const response = await fetch(`${BACKEND_URL}/api/organizations/${organizationId}/integrations`, {
+      const response = await fetch(`${API_BASE}/api/organizations/${organizationId}/integrations`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -161,7 +162,7 @@ class OrganizationService {
    */
   async deleteOrganizationIntegration(integrationId, userId) {
     try {
-      const response = await fetch(`${BACKEND_URL}/api/organizations/integrations/${integrationId}?userId=${userId}`, {
+      const response = await fetch(`${API_BASE}/api/organizations/integrations/${integrationId}?userId=${userId}`, {
         method: 'DELETE'
       })
       
@@ -186,7 +187,7 @@ class OrganizationService {
    */
   async getOrganizationChecks(organizationId, userId) {
     try {
-      const response = await fetch(`${BACKEND_URL}/api/organizations/${organizationId}/checks?userId=${userId}`)
+      const response = await fetch(`${API_BASE}/api/organizations/${organizationId}/checks?userId=${userId}`)
       const data = await response.json()
       
       if (!response.ok) {
@@ -208,7 +209,7 @@ class OrganizationService {
    */
   async deleteOrganization(organizationId, userId) {
     try {
-      const response = await fetch(`${BACKEND_URL}/api/organizations/${organizationId}`, {
+      const response = await fetch(`${API_BASE}/api/organizations/${organizationId}`, {
         method: 'DELETE',
         headers: {
           'Content-Type': 'application/json'
@@ -237,7 +238,7 @@ class OrganizationService {
    */
   async createOrganizationCheck(organizationId, name, description, userId) {
     try {
-      const response = await fetch(`${BACKEND_URL}/api/organizations/${organizationId}/checks`, {
+      const response = await fetch(`${API_BASE}/api/organizations/${organizationId}/checks`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -270,7 +271,7 @@ class OrganizationService {
    */
   async updateOrganizationCheck(checkId, updates, userId) {
     try {
-      const response = await fetch(`${BACKEND_URL}/api/checks/${checkId}`, {
+      const response = await fetch(`${API_BASE}/api/checks/${checkId}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json'
