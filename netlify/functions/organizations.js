@@ -29,7 +29,20 @@ export const handler = async (event, context) => {
 
   try {
     const { httpMethod, queryStringParameters, body } = event
-    const { userId } = queryStringParameters || {}
+    const { userId: queryUserId } = queryStringParameters || {}
+    
+    // Parse request body to get userId if not in query params
+    let requestBody = {}
+    try {
+      requestBody = JSON.parse(body || '{}')
+    } catch (e) {
+      console.error('Error parsing request body:', e)
+    }
+    
+    const { userId: bodyUserId } = requestBody
+    const userId = queryUserId || bodyUserId
+    
+    console.log('🔍 Organizations function: queryUserId:', queryUserId, 'bodyUserId:', bodyUserId, 'final userId:', userId)
 
     switch (httpMethod) {
       case 'GET':
@@ -70,7 +83,7 @@ export const handler = async (event, context) => {
         }
 
       case 'POST':
-        const { name } = JSON.parse(body || '{}')
+        const { name } = requestBody
         
         if (!userId || !name) {
           return {
