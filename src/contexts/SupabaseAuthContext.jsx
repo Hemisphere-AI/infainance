@@ -12,7 +12,9 @@ export const SupabaseAuthProvider = ({ children }) => {
   useEffect(() => {
     // Get initial session
     supabase.auth.getSession().then(({ data: { session } }) => {
+      console.log('🔍 SupabaseAuthContext: Initial session:', { session, user: session?.user })
       if (session?.user) {
+        console.log('🔍 SupabaseAuthContext: Setting user:', { id: session.user.id, email: session.user.email })
         setUser(session.user)
         
         // Manually ensure user profile exists since trigger might not be working
@@ -25,6 +27,8 @@ export const SupabaseAuthProvider = ({ children }) => {
             console.error('❌ SupabaseAuthContext: Error creating user profile in initial session:', err)
           })
         }, 1000)
+      } else {
+        console.log('🔍 SupabaseAuthContext: No session or user found')
       }
       
       setLoading(false)
@@ -36,7 +40,9 @@ export const SupabaseAuthProvider = ({ children }) => {
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
+        console.log('🔍 SupabaseAuthContext: Auth state change:', { event, session, user: session?.user })
         if (event === 'SIGNED_IN' && session?.user) {
+          console.log('🔍 SupabaseAuthContext: User signed in:', { id: session.user.id, email: session.user.email })
           setUser(session.user)
           
           // Manually ensure user profile exists since trigger might not be working
@@ -50,10 +56,13 @@ export const SupabaseAuthProvider = ({ children }) => {
             })
           }, 1000)
         } else if (event === 'SIGNED_OUT') {
+          console.log('🔍 SupabaseAuthContext: User signed out')
           setUser(null)
         } else if (session?.user) {
+          console.log('🔍 SupabaseAuthContext: Session updated:', { id: session.user.id, email: session.user.email })
           setUser(session.user)
         } else {
+          console.log('🔍 SupabaseAuthContext: No user in session')
           setUser(null)
         }
         setLoading(false)

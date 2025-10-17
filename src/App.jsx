@@ -70,6 +70,11 @@ function SpreadsheetApp() {
   
   // Debug authentication state
   useEffect(() => {
+    console.log('🔍 SpreadsheetApp: Auth state changed:', { 
+      user: user ? { id: user.id, email: user.email } : null, 
+      authLoading,
+      userObject: user 
+    })
   }, [user, authLoading])
   
   // Redirect to login if not authenticated
@@ -91,6 +96,12 @@ function SpreadsheetApp() {
   }
 
   if (!user) {
+    console.log('🔍 SpreadsheetApp: No user, redirecting to login')
+    return null // Will redirect to login
+  }
+
+  if (!user.id) {
+    console.error('❌ SpreadsheetApp: User object exists but has no ID:', user)
     return null // Will redirect to login
   }
 
@@ -131,8 +142,18 @@ function MainSpreadsheetApp({ user }) {
     let isMounted = true
     const loadUserOrganizations = async () => {
       try {
+        console.log('🔍 loadUserOrganizations: Starting with user.id:', user?.id)
+        
+        if (!user?.id) {
+          console.error('❌ loadUserOrganizations: No user ID available')
+          setOrganizations([])
+          return
+        }
+        
         const result = await organizationService.getUserOrganizations(user.id)
         if (!isMounted) return
+        
+        console.log('🔍 loadUserOrganizations: Result:', result)
         
         if (result.success) {
           setOrganizations(result.organizations || [])
@@ -155,9 +176,11 @@ function MainSpreadsheetApp({ user }) {
           }
         } else {
           console.error('Failed to load organizations:', result.error)
+          setOrganizations([])
         }
       } catch (err) {
         console.error('Failed to load user organizations:', err)
+        setOrganizations([])
       }
     }
 
@@ -173,7 +196,10 @@ function MainSpreadsheetApp({ user }) {
 
   // Load checks for organization
   const loadOrganizationChecks = useCallback(async (organizationId = currentOrganizationId) => {
+    console.log('🔍 loadOrganizationChecks: Starting with organizationId:', organizationId, 'user.id:', user?.id)
+    
     if (!organizationId || !user?.id) {
+      console.log('🔍 loadOrganizationChecks: Missing organizationId or user.id, skipping')
       return
     }
 
@@ -186,6 +212,7 @@ function MainSpreadsheetApp({ user }) {
 
     try {
       const result = await organizationService.getOrganizationChecks(organizationId, user.id)
+      console.log('🔍 loadOrganizationChecks: Result:', result)
       
       if (result.success) {
         setChecks(prev => {
@@ -231,6 +258,14 @@ function MainSpreadsheetApp({ user }) {
   // Organization management functions
   const handleCreateOrganization = useCallback(async () => {
     try {
+      console.log('🔍 handleCreateOrganization: user object:', user)
+      console.log('🔍 handleCreateOrganization: user.id:', user?.id)
+      
+      if (!user?.id) {
+        console.error('❌ handleCreateOrganization: No user ID available')
+        return
+      }
+      
       const defaultName = `Organization ${organizations.length + 1}`
       const result = await organizationService.createOrganization(user.id, defaultName)
       
@@ -302,8 +337,17 @@ function MainSpreadsheetApp({ user }) {
   // Check management functions
   const handleCreateCheck = useCallback(async (organizationId = currentOrganizationId) => {
     try {
+      console.log('🔍 handleCreateCheck: user object:', user)
+      console.log('🔍 handleCreateCheck: user.id:', user?.id)
+      console.log('🔍 handleCreateCheck: organizationId:', organizationId)
+      
       if (!organizationId) {
         console.error('No organization selected')
+        return
+      }
+
+      if (!user?.id) {
+        console.error('❌ handleCreateCheck: No user ID available')
         return
       }
 

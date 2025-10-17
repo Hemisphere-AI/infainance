@@ -6,6 +6,8 @@
 // Use Netlify Functions for full Odoo AI Agent functionality
 const API_BASE = import.meta.env.DEV ? 'http://localhost:3002' : ''
 
+console.log('🔍 OrganizationService: API_BASE configured as:', API_BASE)
+
 class OrganizationService {
   /**
    * Get user's organizations
@@ -37,6 +39,12 @@ class OrganizationService {
    */
   async createOrganization(userId, name) {
     try {
+      console.log('🔍 OrganizationService.createOrganization: userId:', userId, 'name:', name)
+      
+      if (!userId) {
+        throw new Error('userId is required')
+      }
+      
       const response = await fetch(`${API_BASE}/api/organizations`, {
         method: 'POST',
         headers: {
@@ -238,6 +246,16 @@ class OrganizationService {
    */
   async createOrganizationCheck(organizationId, name, description, userId) {
     try {
+      console.log('🔍 OrganizationService.createOrganizationCheck: userId:', userId, 'organizationId:', organizationId, 'name:', name)
+      
+      if (!userId) {
+        throw new Error('userId is required')
+      }
+      
+      if (!organizationId) {
+        throw new Error('organizationId is required')
+      }
+      
       const response = await fetch(`${API_BASE}/api/organizations/${organizationId}/checks`, {
         method: 'POST',
         headers: {
