@@ -177,6 +177,13 @@ function MainSpreadsheetApp({ user }) {
       return
     }
 
+    // Check if the organization still exists in our local state
+    const organizationExists = organizations.some(org => org.id === organizationId)
+    if (!organizationExists) {
+      console.log('Organization no longer exists, skipping checks load')
+      return
+    }
+
     try {
       const result = await organizationService.getOrganizationChecks(organizationId, user.id)
       
@@ -195,11 +202,18 @@ function MainSpreadsheetApp({ user }) {
         }
       } else {
         console.error('Failed to load checks:', result.error)
+        // If the error is about access, the organization might have been deleted
+        if (result.error && result.error.includes('does not have access')) {
+          console.log('Organization access denied, clearing current organization')
+          setCurrentOrganizationId(null)
+          setChecks([])
+          setCurrentCheckId(null)
+        }
       }
     } catch (err) {
       console.error('Failed to load organization checks:', err)
     }
-  }, [currentOrganizationId, user?.id, checkId, currentCheckId])
+  }, [currentOrganizationId, user?.id, checkId, currentCheckId, organizations])
 
   // Only load checks when currentOrganizationId changes, not on every render
   useEffect(() => {
@@ -260,23 +274,27 @@ function MainSpreadsheetApp({ user }) {
     try {
       if (!user?.id) return;
       
+      // Immediately clear state to prevent race conditions
+      if (currentOrganizationId === organizationId) {
+        setCurrentOrganizationId(null);
+        setChecks([]);
+        setCurrentCheckId(null);
+        navigate('/app');
+      }
+      
       const result = await organizationService.deleteOrganization(organizationId, user.id);
       
       if (result.success) {
         setOrganizations(prev => prev.filter(org => org.id !== organizationId));
-        
-        // If this was the current organization, clear it
-        if (currentOrganizationId === organizationId) {
-          setCurrentOrganizationId(null);
-          setChecks([]);
-          setCurrentCheckId(null);
-          navigate('/app');
-        }
       } else {
         console.error('Failed to delete organization:', result.error);
+        // If deletion failed, we might need to restore the state
+        // For now, we'll leave it cleared since the user intended to delete it
       }
     } catch (err) {
       console.error('Error deleting organization:', err);
+      // Even if there's an error, we've already cleared the state
+      // The user intended to delete the organization
     }
   }, [user?.id, currentOrganizationId, navigate])
 
@@ -497,13 +515,7 @@ function MainSpreadsheetApp({ user }) {
               ) : (
                 <div className="flex-1 flex items-center justify-center bg-gray-50">
                   <div className="text-center">
-                    <div className="w-16 h-16 mx-auto mb-4 text-gray-300">
-                      <svg fill="currentColor" viewBox="0 0 20 20">
-                        <path fillRule="evenodd" d="M4 4a2 2 0 00-2 2v8a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2H4zm2 6a2 2 0 114 0 2 2 0 01-4 0zm8 0a2 2 0 114 0 2 2 0 01-4 0z" clipRule="evenodd" />
-                      </svg>
-                    </div>
-                    <h3 className="text-lg font-medium text-gray-900 mb-2">Select an organization</h3>
-                    <p className="text-gray-500">Choose an organization from the sidebar to get started</p>
+                    {/* Content removed as requested */}
                   </div>
                 </div>
               )}

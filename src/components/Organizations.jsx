@@ -68,6 +68,14 @@ const Organizations = ({
         return;
       }
 
+      // Check if the organization still exists in our local state
+      const organizationExists = organizations.some(org => org.id === currentOrganizationId)
+      if (!organizationExists) {
+        console.log('Organization no longer exists, skipping integrations load')
+        setIntegrations([])
+        return
+      }
+
       try {
         console.log('Loading integrations for organization:', currentOrganizationId);
         const result = await organizationService.getOrganizationIntegrations(currentOrganizationId, user.id);
@@ -98,7 +106,7 @@ const Organizations = ({
     };
 
     loadIntegrations();
-  }, [currentOrganizationId, user?.id]);
+  }, [currentOrganizationId, user?.id, organizations]);
 
   // Integration management functions
   const handleAddIntegration = useCallback(() => {

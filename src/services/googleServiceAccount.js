@@ -7,7 +7,8 @@
 class GoogleServiceAccountService {
   constructor() {
     this.initialized = false
-    this.baseUrl = '' // Use Netlify Functions
+    // Use backend server for local development, Netlify Functions for production
+    this.baseUrl = import.meta.env.DEV ? 'http://localhost:3002' : ''
   }
 
   /**

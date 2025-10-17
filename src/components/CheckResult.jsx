@@ -49,7 +49,8 @@ const CheckResult = ({
   useEffect(() => {
     const loadOdooConfig = async () => {
       try {
-        const apiBase = ''; // Use Netlify Functions
+        // Use backend server for local development, Netlify Functions for production
+        const apiBase = import.meta.env.DEV ? 'http://localhost:3002' : '';
         const response = await fetch(`${apiBase}/api/odoo/config?organizationId=${organizationId}`);
         if (response.ok) {
           const config = await response.json();
@@ -71,7 +72,8 @@ const CheckResult = ({
       if (!currentCheckId) return;
       
       try {
-        const apiBase = ''; // Use Netlify Functions
+        // Use backend server for local development, Netlify Functions for production
+        const apiBase = import.meta.env.DEV ? 'http://localhost:3002' : '';
         const response = await fetch(`${apiBase}/api/checks/${currentCheckId}/results`);
         
         if (response.ok) {
@@ -344,7 +346,8 @@ const CheckResult = ({
 
       // Refresh the results history to include the new result
       try {
-        const apiBase = ''; // Use Netlify Functions
+        // Use backend server for local development, Netlify Functions for production
+        const apiBase = import.meta.env.DEV ? 'http://localhost:3002' : '';
         const historyResponse = await fetch(`${apiBase}/api/checks/${checkId}/results`);
         
         if (historyResponse.ok) {

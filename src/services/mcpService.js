@@ -3,7 +3,8 @@
 
 class MCPService {
   constructor() {
-    this.baseUrl = ''; // Use Netlify Functions
+    // Use backend server for local development, Netlify Functions for production
+    this.baseUrl = import.meta.env.DEV ? 'http://localhost:3002' : '';
     this.odooConfig = null;
   }
 

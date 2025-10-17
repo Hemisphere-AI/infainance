@@ -3,8 +3,8 @@
  * Handles organization and integration management from the frontend
  */
 
-// Use Netlify Functions - no need for separate backend URL
-const API_BASE = ''
+// Use backend server for local development, Netlify Functions for production
+const API_BASE = import.meta.env.DEV ? 'http://localhost:3002' : ''
 
 class OrganizationService {
   /**
