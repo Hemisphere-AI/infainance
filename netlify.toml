@@ -1,10 +1,28 @@
 [build]
   publish = "dist"
   command = "npm run build"
+  functions = "netlify/functions"
 
 [build.environment]
   NODE_VERSION = "18"
 
+# API redirects to Netlify Functions
+[[redirects]]
+  from = "/api/organizations"
+  to = "/.netlify/functions/organizations"
+  status = 200
+
+[[redirects]]
+  from = "/api/organizations/:organizationId/checks"
+  to = "/.netlify/functions/organization-checks/:organizationId/checks"
+  status = 200
+
+[[redirects]]
+  from = "/api/checks/:checkId/results"
+  to = "/.netlify/functions/check-results/:checkId"
+  status = 200
+
+# Frontend redirects
 [[redirects]]
   from = "/*"
   to = "/index.html"
