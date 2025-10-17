@@ -4,7 +4,7 @@
  */
 
 // Use backend server for full Odoo AI Agent functionality
-const API_BASE = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3002'
+const API_BASE = import.meta.env.VITE_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:3002' : '')
 
 class OrganizationService {
   /**
