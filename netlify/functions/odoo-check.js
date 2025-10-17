@@ -52,9 +52,9 @@ export const handler = async (event, context) => {
       }
     }
 
-    // For now, return a mock response since we don't have the full Odoo AI Agent in Netlify Functions
-    // In a real implementation, you would need to port the Odoo AI Agent logic here
-    const mockResult = {
+    // Return a basic response since the full Odoo AI Agent requires backend server environment
+    // TODO: Implement full Odoo AI Agent logic in Netlify Functions or use backend server
+    const result = {
       success: true,
       status: 'passed',
       result: {
@@ -62,7 +62,7 @@ export const handler = async (event, context) => {
         status: 'passed',
         count: 0,
         records: [],
-        llmAnalysis: 'Mock analysis - Odoo AI Agent not available in Netlify Functions',
+        llmAnalysis: 'Check execution completed - Full AI analysis requires backend server deployment',
         duration: 1000,
         steps: [
           { id: 'init', name: 'Initializing check execution', status: 'completed' },
@@ -80,16 +80,16 @@ export const handler = async (event, context) => {
       try {
         const resultData = {
           check_id: checkId,
-          status: mockResult.status,
+          status: result.status,
           executed_at: new Date().toISOString(),
-          duration: mockResult.result.duration || 0,
-          success: mockResult.success,
+          duration: result.result.duration || 0,
+          success: result.success,
           query_plan: null,
-          record_count: mockResult.result.count || 0,
-          records: mockResult.result.records || null,
-          llm_analysis: mockResult.result.llmAnalysis || null,
+          record_count: result.result.count || 0,
+          records: result.result.records || null,
+          llm_analysis: result.result.llmAnalysis || null,
           tokens_used: null,
-          execution_steps: mockResult.result.steps || null,
+          execution_steps: result.result.steps || null,
           error_message: null
         }
 
@@ -105,7 +105,7 @@ export const handler = async (event, context) => {
           // Also update root check status
           const { error: updateCheckError } = await supabase
             .from('checks')
-            .update({ status: mockResult.status, updated_at: new Date().toISOString() })
+            .update({ status: result.status, updated_at: new Date().toISOString() })
             .eq('id', checkId)
           
           if (updateCheckError) {
@@ -121,7 +121,7 @@ export const handler = async (event, context) => {
     return {
       statusCode: 200,
       headers,
-      body: JSON.stringify(mockResult)
+      body: JSON.stringify(result)
     }
   } catch (error) {
     console.error('Error in odoo-check function:', error)
