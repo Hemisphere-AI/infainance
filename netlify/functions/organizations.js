@@ -197,14 +197,14 @@ export const handler = async (event, context) => {
         }
 
         // Check if user has access to this organization and is owner
-        const { data: userAccess, error: accessError } = await supabase
+        const { data: deleteUserAccess, error: deleteAccessError } = await supabase
           .from('organization_users')
           .select('role')
           .eq('organization_id', deleteOrganizationId)
           .eq('user_id', userId)
           .single()
 
-        if (accessError || !userAccess) {
+        if (deleteAccessError || !deleteUserAccess) {
           return {
             statusCode: 403,
             headers,
@@ -216,7 +216,7 @@ export const handler = async (event, context) => {
         }
 
         // Only owners can delete organizations
-        if (userAccess.role !== 'owner') {
+        if (deleteUserAccess.role !== 'owner') {
           return {
             statusCode: 403,
             headers,
