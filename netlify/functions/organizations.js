@@ -28,8 +28,12 @@ export const handler = async (event, context) => {
   }
 
   try {
-    const { httpMethod, queryStringParameters, body } = event
+    const { httpMethod, path, queryStringParameters, body } = event
     const { userId: queryUserId } = queryStringParameters || {}
+    
+    // Extract organizationId from path if present (e.g., /api/organizations/123)
+    const pathParts = path.split('/')
+    const organizationId = pathParts[pathParts.length - 1] !== 'organizations' ? pathParts[pathParts.length - 1] : null
     
     // Parse request body to get userId if not in query params
     let requestBody = {}
@@ -125,9 +129,10 @@ export const handler = async (event, context) => {
         }
 
       case 'PUT':
-        const { organizationId } = requestBody
+        const { organizationId: putOrgId } = requestBody
+        const putOrganizationId = organizationId || putOrgId
         
-        if (!userId || !organizationId || !name) {
+        if (!userId || !putOrganizationId || !name) {
           return {
             statusCode: 400,
             headers,
@@ -138,11 +143,30 @@ export const handler = async (event, context) => {
           }
         }
 
+        // Check if user has access to this organization
+        const { data: userAccess, error: accessError } = await supabase
+          .from('organization_users')
+          .select('role')
+          .eq('organization_id', putOrganizationId)
+          .eq('user_id', userId)
+          .single()
+
+        if (accessError || !userAccess) {
+          return {
+            statusCode: 403,
+            headers,
+            body: JSON.stringify({
+              success: false,
+              error: 'User does not have access to this organization'
+            })
+          }
+        }
+
         // Update organization
         const { data: updateData, error: updateError } = await supabase
           .from('organizations')
           .update({ name })
-          .eq('id', organizationId)
+          .eq('id', putOrganizationId)
           .select()
           .single()
 
@@ -159,8 +183,9 @@ export const handler = async (event, context) => {
 
       case 'DELETE':
         const { organizationId: deleteOrgId } = requestBody
+        const deleteOrganizationId = organizationId || deleteOrgId
         
-        if (!userId || !deleteOrgId) {
+        if (!userId || !deleteOrganizationId) {
           return {
             statusCode: 400,
             headers,
@@ -171,11 +196,42 @@ export const handler = async (event, context) => {
           }
         }
 
+        // Check if user has access to this organization and is owner
+        const { data: userAccess, error: accessError } = await supabase
+          .from('organization_users')
+          .select('role')
+          .eq('organization_id', deleteOrganizationId)
+          .eq('user_id', userId)
+          .single()
+
+        if (accessError || !userAccess) {
+          return {
+            statusCode: 403,
+            headers,
+            body: JSON.stringify({
+              success: false,
+              error: 'User does not have access to this organization'
+            })
+          }
+        }
+
+        // Only owners can delete organizations
+        if (userAccess.role !== 'owner') {
+          return {
+            statusCode: 403,
+            headers,
+            body: JSON.stringify({
+              success: false,
+              error: 'Only organization owners can delete organizations'
+            })
+          }
+        }
+
         // Delete organization (cascade will handle organization_users)
         const { error: deleteError } = await supabase
           .from('organizations')
           .delete()
-          .eq('id', deleteOrgId)
+          .eq('id', deleteOrganizationId)
 
         if (deleteError) throw deleteError
 

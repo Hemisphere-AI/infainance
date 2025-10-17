@@ -13,6 +13,11 @@
   status = 200
 
 [[redirects]]
+  from = "/api/organizations/:organizationId"
+  to = "/.netlify/functions/organizations"
+  status = 200
+
+[[redirects]]
   from = "/api/organizations/:organizationId/checks"
   to = "/.netlify/functions/organization-checks/:organizationId/checks"
   status = 200

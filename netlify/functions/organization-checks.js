@@ -59,6 +59,25 @@ export const handler = async (event, context) => {
           }
         }
 
+        // Check if user has access to this organization
+        const { data: userAccess, error: accessError } = await supabase
+          .from('organization_users')
+          .select('role')
+          .eq('organization_id', organizationId)
+          .eq('user_id', userId)
+          .single()
+
+        if (accessError || !userAccess) {
+          return {
+            statusCode: 403,
+            headers,
+            body: JSON.stringify({
+              success: false,
+              error: 'User does not have access to this organization'
+            })
+          }
+        }
+
         // Get organization checks
         const { data, error } = await supabase
           .from('checks')
@@ -87,6 +106,25 @@ export const handler = async (event, context) => {
             body: JSON.stringify({
               success: false,
               error: 'userId, organizationId, and name are required'
+            })
+          }
+        }
+
+        // Check if user has access to this organization
+        const { data: userAccessPost, error: accessErrorPost } = await supabase
+          .from('organization_users')
+          .select('role')
+          .eq('organization_id', organizationId)
+          .eq('user_id', userId)
+          .single()
+
+        if (accessErrorPost || !userAccessPost) {
+          return {
+            statusCode: 403,
+            headers,
+            body: JSON.stringify({
+              success: false,
+              error: 'User does not have access to this organization'
             })
           }
         }
