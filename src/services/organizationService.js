@@ -3,7 +3,7 @@
  * Handles organization and integration management from the frontend
  */
 
-const BACKEND_URL = 'http://localhost:3002'
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3002'
 
 class OrganizationService {
   /**

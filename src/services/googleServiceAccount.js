@@ -7,6 +7,7 @@
 class GoogleServiceAccountService {
   constructor() {
     this.initialized = false
+    this.baseUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3002'
   }
 
   /**
@@ -28,7 +29,7 @@ class GoogleServiceAccountService {
       console.log(`📊 Creating spreadsheet for user ${userId} (${userEmail})`)
 
       // Call backend API to create spreadsheet
-      const response = await fetch('http://localhost:3002/api/sheets/create-for-user', {
+      const response = await fetch(`${this.baseUrl}/api/sheets/create-for-user`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -67,7 +68,7 @@ class GoogleServiceAccountService {
     await this.initialize()
 
     try {
-      const response = await fetch(`http://localhost:3002/api/sheets/read?spreadsheetId=${spreadsheetId}&range=${encodeURIComponent(range)}`)
+      const response = await fetch(`${this.baseUrl}/api/sheets/read?spreadsheetId=${spreadsheetId}&range=${encodeURIComponent(range)}`)
       
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`)
@@ -90,7 +91,7 @@ class GoogleServiceAccountService {
     await this.initialize()
 
     try {
-      const response = await fetch(`http://localhost:3002/api/sheets/metadata?spreadsheetId=${spreadsheetId}`)
+      const response = await fetch(`${this.baseUrl}/api/sheets/metadata?spreadsheetId=${spreadsheetId}`)
       
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`)
@@ -202,7 +203,7 @@ class GoogleServiceAccountService {
       })
 
       // Save to database via API
-      const response = await fetch('http://localhost:3002/api/sheets/sync-from-google', {
+      const response = await fetch(`${this.baseUrl}/api/sheets/sync-from-google`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -238,7 +239,7 @@ class GoogleServiceAccountService {
     await this.initialize()
 
     try {
-      const response = await fetch('http://localhost:3002/api/sheets/write', {
+      const response = await fetch(`${this.baseUrl}/api/sheets/write`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -307,7 +308,7 @@ class GoogleServiceAccountService {
     await this.initialize()
 
     try {
-      const response = await fetch('http://localhost:3002/api/sheets/batch-update', {
+      const response = await fetch(`${this.baseUrl}/api/sheets/batch-update`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
