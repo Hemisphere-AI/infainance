@@ -110,8 +110,8 @@ const CheckResult = ({
     // Ensure URL doesn't end with slash to avoid double slashes
     const baseUrl = odooConfig.url.replace(/\/$/, '');
     
-    // Construct the Odoo record URL in the format: /odoo/model/id
-    const url = `${baseUrl}/odoo/${model}/${recordId}`;
+    // Construct the correct Odoo record URL format: /web#id=X&model=Y&view_type=form
+    const url = `${baseUrl}/web#id=${recordId}&model=${model}&view_type=form`;
     return url;
   }, [odooConfig]);
 
