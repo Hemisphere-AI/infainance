@@ -3,6 +3,8 @@ import PropTypes from 'prop-types';
 import { CheckSquare } from 'lucide-react';
 import MCPIntegration from './MCPIntegration';
 import { getStatusIcon } from '../utils/statusIcons.jsx';
+import ContentBlock from './ContentBlock';
+import SubBlock from './SubBlock';
 
 const Checks = ({
   checks = [],
@@ -74,12 +76,6 @@ const Checks = ({
     }
   }, [onUpdateAcceptanceCriteria, currentCheckId]);
 
-  // Calculate dynamic rows for textarea - only expand on Enter key
-  const getTextareaRows = useCallback((text) => {
-    if (!text || !text.trim()) return 1;
-    const lines = text.split('\n').length;
-    return Math.max(1, Math.min(lines, 6)); // Min 1 row, max 6 rows
-  }, []);
 
   const handleRunAnalysis = useCallback(async () => {
     if (descriptionText.trim() && currentCheckId && onUpdateDescription) {
@@ -155,12 +151,10 @@ const Checks = ({
               </div>
               {/* Description text block with play button */}
               <div className="flex items-center space-x-2">
-                <div className="flex-1 text-sm text-gray-600 bg-white p-3 rounded-lg border border-gray-200">
-                  <textarea
+                <div className="flex-1">
+                  <SubBlock
                     value={descriptionText}
                     onChange={handleDescriptionChange}
-                    className="w-full text-sm text-gray-600 bg-transparent border-none outline-none focus:ring-0 resize-none"
-                    rows={getTextareaRows(descriptionText)}
                     placeholder="Enter description for this check..."
                   />
                 </div>
@@ -177,15 +171,11 @@ const Checks = ({
               </div>
 
               {/* Acceptance Criteria text block */}
-              <div className="text-sm text-gray-600 bg-white p-3 rounded-lg border border-gray-200">
-                <textarea
-                  value={acceptanceCriteriaText}
-                  onChange={handleAcceptanceCriteriaChange}
-                  className="w-full text-sm text-gray-600 bg-transparent border-none outline-none focus:ring-0 resize-none"
-                  rows={getTextareaRows(acceptanceCriteriaText)}
-                  placeholder="Enter acceptance criteria for this check..."
-                />
-              </div>
+              <SubBlock
+                value={acceptanceCriteriaText}
+                onChange={handleAcceptanceCriteriaChange}
+                placeholder="Enter acceptance criteria for this check..."
+              />
             </div>
           ) : (
             <h2 className="text-lg font-semibold text-gray-800">Checks</h2>
@@ -197,11 +187,13 @@ const Checks = ({
           {currentCheck ? (
             <div className="space-y-4">
               {/* Single MCP Integration component */}
-              <MCPIntegration
-                check={currentCheck}
-                onAnalysisComplete={(result) => console.log('MCP Analysis Complete:', result)}
-                onRunAnalysis={setAnalyzeCheckFunction}
-              />
+              <ContentBlock>
+                <MCPIntegration
+                  check={currentCheck}
+                  onAnalysisComplete={(result) => console.log('MCP Analysis Complete:', result)}
+                  onRunAnalysis={setAnalyzeCheckFunction}
+                />
+              </ContentBlock>
             </div>
           ) : (
             // Empty State
@@ -209,7 +201,6 @@ const Checks = ({
               <div className="text-center py-8 text-gray-500">
                 <CheckSquare className="w-12 h-12 mx-auto mb-4 text-gray-300" />
                 <p className="text-sm">No checks yet</p>
-                <p className="text-xs text-gray-400 mt-1">Create a check to get started</p>
               </div>
             )
           )}

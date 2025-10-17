@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react'
+import React, { useState, useCallback, useEffect } from 'react'
 import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useParams } from 'react-router-dom'
 // import { FileSpreadsheet } from 'lucide-react'
 // import { CheckSquare } from 'lucide-react' // Unused import
@@ -8,7 +8,7 @@ import PropTypes from 'prop-types'
 import Sidebar from './components/Sidebar'
 // import Checks from './components/Checks' // Unused import
 import CheckResult from './components/CheckResult'
-import OrganizationManagement from './components/OrganizationManagement'
+import Organizations from './components/Organizations'
 // TODO: enable when in platform spreadsheets are available
 // import GoogleSheetsEmbed from './components/GoogleSheetsEmbed'
 import { SupabaseAuthProvider, useSupabaseAuth } from './contexts/SupabaseAuthContext'
@@ -25,76 +25,6 @@ import GoogleOAuthCallback from './components/GoogleOAuthCallback'
 import { supabase } from './lib/supabase'
 import organizationService from './services/organizationService'
 
-// Editable spreadsheet name component
-const EditableSpreadsheetName = ({ name, onRename }) => {
-  const [isEditing, setIsEditing] = useState(false)
-  const [editName, setEditName] = useState(name)
-  const inputRef = useRef(null)
-
-  useEffect(() => {
-    setEditName(name)
-  }, [name])
-
-  useEffect(() => {
-    if (isEditing && inputRef.current) {
-      inputRef.current.focus()
-      inputRef.current.select()
-    }
-  }, [isEditing])
-
-  const handleDoubleClick = () => {
-    setIsEditing(true)
-  }
-
-  const handleSave = async () => {
-    if (editName.trim() && editName.trim() !== name) {
-      await onRename(editName.trim())
-    }
-    setIsEditing(false)
-  }
-
-  const handleCancel = () => {
-    setEditName(name)
-    setIsEditing(false)
-  }
-
-  const handleKeyDown = (e) => {
-    if (e.key === 'Enter') {
-      handleSave()
-    } else if (e.key === 'Escape') {
-      handleCancel()
-    }
-  }
-
-  if (isEditing) {
-    return (
-      <input
-        ref={inputRef}
-        type="text"
-        value={editName}
-        onChange={(e) => setEditName(e.target.value)}
-        onBlur={handleSave}
-        onKeyDown={handleKeyDown}
-        className="text-sm font-medium text-gray-700 bg-transparent border border-blue-300 rounded px-1 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-500"
-      />
-    )
-  }
-
-  return (
-    <h4 
-      className="text-sm font-medium text-gray-700 cursor-pointer hover:bg-gray-100 rounded px-1 py-0.5 transition-colors"
-      onDoubleClick={handleDoubleClick}
-      title="Double-click to rename"
-    >
-      {name}
-    </h4>
-  )
-}
-
-EditableSpreadsheetName.propTypes = {
-  name: PropTypes.string.isRequired,
-  onRename: PropTypes.func.isRequired
-}
 
 function MainApp() {
   // Let Supabase handle OAuth hash fragments naturally
@@ -171,38 +101,13 @@ function MainSpreadsheetApp({ user }) {
   const navigate = useNavigate()
   const { checkId, organizationId } = useParams()
   
-  // TODO: enable when in platform spreadsheets are available
-  // const [currentSpreadsheetId, setCurrentSpreadsheetId] = useState(null)
-  // const [spreadsheetData, setSpreadsheetData] = useState([])
-  
   // Organizations and Checks state
   const [organizations, setOrganizations] = useState([])
   const [currentOrganizationId, setCurrentOrganizationId] = useState(null)
   const [checks, setChecks] = useState([])
   const [currentCheckId, setCurrentCheckId] = useState(null)
-  
-  // TODO: enable chat interface when chatting with AI Agent is possible
-  // const [isChatLoading, setIsChatLoading] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  // const [chatCollapsed, setChatCollapsed] = useState(false)
-  // TODO: enable chat interface when chatting with AI Agent is possible
-  // const [saveStatus, setSaveStatus] = useState({ type: null, message: null }) // 'saving', 'success', 'error'
-  // TODO: enable when in platform spreadsheets are available
-  // const [googleSheetsConfig, setGoogleSheetsConfig] = useState({
-  //   sheetUrl: '',
-  //   sheetId: '',
-  //   isConfigured: false,
-  //   isPublic: false,
-  //   refreshInterval: 30000,
-  //   autoRefresh: true
-  // })
-  // TODO: enable when in platform spreadsheets are available
-  // const [googleSheetsVisible, setGoogleSheetsVisible] = useState(true)
-  // TODO: enable when in platform spreadsheets are available
-  // const toolCallHandlerRef = useRef(null)
-  // TODO: enable chat interface when chatting with AI Agent is possible
-  // const addBotMessageRef = useRef(null)
-  // const llmServiceRef = useRef(null)
+
 
   // Handle URL parameter for check selection
   useEffect(() => {
@@ -220,27 +125,6 @@ function MainSpreadsheetApp({ user }) {
     }
   }, [organizationId, currentOrganizationId])
 
-  // Function to load checks for sidebar (defined before useEffect)
-  const loadOrganizationChecksForSidebar = useCallback(async (organizationId) => {
-    if (!organizationId || !user?.id) {
-      return;
-    }
-
-    try {
-      const result = await organizationService.getOrganizationChecks(organizationId, user.id);
-      if (result.success) {
-        setChecks(prev => {
-          // Remove existing checks for this organization and add new ones
-          const otherChecks = prev.filter(check => check.organization_id !== organizationId);
-          return [...otherChecks, ...(result.checks || [])];
-        });
-      } else {
-        console.error('Failed to load checks for organization:', result.error);
-      }
-    } catch (err) {
-      console.error('Error loading checks for organization:', err);
-    }
-  }, [user?.id])
 
   // Load user's organizations
   useEffect(() => {
@@ -260,9 +144,13 @@ function MainSpreadsheetApp({ user }) {
               setCurrentOrganizationId(result.organizations[0].id)
             }
             
-            // Load checks for all organizations
+            // Load checks for all organizations (for sidebar)
+            // Only load for organizations that don't already have checks loaded
             result.organizations.forEach(org => {
-              loadOrganizationChecksForSidebar(org.id)
+              const hasChecks = checks.some(check => check.organization_id === org.id)
+              if (!hasChecks) {
+                loadOrganizationChecks(org.id)
+              }
             })
           }
         } else {
@@ -280,27 +168,29 @@ function MainSpreadsheetApp({ user }) {
     return () => {
       isMounted = false
     }
-  }, [user?.id, currentOrganizationId, loadOrganizationChecksForSidebar, organizationId])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, organizationId]) // Removed currentOrganizationId to break circular dependency
 
-  // Load checks for current organization
-  const loadOrganizationChecks = useCallback(async () => {
-    if (!currentOrganizationId || !user?.id) {
+  // Load checks for organization
+  const loadOrganizationChecks = useCallback(async (organizationId = currentOrganizationId) => {
+    if (!organizationId || !user?.id) {
       return
     }
 
     try {
-      const result = await organizationService.getOrganizationChecks(currentOrganizationId, user.id)
+      const result = await organizationService.getOrganizationChecks(organizationId, user.id)
       
       if (result.success) {
         setChecks(prev => {
           // Remove existing checks for this organization and add new ones
-          const otherChecks = prev.filter(check => check.organization_id !== currentOrganizationId)
+          const otherChecks = prev.filter(check => check.organization_id !== organizationId)
           return [...otherChecks, ...(result.checks || [])]
         })
-        // Auto-select first check if none selected
-        if (result.checks?.length > 0 && !currentCheckId) {
+        // Only auto-select first check if we're on a check-specific route and this is the current organization
+        // Don't auto-select when just viewing organization page
+        if (result.checks?.length > 0 && !currentCheckId && checkId && organizationId === currentOrganizationId) {
           setCurrentCheckId(result.checks[0].id)
-        } else if (result.checks?.length === 0) {
+        } else if (result.checks?.length === 0 && organizationId === currentOrganizationId) {
           setCurrentCheckId(null)
         }
       } else {
@@ -309,238 +199,15 @@ function MainSpreadsheetApp({ user }) {
     } catch (err) {
       console.error('Failed to load organization checks:', err)
     }
-  }, [currentOrganizationId, user?.id, currentCheckId])
+  }, [currentOrganizationId, user?.id, checkId, currentCheckId])
 
+  // Only load checks when currentOrganizationId changes, not on every render
   useEffect(() => {
-    loadOrganizationChecks()
-  }, [loadOrganizationChecks])
+    if (currentOrganizationId) {
+      loadOrganizationChecks(currentOrganizationId)
+    }
+  }, [currentOrganizationId, user?.id, loadOrganizationChecks])
 
-  // TODO: enable when in platform spreadsheets are available
-  // Load user's spreadsheets
-  // const { 
-  //   spreadsheets, 
-  //   loading: spreadsheetsLoading, 
-  //   createSpreadsheet,
-  //   renameSpreadsheet,
-  //   deleteSpreadsheet
-  // } = useUserSpreadsheets(user.id)
-
-  // Load current spreadsheet
-  // const { 
-  //   spreadsheet, 
-  //   loading: spreadsheetLoading, 
-  //   saving, 
-  //   saveSpreadsheet,
-  //   updateName
-  // } = useSpreadsheet(currentSpreadsheetId, user.id)
-
-  // TODO: enable when in platform spreadsheets are available
-  // Debug current spreadsheet ID changes
-  // useEffect(() => {
-  // }, [currentSpreadsheetId])
-
-  // Initialize with first spreadsheet or create new one
-  // useEffect(() => {
-  //   if (spreadsheets.length > 0 && !currentSpreadsheetId) {
-  //     setCurrentSpreadsheetId(spreadsheets[0].id)
-  //   } else if (spreadsheets.length === 0 && !spreadsheetsLoading) {
-  //     // Create a new spreadsheet for the user
-  //     createSpreadsheet('Untitled Spreadsheet').then((newSpreadsheet) => {
-  //       setCurrentSpreadsheetId(newSpreadsheet.id)
-  //     }).catch((error) => {
-  //       console.error('Error creating spreadsheet:', error)
-  //     })
-  //   }
-  // }, [spreadsheets, currentSpreadsheetId, spreadsheetsLoading, createSpreadsheet, user.id])
-
-  // Auto-show Google Sheets integration when user has a spreadsheet
-  // useEffect(() => {
-  //   if (currentSpreadsheetId && user?.id) {
-  //     setGoogleSheetsVisible(true)
-  //   }
-  // }, [currentSpreadsheetId, user?.id])
-
-  // Load initial spreadsheet data (only when spreadsheet ID changes, not when user edits)
-  // useEffect(() => {
-  //   if (spreadsheet?.data && Array.isArray(spreadsheet.data)) {
-  //     setSpreadsheetData(spreadsheet.data)
-  //   } else if (spreadsheet && (!spreadsheet.data || !Array.isArray(spreadsheet.data))) {
-  //     setSpreadsheetData([])
-  //   }
-  // }, [spreadsheet?.id]) // Only trigger when spreadsheet ID changes, not on data changes
-
-  // Handle spreadsheet data changes
-  // const handleSpreadsheetChange = useCallback(async (newData) => {
-  //   setSpreadsheetData(newData)
-    
-  //   // Update LLM service with new data
-  //   if (llmServiceRef.current) {
-  //     llmServiceRef.current.updateSpreadsheetData(newData)
-  //   }
-    
-  //   // Debounce saves to avoid too many database calls
-  //   if (currentSpreadsheetId) {
-  //     try {
-  //       // TODO: enable chat interface when chatting with AI Agent is possible
-  //       // setSaveStatus({ type: 'saving', message: 'Saving changes...' })
-  //       await saveSpreadsheet(newData)
-  //       // setSaveStatus({ type: 'success', message: 'Changes saved successfully' })
-        
-  //       // Clear success message after 2 seconds
-  //       // setTimeout(() => {
-  //       //   setSaveStatus({ type: null, message: null })
-  //       // }, 2000)
-  //     } catch (error) {
-  //       console.error('❌ Error saving spreadsheet:', error)
-  //       // setSaveStatus({ type: 'error', message: 'Failed to save changes. Please try again.' })
-        
-  //       // Clear error message after 5 seconds
-  //       // setTimeout(() => {
-  //       //   setSaveStatus({ type: null, message: null })
-  //       // }, 5000)
-  //     }
-  //   }
-  // }, [currentSpreadsheetId, saveSpreadsheet])
-
-  // Initialize LLM service when user and spreadsheet data are available
-  // useEffect(() => {
-  //   if (user && spreadsheetData) {
-  //     llmServiceRef.current = new LLMService(
-  //       spreadsheetData,
-  //       handleSpreadsheetChange,
-  //       toolCallHandlerRef.current,
-  //       user,
-  //       googleSheetsConfig
-  //     )
-  //   }
-  // }, [user, spreadsheetData, handleSpreadsheetChange, googleSheetsConfig])
-
-  // TODO: enable chat interface when chatting with AI Agent is possible
-  // Handle tool call registration from ChatInterface
-  // const handleToolCallRegistration = useCallback((handler) => {
-  //   toolCallHandlerRef.current = handler
-  // }, [])
-
-  // Handle bot message registration from ChatInterface
-  // const handleBotMessageRegistration = useCallback((handler) => {
-  //   addBotMessageRef.current = handler
-  // }, [])
-
-  // TODO: enable chat interface when chatting with AI Agent is possible
-  // Handle sending messages from ChatInterface
-  // const handleSendMessage = useCallback(async (message) => {
-  //   if (!llmServiceRef.current) {
-  //     console.error('LLM service not initialized')
-  //     return 'Error: LLM service not available'
-  //   }
-
-  //   try {
-  //     setIsChatLoading(true)
-  //     const response = await llmServiceRef.current.chat(message)
-      
-  //     // Update token quota status after successful completion
-  //     if (llmServiceRef.current) {
-  //       // Add a small delay to ensure token cache is fully updated
-  //       setTimeout(async () => {
-  //         try {
-  //           const updatedQuotaStatus = await llmServiceRef.current.getTokenQuotaStatus();
-  //           // Dispatch a custom event to notify UserProfile component
-  //           window.dispatchEvent(new CustomEvent('tokenQuotaUpdated', { 
-  //             detail: updatedQuotaStatus 
-  //           }));
-  //         } catch (error) {
-  //           console.error('Error updating token quota status:', error);
-  //         }
-  //       }, 100);
-  //     }
-      
-  //     return response
-  //   } catch (error) {
-  //     console.error('Error in LLM service:', error)
-  //     return `Error: ${error.message}`
-  //   } finally {
-  //     setIsChatLoading(false)
-  //   }
-  // }, [])
-
-  // Handle canceling LLM requests
-  // const handleCancel = useCallback(() => {
-  //   if (llmServiceRef.current) {
-  //     llmServiceRef.current.cancel()
-  //   }
-  //   setIsChatLoading(false)
-  // }, [])
-
-  // TODO: enable when in platform spreadsheets are available
-  // Create new spreadsheet
-  // const handleCreateSpreadsheet = useCallback(async () => {
-  //   try {
-  //     // Create local spreadsheet first
-  //     const newSpreadsheet = await createSpreadsheet('Untitled Spreadsheet')
-  //     setCurrentSpreadsheetId(newSpreadsheet.id)
-  //     setSpreadsheetData([])
-      
-  //     // Note: Google Sheet creation is now handled automatically by GoogleSheetsEmbed
-  //     // when the component detects a new spreadsheet without a Google Sheet
-  //     console.log('✅ Local spreadsheet created, Google Sheet will be auto-created')
-  //   } catch (error) {
-  //     console.error('Error creating spreadsheet:', error)
-  //   }
-  // }, [createSpreadsheet])
-
-  // TODO: enable when in platform spreadsheets are available
-  // Handle spreadsheet selection
-  // const handleSpreadsheetSelect = useCallback((spreadsheetId) => {
-  //   if (spreadsheetId !== currentSpreadsheetId) {
-  //     setCurrentSpreadsheetId(spreadsheetId)
-  //     // Let the useEffect handle data loading when spreadsheet ID changes
-  //   }
-  // }, [currentSpreadsheetId])
-
-  // Handle spreadsheet rename
-  // const handleSpreadsheetRename = useCallback(async (spreadsheetId, newName) => {
-  //   try {
-  //     // Update the current spreadsheet name if it's the one being renamed
-  //     if (spreadsheetId === currentSpreadsheetId) {
-  //       await updateName(newName)
-  //     }
-  //     // Also update the spreadsheets list
-  //     await renameSpreadsheet(spreadsheetId, newName)
-      
-  //     // Also update the Google Sheet title if this spreadsheet has a Google Sheet configured
-  //     try {
-  //       const { data: spreadsheet, error } = await supabase
-  //         .from('spreadsheets')
-  //         .select('google_sheet_id')
-  //         .eq('id', spreadsheetId)
-  //         .single()
-        
-  //       if (!error && spreadsheet?.google_sheet_id) {
-  //         const { googleSheetsService } = await import('./services/googleSheetsService.js')
-  //         const result = await googleSheetsService.updateSpreadsheetTitle(spreadsheet.google_sheet_id, newName)
-  //         if (result.success) {
-  //           console.log('✅ Successfully updated Google Sheet title from sidebar rename')
-  //         } else {
-  //           console.warn('⚠️ Failed to update Google Sheet title from sidebar rename:', result.error)
-  //         }
-  //       }
-  //     } catch (error) {
-  //       console.warn('⚠️ Error updating Google Sheet title from sidebar rename:', error)
-  //       // Don't throw here - we still want the local rename to succeed
-  //     }
-  //   } catch (error) {
-  //     console.error('Error renaming spreadsheet:', error)
-  //   }
-  // }, [renameSpreadsheet, updateName, currentSpreadsheetId])
-
-  // Handle Google Sheets config change
-  // const handleGoogleSheetsConfigChange = useCallback((config) => {
-  //   setGoogleSheetsConfig(config)
-  //   // Update LLM service with new Google Sheets config
-  //   if (llmServiceRef.current) {
-  //     llmServiceRef.current.updateGoogleSheetsConfig(config)
-  //   }
-  // }, [])
 
   // Handle sidebar toggle
   const handleSidebarToggle = useCallback(() => {
@@ -613,26 +280,6 @@ function MainSpreadsheetApp({ user }) {
     }
   }, [user?.id, currentOrganizationId, navigate])
 
-  const handleLoadOrganizationChecks = useCallback(async (organizationId) => {
-    if (!organizationId || !user?.id) {
-      return;
-    }
-
-    try {
-      const result = await organizationService.getOrganizationChecks(organizationId, user.id);
-      if (result.success) {
-        setChecks(prev => {
-          // Remove existing checks for this organization and add new ones
-          const otherChecks = prev.filter(check => check.organization_id !== organizationId);
-          return [...otherChecks, ...(result.checks || [])];
-        });
-      } else {
-        console.error('Failed to load checks for organization:', result.error);
-      }
-    } catch (err) {
-      console.error('Error loading checks for organization:', err);
-    }
-  }, [user?.id])
 
   // Check management functions
   const handleCreateCheck = useCallback(async (organizationId = currentOrganizationId) => {
@@ -766,37 +413,13 @@ function MainSpreadsheetApp({ user }) {
     }
   }, [currentOrganizationId])
 
+
   const handleRunAnalysis = useCallback(async (checkId) => {
     // This function will be called by the Checks component
     // The actual analysis will be triggered by the MCPIntegration component
     console.log('Run analysis requested for check:', checkId)
   }, [])
 
-  // TODO: enable chat interface when chatting with AI Agent is possible
-  // const handleChatToggle = useCallback(() => {
-  //   setChatCollapsed(prev => !prev)
-  // }, [])
-
-  // TODO: enable when in platform spreadsheets are available
-  // Handle spreadsheet delete
-  // const handleSpreadsheetDelete = useCallback(async (spreadsheetId) => {
-  //   try {
-  //     await deleteSpreadsheet(spreadsheetId)
-  //     // If we deleted the current spreadsheet, switch to the first available one
-  //     if (currentSpreadsheetId === spreadsheetId) {
-  //       const remainingSpreadsheets = spreadsheets.filter(s => s.id !== spreadsheetId)
-  //       if (remainingSpreadsheets.length > 0) {
-  //         setCurrentSpreadsheetId(remainingSpreadsheets[0].id)
-  //       } else {
-  //         // Create a new spreadsheet if none remain
-  //         const newSpreadsheet = await createSpreadsheet('Untitled Spreadsheet')
-  //         setCurrentSpreadsheetId(newSpreadsheet.id)
-  //       }
-  //     }
-  //   } catch (error) {
-  //     console.error('Error deleting spreadsheet:', error)
-  //   }
-  // }, [deleteSpreadsheet, currentSpreadsheetId, spreadsheets, createSpreadsheet])
 
   return (
     <div className="h-screen bg-gray-50 flex flex-col">
@@ -838,7 +461,7 @@ function MainSpreadsheetApp({ user }) {
           onDeleteOrganization={handleDeleteOrganization}
           onDeleteCheck={handleDeleteCheck}
           onToggleCheck={handleToggleCheck}
-          onLoadOrganizationChecks={handleLoadOrganizationChecks}
+          onLoadOrganizationChecks={loadOrganizationChecks}
           isOpen={sidebarOpen}
           onToggle={handleSidebarToggle}
         />
@@ -864,36 +487,13 @@ function MainSpreadsheetApp({ user }) {
                   onRefreshChecks={loadOrganizationChecks}
                   user={user}
                 />
-              ) : currentOrganizationId && user?.id ? (
-                <OrganizationManagement 
-                  organization={organizations.find(org => org.id === currentOrganizationId && org.created_at && org.updated_at)}
-                  onOrganizationUpdate={(updatedOrg) => {
-                    setOrganizations(prev => prev.map(org => 
-                      org.id === updatedOrg.id ? updatedOrg : org
-                    ))
-                  }}
-                  onIntegrationUpdate={() => {
-                    // Integration updated, could refresh data if needed
-                  }}
+              ) : currentOrganizationId ? (
+                <Organizations 
+                  organizations={organizations}
+                  currentOrganizationId={currentOrganizationId}
+                  onRenameOrganization={handleRenameOrganization}
+                  user={user}
                 />
-              ) : organizations.length === 0 ? (
-                <div className="flex-1 flex items-center justify-center bg-gray-50">
-                  <div className="text-center">
-                    <div className="w-16 h-16 mx-auto mb-4 text-gray-300">
-                      <svg fill="currentColor" viewBox="0 0 20 20">
-                        <path fillRule="evenodd" d="M4 4a2 2 0 00-2 2v8a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2H4zm2 6a2 2 0 114 0 2 2 0 01-4 0zm8 0a2 2 0 114 0 2 2 0 01-4 0z" clipRule="evenodd" />
-                      </svg>
-                    </div>
-                    <h3 className="text-lg font-medium text-gray-900 mb-2">Start by creating a new organization</h3>
-                    <p className="text-gray-500 mb-4">Create an organization to manage your checks and integrations</p>
-                    <button
-                      onClick={handleCreateOrganization}
-                      className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-                    >
-                      Create Organization
-                    </button>
-                  </div>
-                </div>
               ) : (
                 <div className="flex-1 flex items-center justify-center bg-gray-50">
                   <div className="text-center">
@@ -910,20 +510,6 @@ function MainSpreadsheetApp({ user }) {
             </div>
           </div>
 
-          {/* TODO: enable chat interface when chatting with AI Agent is possible */}
-          {/* Chat interface */}
-          {/* <div className="flex-shrink-0 w-full lg:w-auto">
-            <ChatInterface 
-              onSendMessage={handleSendMessage}
-              isLoading={isChatLoading}
-              onToolCall={handleToolCallRegistration}
-              onCancel={handleCancel}
-              llmService={llmServiceRef.current}
-              onAddBotMessage={handleBotMessageRegistration}
-              isCollapsed={chatCollapsed}
-              onToggleCollapse={handleChatToggle}
-            />
-          </div> */}
         </div>
       </div>
     </div>
