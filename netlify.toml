@@ -22,6 +22,16 @@
   to = "/.netlify/functions/check-results/:checkId"
   status = 200
 
+[[redirects]]
+  from = "/api/organizations/:organizationId/integrations"
+  to = "/.netlify/functions/organization-integrations/:organizationId/integrations"
+  status = 200
+
+[[redirects]]
+  from = "/api/organizations/integrations/:integrationId"
+  to = "/.netlify/functions/organization-integrations/:integrationId"
+  status = 200
+
 # Frontend redirects
 [[redirects]]
   from = "/*"

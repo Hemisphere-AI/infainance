@@ -502,6 +502,8 @@ function MainSpreadsheetApp({ user }) {
                         <path fillRule="evenodd" d="M4 4a2 2 0 00-2 2v8a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2H4zm2 6a2 2 0 114 0 2 2 0 01-4 0zm8 0a2 2 0 114 0 2 2 0 01-4 0z" clipRule="evenodd" />
                       </svg>
                     </div>
+                    <h3 className="text-lg font-medium text-gray-900 mb-2">Select an organization</h3>
+                    <p className="text-gray-500">Choose an organization from the sidebar to get started</p>
                   </div>
                 </div>
               )}
