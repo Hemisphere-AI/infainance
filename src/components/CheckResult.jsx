@@ -49,8 +49,8 @@ const CheckResult = ({
   useEffect(() => {
     const loadOdooConfig = async () => {
       try {
-        // Use backend server for full Odoo AI Agent functionality
-        const apiBase = import.meta.env.VITE_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:3002' : '');
+        // Use Netlify Functions for full Odoo AI Agent functionality
+        const apiBase = import.meta.env.DEV ? 'http://localhost:3002' : '';
         const response = await fetch(`${apiBase}/api/odoo/config?organizationId=${organizationId}`);
         if (response.ok) {
           const config = await response.json();
@@ -183,42 +183,12 @@ const CheckResult = ({
       await updateStep(checkId, 'connect', 'completed');
       await updateStep(checkId, 'query', 'running');
 
-      // Step 3: Execute AI-driven check via backend API
-      // Use backend server URL from environment or default to localhost
-      const apiBase = import.meta.env.VITE_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:3002' : '');
+      // Step 3: Execute AI-driven check via Netlify Functions
+      // Use Netlify Functions for both development and production
+      const apiBase = import.meta.env.DEV ? 'http://localhost:3002' : '';
       console.log('📡 Making API call to:', `${apiBase}/api/odoo/check`);
-      console.log('🔧 Using backend server for full Odoo AI Agent functionality');
+      console.log('🔧 Using Netlify Functions with full Odoo AI Agent functionality');
       console.log('🌍 Environment:', import.meta.env.DEV ? 'development' : 'production');
-      console.log('🔗 Backend URL:', apiBase || 'Not configured');
-      
-      // Check if backend URL is configured in production
-      if (!apiBase && !import.meta.env.DEV) {
-        console.error('❌ Backend URL not configured in production');
-        await updateStep(checkId, 'connect', 'error');
-        await updateStep(checkId, 'query', 'pending');
-        await updateStep(checkId, 'analyze', 'pending');
-        await updateStep(checkId, 'complete', 'pending');
-        
-        setCheckResults(prev => ({
-          ...prev,
-          [checkId]: {
-            success: false,
-            error: 'Backend server not configured. Please set VITE_BACKEND_URL environment variable.',
-            connectionError: true,
-            count: 0,
-            duration: 0,
-            tokensUsed: 0,
-            llmAnalysis: 'Backend server not configured. Please deploy the backend server and set VITE_BACKEND_URL environment variable.',
-            records: [],
-            queryPlan: null,
-            steps: [],
-            executedAt: new Date()
-          }
-        }));
-        
-        setExpandedChecks(prev => new Set([...prev, checkId]));
-        return;
-      }
       
       const requestBody = {
         checkDescription: check.description || 'Analyze this check',
@@ -403,8 +373,8 @@ const CheckResult = ({
 
       // Refresh the results history to include the new result
       try {
-        // Use backend server for full Odoo AI Agent functionality
-        const apiBase = import.meta.env.VITE_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:3002' : '');
+        // Use Netlify Functions for full Odoo AI Agent functionality
+        const apiBase = import.meta.env.DEV ? 'http://localhost:3002' : '';
         const historyResponse = await fetch(`${apiBase}/api/checks/${checkId}/results`);
         
         if (historyResponse.ok) {

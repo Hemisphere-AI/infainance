@@ -32,8 +32,15 @@
   to = "/.netlify/functions/organization-integrations/:integrationId"
   status = 200
 
-# Removed odoo/check and odoo/config redirects to allow direct backend calls
-# The frontend will use VITE_BACKEND_URL to call the backend server directly
+[[redirects]]
+  from = "/api/odoo/check"
+  to = "/.netlify/functions/odoo-check"
+  status = 200
+
+[[redirects]]
+  from = "/api/odoo/config"
+  to = "/.netlify/functions/odoo-config"
+  status = 200
 
 # Frontend redirects
 [[redirects]]

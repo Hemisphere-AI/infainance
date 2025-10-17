@@ -3,8 +3,8 @@
 
 class MCPService {
   constructor() {
-    // Use backend server for full Odoo AI Agent functionality
-    this.baseUrl = import.meta.env.VITE_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:3002' : '');
+    // Use Netlify Functions for full Odoo AI Agent functionality
+    this.baseUrl = import.meta.env.DEV ? 'http://localhost:3002' : '';
     this.odooConfig = null;
   }
 
