@@ -7,8 +7,8 @@
 class GoogleServiceAccountService {
   constructor() {
     this.initialized = false
-    // Use backend server for local development, Netlify Functions for production
-    this.baseUrl = import.meta.env.DEV ? 'http://localhost:3002' : ''
+    // Use backend server for full Odoo AI Agent functionality
+    this.baseUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3002'
   }
 
   /**

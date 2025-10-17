@@ -49,8 +49,8 @@ const CheckResult = ({
   useEffect(() => {
     const loadOdooConfig = async () => {
       try {
-        // Use backend server for local development, Netlify Functions for production
-        const apiBase = import.meta.env.DEV ? 'http://localhost:3002' : '';
+        // Use backend server for full Odoo AI Agent functionality
+        const apiBase = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3002';
         const response = await fetch(`${apiBase}/api/odoo/config?organizationId=${organizationId}`);
         if (response.ok) {
           const config = await response.json();
@@ -184,8 +184,10 @@ const CheckResult = ({
       await updateStep(checkId, 'query', 'running');
 
       // Step 3: Execute AI-driven check via backend API
+      // Use backend server URL from environment or default to localhost
       const apiBase = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3002';
       console.log('📡 Making API call to:', `${apiBase}/api/odoo/check`);
+      console.log('🔧 Using backend server for full Odoo AI Agent functionality');
       
       const requestBody = {
         checkDescription: check.description || 'Analyze this check',
@@ -370,8 +372,8 @@ const CheckResult = ({
 
       // Refresh the results history to include the new result
       try {
-        // Use backend server for local development, Netlify Functions for production
-        const apiBase = import.meta.env.DEV ? 'http://localhost:3002' : '';
+        // Use backend server for full Odoo AI Agent functionality
+        const apiBase = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3002';
         const historyResponse = await fetch(`${apiBase}/api/checks/${checkId}/results`);
         
         if (historyResponse.ok) {

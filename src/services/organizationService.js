@@ -3,8 +3,8 @@
  * Handles organization and integration management from the frontend
  */
 
-// Use backend server for local development, Netlify Functions for production
-const API_BASE = import.meta.env.DEV ? 'http://localhost:3002' : ''
+// Use backend server for full Odoo AI Agent functionality
+const API_BASE = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3002'
 
 class OrganizationService {
   /**
