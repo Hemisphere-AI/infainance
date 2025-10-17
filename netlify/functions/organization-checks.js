@@ -42,13 +42,9 @@ export const handler = async (event, context) => {
     const { userId: bodyUserId } = requestBody
     const userId = queryUserId || bodyUserId
     
-    console.log('🔍 Organization-checks function: queryUserId:', queryUserId, 'bodyUserId:', bodyUserId, 'final userId:', userId)
-    
     // Extract organizationId from path like /api/organization-checks/123/checks
     const pathParts = path.split('/')
     const organizationId = pathParts[pathParts.length - 2] // Second to last part
-    
-    console.log('🔍 Organization-checks function: path:', path, 'organizationId:', organizationId)
 
     switch (httpMethod) {
       case 'GET':

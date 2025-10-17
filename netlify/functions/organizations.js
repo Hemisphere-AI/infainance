@@ -42,7 +42,6 @@ export const handler = async (event, context) => {
     const { userId: bodyUserId } = requestBody
     const userId = queryUserId || bodyUserId
     
-    console.log('🔍 Organizations function: queryUserId:', queryUserId, 'bodyUserId:', bodyUserId, 'final userId:', userId)
 
     switch (httpMethod) {
       case 'GET':
@@ -122,6 +121,70 @@ export const handler = async (event, context) => {
           body: JSON.stringify({
             success: true,
             organization: orgData
+          })
+        }
+
+      case 'PUT':
+        const { organizationId } = requestBody
+        
+        if (!userId || !organizationId || !name) {
+          return {
+            statusCode: 400,
+            headers,
+            body: JSON.stringify({
+              success: false,
+              error: 'userId, organizationId, and name are required'
+            })
+          }
+        }
+
+        // Update organization
+        const { data: updateData, error: updateError } = await supabase
+          .from('organizations')
+          .update({ name })
+          .eq('id', organizationId)
+          .select()
+          .single()
+
+        if (updateError) throw updateError
+
+        return {
+          statusCode: 200,
+          headers,
+          body: JSON.stringify({
+            success: true,
+            organization: updateData
+          })
+        }
+
+      case 'DELETE':
+        const { organizationId: deleteOrgId } = requestBody
+        
+        if (!userId || !deleteOrgId) {
+          return {
+            statusCode: 400,
+            headers,
+            body: JSON.stringify({
+              success: false,
+              error: 'userId and organizationId are required'
+            })
+          }
+        }
+
+        // Delete organization (cascade will handle organization_users)
+        const { error: deleteError } = await supabase
+          .from('organizations')
+          .delete()
+          .eq('id', deleteOrgId)
+
+        if (deleteError) throw deleteError
+
+        return {
+          statusCode: 200,
+          headers,
+          body: JSON.stringify({
+            success: true,
+            message: 'Organization deleted successfully'
           })
         }
 
