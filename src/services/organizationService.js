@@ -3,8 +3,7 @@
  * Handles organization and integration management from the frontend
  */
 
-// Use Netlify Functions for full Odoo AI Agent functionality
-const API_BASE = import.meta.env.DEV ? 'http://localhost:3002' : ''
+import { API_BASE, buildApiUrl, API_ENDPOINTS } from '../config/api.js'
 
 
 class OrganizationService {
@@ -14,7 +13,7 @@ class OrganizationService {
   async getUserOrganizations(userId) {
     try {
       // console.log('🔍 OrganizationService: Getting organizations for userId:', userId)
-      const response = await fetch(`${API_BASE}/api/organizations?userId=${userId}`)
+      const response = await fetch(buildApiUrl(`${API_ENDPOINTS.ORGANIZATIONS}?userId=${userId}`))
       const data = await response.json()
       // console.log('🔍 OrganizationService: Response:', data)
       // console.log('🔍 OrganizationService: Organizations:', data.organizations)
@@ -42,7 +41,7 @@ class OrganizationService {
         throw new Error('userId is required')
       }
       
-      const response = await fetch(`${API_BASE}/api/organizations`, {
+      const response = await fetch(buildApiUrl(API_ENDPOINTS.ORGANIZATIONS), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -106,7 +105,7 @@ class OrganizationService {
    */
   async getOrganizationIntegrations(organizationId, userId) {
     try {
-      const response = await fetch(`${API_BASE}/api/organizations/${organizationId}/integrations?userId=${userId}`)
+      const response = await fetch(buildApiUrl(`${API_ENDPOINTS.ORGANIZATION_INTEGRATIONS(organizationId)}?userId=${userId}`))
       const data = await response.json()
       
       if (!response.ok) {

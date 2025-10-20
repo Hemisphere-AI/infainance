@@ -60,10 +60,17 @@ const Organizations = ({
 
   const currentOrganization = organizations.find(org => org.id === currentOrganizationId);
 
+  // Clean up currentOrganizationId if the organization no longer exists
+  useEffect(() => {
+    if (currentOrganizationId && !currentOrganization) {
+      setIntegrations([])
+    }
+  }, [currentOrganizationId, currentOrganization])
+
   // Load integrations when organization changes
   useEffect(() => {
     const loadIntegrations = async () => {
-      if (!currentOrganizationId || !user?.id) {
+      if (!currentOrganizationId || !user?.id || !currentOrganization) {
         setIntegrations([]);
         return;
       }
@@ -71,13 +78,11 @@ const Organizations = ({
       // Check if the organization still exists in our local state
       const organizationExists = organizations.some(org => org.id === currentOrganizationId)
       if (!organizationExists) {
-        console.log('Organization no longer exists, skipping integrations load')
         setIntegrations([])
         return
       }
 
       try {
-        console.log('Loading integrations for organization:', currentOrganizationId);
         const result = await organizationService.getOrganizationIntegrations(currentOrganizationId, user.id);
         
         if (result.success) {
@@ -96,7 +101,12 @@ const Organizations = ({
           }));
           setIntegrations(mappedIntegrations);
         } else {
-          console.error('Failed to load integrations:', result.error);
+          // If the error is about access, the organization might have been deleted
+          if (result.error && result.error.includes('does not have access')) {
+            console.log('🧹 Cleaning up integrations for deleted organization')
+          } else {
+            console.error('Failed to load integrations:', result.error);
+          }
           setIntegrations([]);
         }
       } catch (error) {
@@ -106,7 +116,7 @@ const Organizations = ({
     };
 
     loadIntegrations();
-  }, [currentOrganizationId, user?.id, organizations]);
+  }, [currentOrganizationId, user?.id, organizations, currentOrganization]);
 
   // Integration management functions
   const handleAddIntegration = useCallback(() => {

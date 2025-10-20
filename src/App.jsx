@@ -149,7 +149,8 @@ function MainSpreadsheetApp({ user }) {
           if (result.organizations?.length > 0) {
             if (organizationId && result.organizations.find(org => org.id === organizationId)) {
               setCurrentOrganizationId(organizationId)
-            } else if (!currentOrganizationId) {
+            } else if (!currentOrganizationId || !result.organizations.find(org => org.id === currentOrganizationId)) {
+              // Clear currentOrganizationId if it doesn't exist in the new list, then set to first organization
               setCurrentOrganizationId(result.organizations[0].id)
             }
             
@@ -161,6 +162,16 @@ function MainSpreadsheetApp({ user }) {
                 loadOrganizationChecks(org.id)
               }
             })
+            
+            // Clean up checks for organizations that no longer exist
+            setChecks(prev => prev.filter(check => 
+              result.organizations.some(org => org.id === check.organization_id)
+            ))
+          } else {
+            // No organizations left, clear everything
+            setCurrentOrganizationId(null)
+            setChecks([])
+            setCurrentCheckId(null)
           }
         } else {
           console.error('Failed to load organizations:', result.error)
@@ -191,6 +202,7 @@ function MainSpreadsheetApp({ user }) {
     // Check if the organization still exists in our local state
     const organizationExists = organizations.some(org => org.id === organizationId)
     if (!organizationExists) {
+      console.log('Organization no longer exists, skipping checks load for:', organizationId)
       return
     }
 
@@ -211,13 +223,18 @@ function MainSpreadsheetApp({ user }) {
           setCurrentCheckId(null)
         }
       } else {
-        console.error('Failed to load checks:', result.error)
         // If the error is about access, the organization might have been deleted
         if (result.error && result.error.includes('does not have access')) {
-          console.log('Organization access denied, clearing current organization')
-          setCurrentOrganizationId(null)
-          setChecks([])
-          setCurrentCheckId(null)
+          console.log('🧹 Cleaning up data for deleted organization:', organizationId)
+          // Remove checks for this organization
+          setChecks(prev => prev.filter(check => check.organization_id !== organizationId))
+          // Clear current organization if it's the one we're trying to load
+          if (currentOrganizationId === organizationId) {
+            setCurrentOrganizationId(null)
+            setCurrentCheckId(null)
+          }
+        } else {
+          console.error('Failed to load checks:', result.error)
         }
       }
     } catch (err) {

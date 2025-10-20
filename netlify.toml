@@ -6,6 +6,13 @@
 [build.environment]
   NODE_VERSION = "18"
 
+# Development settings
+[dev]
+  command = "npm run dev"
+  port = 8888
+  targetPort = 5173
+  autoLaunch = false
+
 # API redirects to Netlify Functions
 [[redirects]]
   from = "/api/organizations"
@@ -45,6 +52,27 @@
 [[redirects]]
   from = "/api/odoo/config"
   to = "/.netlify/functions/odoo-config"
+  status = 200
+
+# MCP endpoints
+[[redirects]]
+  from = "/api/mcp/resources"
+  to = "/.netlify/functions/mcp-resources"
+  status = 200
+
+[[redirects]]
+  from = "/api/mcp/tools"
+  to = "/.netlify/functions/mcp-tools"
+  status = 200
+
+[[redirects]]
+  from = "/api/mcp/models"
+  to = "/.netlify/functions/mcp-models"
+  status = 200
+
+[[redirects]]
+  from = "/api/mcp/search"
+  to = "/.netlify/functions/mcp-search"
   status = 200
 
 # Frontend redirects

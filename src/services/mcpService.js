@@ -1,17 +1,17 @@
 // MCP Service for Odoo Integration
 // This service handles communication with the Odoo MCP server
 
+import { buildApiUrl, API_ENDPOINTS } from '../config/api.js'
+
 class MCPService {
   constructor() {
-    // Use Netlify Functions for full Odoo AI Agent functionality
-    this.baseUrl = import.meta.env.DEV ? 'http://localhost:3002' : '';
     this.odooConfig = null;
   }
 
   async initialize() {
     try {
       // Load Odoo configuration from environment
-      const response = await fetch(`${this.baseUrl}/api/odoo/config`);
+      const response = await fetch(buildApiUrl(API_ENDPOINTS.ODOO_CONFIG));
       if (response.ok) {
         this.odooConfig = await response.json();
         return true;

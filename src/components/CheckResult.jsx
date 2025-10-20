@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import PropTypes from 'prop-types';
+import { buildApiUrl, API_ENDPOINTS } from '../config/api.js';
 import { 
   ChevronDown, 
   ChevronRight, 
@@ -49,12 +50,13 @@ const CheckResult = ({
   useEffect(() => {
     const loadOdooConfig = async () => {
       try {
-        // Use Netlify Functions for full Odoo AI Agent functionality
-        const apiBase = import.meta.env.DEV ? 'http://localhost:3002' : '';
-        const response = await fetch(`${apiBase}/api/odoo/config?organizationId=${organizationId}`);
+        const response = await fetch(buildApiUrl(`${API_ENDPOINTS.ODOO_CONFIG}?organizationId=${organizationId}`));
         if (response.ok) {
           const config = await response.json();
+          console.log('🔧 Loaded Odoo config:', config);
           setOdooConfig(config);
+        } else {
+          console.error('❌ Failed to load Odoo config:', response.status, response.statusText);
         }
       } catch (error) {
         console.error('Failed to load Odoo config:', error);
@@ -72,16 +74,26 @@ const CheckResult = ({
       if (!currentCheckId) return;
       
       try {
-        // Use backend server for local development, Netlify Functions for production
-        const apiBase = import.meta.env.DEV ? 'http://localhost:3002' : '';
-        const response = await fetch(`${apiBase}/api/checks/${currentCheckId}/results`);
+        const response = await fetch(buildApiUrl(API_ENDPOINTS.CHECK_RESULTS(currentCheckId)));
         
         if (response.ok) {
           const data = await response.json();
           if (data.success) {
+            const results = data.results || [];
+            console.log('📋 Loaded check results history:', {
+              checkId: currentCheckId,
+              resultCount: results.length,
+              results: results.map(result => ({
+                id: result.id,
+                status: result.status,
+                recordCount: result.records?.length || 0,
+                executedAt: result.executed_at,
+                model: result.query_plan?.model
+              }))
+            });
             setCheckResultsHistory(prev => ({
               ...prev,
-              [currentCheckId]: data.results
+              [currentCheckId]: results
             }));
             
             // Set the latest result as selected by default
@@ -103,7 +115,20 @@ const CheckResult = ({
 
   // Generate Odoo URL for a record
   const getOdooRecordUrl = useCallback((model, recordId) => {
+    console.log('🔗 getOdooRecordUrl called:', { 
+      model, 
+      recordId, 
+      odooConfig: odooConfig ? { url: odooConfig.url, db: odooConfig.db } : null 
+    });
+    
     if (!odooConfig?.url) {
+      console.log('❌ No Odoo config URL available');
+      return null;
+    }
+    
+    // Validate record ID
+    if (!recordId || recordId === 'undefined' || recordId === 'null') {
+      console.log('❌ Invalid record ID:', recordId);
       return null;
     }
     
@@ -112,6 +137,14 @@ const CheckResult = ({
     
     // Construct the correct Odoo record URL format: /web#id=X&model=Y&view_type=form
     const url = `${baseUrl}/web#id=${recordId}&model=${model}&view_type=form`;
+    console.log('✅ Generated Odoo URL:', url);
+    console.log('📊 Record Details:', { 
+      model, 
+      recordId, 
+      database: odooConfig.db,
+      url: url,
+      note: 'If this record does not exist in Odoo, the URL will show a "Record not found" error'
+    });
     return url;
   }, [odooConfig]);
 
@@ -183,12 +216,9 @@ const CheckResult = ({
       await updateStep(checkId, 'connect', 'completed');
       await updateStep(checkId, 'query', 'running');
 
-      // Step 3: Execute AI-driven check via Netlify Functions
-      // Use Netlify Functions for both development and production
-      const apiBase = import.meta.env.DEV ? 'http://localhost:3002' : '';
-      console.log('📡 Making API call to:', `${apiBase}/api/odoo/check`);
-      console.log('🔧 Using Netlify Functions with full Odoo AI Agent functionality');
-      console.log('🌍 Environment:', import.meta.env.DEV ? 'development' : 'production');
+      // Step 3: Execute AI-driven check
+      const apiUrl = buildApiUrl(API_ENDPOINTS.ODOO_CHECK);
+      console.log('📡 Making API call to:', apiUrl);
       
       const requestBody = {
         checkDescription: check.description || 'Analyze this check',
@@ -200,7 +230,7 @@ const CheckResult = ({
       
       console.log('📤 Request body:', requestBody);
       
-      const response = await fetch(`${apiBase}/api/odoo/check`, {
+      const response = await fetch(apiUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -252,8 +282,28 @@ const CheckResult = ({
         success: data.success,
         hasResult: !!data.result,
         resultStatus: data.result?.status,
-        stepsCount: data.result?.steps?.length
+        stepsCount: data.result?.steps?.length,
+        recordCount: data.result?.records?.length || 0,
+        model: data.result?.queryPlan?.model
       });
+
+      // Log all records found in the check result
+      if (data.result?.records && data.result.records.length > 0) {
+        console.log('📋 Records found in check result:', {
+          model: data.result.queryPlan?.model,
+          recordCount: data.result.records.length,
+          records: data.result.records.map((record, index) => ({
+            index: index + 1,
+            id: record.id,
+            name: record.name || record.display_name || 'No name',
+            // Log first few fields to help identify the record
+            sampleFields: Object.keys(record).slice(0, 5).reduce((acc, key) => {
+              acc[key] = record[key];
+              return acc;
+            }, {})
+          }))
+        });
+      }
       
       if (!data.success) {
         // Handle API-level errors - mark connect as completed, query as failed, others as pending
@@ -335,6 +385,22 @@ const CheckResult = ({
             executedAt: new Date(data.result.timestamp)
           }
         }));
+
+        // Log summary of all records found
+        if (data.result.records && data.result.records.length > 0) {
+          console.log('✅ Check completed - Summary of all records found:', {
+            checkId: checkId,
+            checkName: check.name,
+            model: data.result.queryPlan?.model,
+            totalRecords: data.result.records.length,
+            odooConfig: odooConfig ? { url: odooConfig.url, db: odooConfig.db } : null,
+            recordIds: data.result.records.map(record => record.id),
+            recordNames: data.result.records.map(record => record.name || record.display_name || 'No name'),
+            allOdooUrls: data.result.records.map(record => 
+              getOdooRecordUrl(data.result.queryPlan?.model, record.id)
+            ).filter(url => url !== null)
+          });
+        }
         
         console.log('✅ Check execution completed successfully:', {
           checkId,
@@ -373,9 +439,7 @@ const CheckResult = ({
 
       // Refresh the results history to include the new result
       try {
-        // Use Netlify Functions for full Odoo AI Agent functionality
-        const apiBase = import.meta.env.DEV ? 'http://localhost:3002' : '';
-        const historyResponse = await fetch(`${apiBase}/api/checks/${checkId}/results`);
+        const historyResponse = await fetch(buildApiUrl(API_ENDPOINTS.CHECK_RESULTS(checkId)));
         
         if (historyResponse.ok) {
           const historyData = await historyResponse.json();
@@ -836,7 +900,17 @@ const CheckResult = ({
                                       target="_blank"
                                       rel="noopener noreferrer"
                                       className="text-blue-600 hover:text-blue-800 underline"
-                                      onClick={(e) => e.stopPropagation()}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        const url = getOdooRecordUrl(result.queryPlan.model, record.id);
+                                        console.log('🔗 Opening Odoo record:', {
+                                          recordId: record.id,
+                                          model: result.queryPlan.model,
+                                          url: url,
+                                          recordName: record.name || record.display_name || 'No name',
+                                          timestamp: new Date().toISOString()
+                                        });
+                                      }}
                                     >
                                       View in Odoo
                                     </a>
