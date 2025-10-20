@@ -232,6 +232,22 @@ class MCPOdooService {
       
       for (const query of queries) {
         console.log(`🔧 Executing query: ${query.query_name}`);
+        
+        // Validate query before execution
+        const validationResult = await this.validateQuery(query);
+        if (!validationResult.isValid) {
+          console.log(`⚠️ Query ${query.query_name} is invalid: ${validationResult.reason}`);
+          results.push({
+            query_name: query.query_name,
+            data: [],
+            count: 0,
+            success: false,
+            error: `Invalid query: ${validationResult.reason}`,
+            status: 'no_active_query'
+          });
+          continue;
+        }
+        
         try {
           // Parse filters - handle both string and array formats
           let filters = query.filters;
@@ -302,6 +318,99 @@ class MCPOdooService {
         error: error.message,
         timestamp: new Date().toISOString()
       };
+    }
+  }
+
+  /**
+   * Validate query before execution to ensure it follows Odoo documentation
+   * Returns validation result with reason if invalid
+   */
+  async validateQuery(query) {
+    try {
+      // Check if query has required properties
+      if (!query.table) {
+        return { isValid: false, reason: 'Missing table/model name' };
+      }
+      
+      if (!query.fields || !Array.isArray(query.fields) || query.fields.length === 0) {
+        return { isValid: false, reason: 'Missing or empty fields array' };
+      }
+      
+      if (!query.filters || !Array.isArray(query.filters)) {
+        return { isValid: false, reason: 'Missing or invalid filters array' };
+      }
+      
+      // Validate model name format (should be valid Python identifier)
+      if (!/^[a-zA-Z_][a-zA-Z0-9_.]*$/.test(query.table)) {
+        return { isValid: false, reason: `Invalid model name format: ${query.table}` };
+      }
+      
+      // Validate field names format
+      for (const field of query.fields) {
+        if (typeof field !== 'string') {
+          return { isValid: false, reason: 'Field names must be strings' };
+        }
+        if (!/^[a-zA-Z_][a-zA-Z0-9_.]*$/.test(field)) {
+          return { isValid: false, reason: `Invalid field name format: ${field}` };
+        }
+      }
+      
+      // Validate domain filters format
+      for (const filter of query.filters) {
+        if (!Array.isArray(filter) || filter.length < 3) {
+          return { isValid: false, reason: 'Invalid filter format - must be [field, operator, value]' };
+        }
+        
+        const [field, operator, value] = filter;
+        
+        // Validate field name in filter
+        if (typeof field !== 'string' || !/^[a-zA-Z_][a-zA-Z0-9_.]*$/.test(field)) {
+          return { isValid: false, reason: `Invalid field name in filter: ${field}` };
+        }
+        
+        // Validate operator
+        const validOperators = ['=', '!=', '<', '>', '<=', '>=', 'in', 'not in', 'like', 'ilike', 'not like', 'not ilike', '=like', '=ilike', 'child_of', 'parent_of'];
+        if (!validOperators.includes(operator)) {
+          return { isValid: false, reason: `Invalid operator: ${operator}. Valid operators: ${validOperators.join(', ')}` };
+        }
+        
+        // Validate value based on operator
+        if (['in', 'not in'].includes(operator) && !Array.isArray(value)) {
+          return { isValid: false, reason: `Operator '${operator}' requires array value` };
+        }
+      }
+      
+      // Check for common invalid field references
+      const invalidFieldPatterns = [
+        /^[0-9]/, // Field starting with number
+        /[^a-zA-Z0-9_.]/, // Field with invalid characters
+        /^\./, // Field starting with dot
+        /\.$/, // Field ending with dot
+        /\.\./ // Double dots
+      ];
+      
+      for (const field of query.fields) {
+        for (const pattern of invalidFieldPatterns) {
+          if (pattern.test(field)) {
+            return { isValid: false, reason: `Invalid field name: ${field}` };
+          }
+        }
+      }
+      
+      // Check for invalid domain patterns
+      for (const filter of query.filters) {
+        const [field] = filter;
+        for (const pattern of invalidFieldPatterns) {
+          if (pattern.test(field)) {
+            return { isValid: false, reason: `Invalid field name in domain: ${field}` };
+          }
+        }
+      }
+      
+      return { isValid: true, reason: 'Query is valid' };
+      
+    } catch (error) {
+      return { isValid: false, reason: `Validation error: ${error.message}` };
     }
   }
 

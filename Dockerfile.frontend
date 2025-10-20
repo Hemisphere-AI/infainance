@@ -1,0 +1,56 @@
+# Dockerfile for Infainance Frontend
+FROM node:18-alpine as builder
+
+# Set working directory
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+COPY vite.config.js ./
+COPY tailwind.config.js ./
+COPY postcss.config.js ./
+
+# Install dependencies
+RUN npm ci
+
+# Copy source code
+COPY src/ ./src/
+COPY public/ ./public/
+COPY index.html ./
+
+# Set environment variables for build
+ARG VITE_OPENAI_KEY
+ARG VITE_GOOGLE_CLIENT_ID
+ARG VITE_GOOGLE_CLIENT_SECRET
+ARG VITE_GOOGLE_REDIRECT_URI
+ARG VITE_SUPABASE_URL
+ARG VITE_SUPABASE_ANON_KEY
+
+ENV VITE_OPENAI_KEY=$VITE_OPENAI_KEY
+ENV VITE_GOOGLE_CLIENT_ID=$VITE_GOOGLE_CLIENT_ID
+ENV VITE_GOOGLE_CLIENT_SECRET=$VITE_GOOGLE_CLIENT_SECRET
+ENV VITE_GOOGLE_REDIRECT_URI=$VITE_GOOGLE_REDIRECT_URI
+ENV VITE_SUPABASE_URL=$VITE_SUPABASE_URL
+ENV VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY
+
+# Build the application
+RUN npm run build
+
+# Production stage
+FROM nginx:alpine
+
+# Copy built files
+COPY --from=builder /app/dist /usr/share/nginx/html
+
+# Copy nginx configuration
+COPY nginx.conf /etc/nginx/nginx.conf
+
+# Expose port
+EXPOSE 80
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost/ || exit 1
+
+# Start nginx
+CMD ["nginx", "-g", "daemon off;"]

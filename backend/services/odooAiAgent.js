@@ -1,6 +1,7 @@
 /* eslint-env node */
 import OpenAI from 'openai';
 import MCPOdooClient from './mcpOdooClient.js';
+import MCPOdooConsistentService from './mcpOdooConsistentService.js';
 
 /**
  * Odoo AI Agent Service
@@ -10,6 +11,7 @@ export class OdooAiAgent {
   constructor(customConfig = null) {
     this.openai = null;
     this.mcpClient = null;
+    this.consistentService = null;
     this.availableModels = [];
     this.availableFields = {};
     this.customConfig = customConfig;
@@ -30,6 +32,10 @@ export class OdooAiAgent {
       // Initialize MCP Odoo Client with custom config if provided
       this.mcpClient = new MCPOdooClient(this.customConfig);
       await this.mcpClient.initialize();
+
+      // Initialize Consistent Service for reliable queries
+      this.consistentService = new MCPOdooConsistentService(this.customConfig);
+      await this.consistentService.initialize();
 
       // Load available models and fields for AI context
       await this.loadOdooMetadata();
@@ -101,12 +107,8 @@ export class OdooAiAgent {
       let queryResult;
       let analysisResult;
       try {
-        queryResult = await this.mcpClient.searchRecords(
-          queryPlan.model,
-          queryPlan.domain,
-          queryPlan.fields,
-          queryPlan.limit || 100
-        );
+        // Use consistent service for reliable queries
+        queryResult = await this.consistentService.executeValidatedQuery(queryPlan);
 
         console.log('📊 Query result:', `${queryResult.count} records found from model: ${queryPlan.model}`);
 
@@ -236,18 +238,31 @@ export class OdooAiAgent {
    */
   async analyzeCheckDescription(description, title) {
 
-    const systemPrompt = `You are an expert Odoo ERP analyst. Your task is to analyze a bookkeeping check description and determine the appropriate Odoo query parameters.
+    const systemPrompt = `You are an expert Odoo ERP analyst following the MCP consistency playbook. Your task is to analyze a bookkeeping check description and determine the appropriate Odoo query parameters.
 
 ## Available Odoo Models (most relevant for bookkeeping):
 ${this.accountingModels?.map(m => `- ${m.model}: ${m.name}`).join('\n') || 'Loading models...'}
 
-## Your Task:
-Given a check description, determine:
-1. **model**: The Odoo model to query (e.g., 'account.move', 'account.move.line', 'res.partner')
-2. **domain**: The search domain as a JavaScript array (e.g., [['state', '=', 'draft']])
-3. **fields**: Relevant fields to retrieve (e.g., ['id', 'name', 'amount_total', 'partner_id'])
-   - ALWAYS include 'name' field for record identification (shows journal entry numbers like JOURNAL/2025/10/001)
-4. **limit**: Maximum records to return (default 100)
+## CONSISTENCY PLAYBOOK - ALWAYS OUTPUT THIS EXACT JSON FORMAT:
+
+For Dutch rule queries (creditor-related checks), ALWAYS use this exact format:
+{
+  "model": "account.move",
+  "domain": [
+    ["line_ids.account_id.code","in",["480500","481000","482000","483000","484000"]],
+    ["move_type","=","in_invoice"],
+    ["state","=","posted"]
+  ],
+  "fields": ["id","name","move_type","date","partner_id","line_ids"],
+  "limit": 1000,
+  "order": "id asc"
+}
+
+## Field Selection Rules:
+- **Many2many fields** (line_ids): Request field name only, not sub-fields
+- **Many2one fields** (account_id): Can request specific attributes like .code
+- **Always include**: 'name' field for record identification
+- **AVOID**: Requesting sub-fields of Many2many relationships
 
 ## Model Selection Guidelines:
 - Use 'account.move' for invoices, bills, and journal entries (the main documents)
@@ -255,8 +270,10 @@ Given a check description, determine:
 - Use 'account.bank.statement.line' for bank transactions
 - Use 'res.partner' for customer/vendor information
 
-## IMPORTANT: For creditor-related checks, use 'account.move' to find bills/invoices, NOT 'account.move.line'
-
+## CRITICAL: Use temperature 0, top_p 1, JSON-mode - NO FREE TEXT
+## CRITICAL: Keep domain as list of triplets only (no object form)
+## CRITICAL: Add state = posted to prevent draft flickering
+## CRITICAL: Use stable order (id asc) and fixed field set every time
 
 ## Response Format:
 Return ONLY a valid JSON object with this exact structure:
@@ -264,7 +281,8 @@ Return ONLY a valid JSON object with this exact structure:
   "model": "model_name",
   "domain": [["field", "operator", "value"]],
   "fields": ["field1", "field2", "field3"],
-  "limit": 100,
+  "limit": 1000,
+  "order": "id asc",
   "reasoning": "Brief explanation of your choices"
 }`;
 
@@ -280,8 +298,10 @@ Determine the appropriate Odoo query parameters for this bookkeeping check.
         { role: "system", content: systemPrompt },
         { role: "user", content: userMessage }
       ],
-      temperature: 0.1,
-      max_tokens: 1000
+      temperature: 0,
+      top_p: 1,
+      max_tokens: 1000,
+      response_format: { type: "json_object" }
     });
 
     const content = response.choices[0].message.content.trim();
@@ -297,12 +317,69 @@ Determine the appropriate Odoo query parameters for this bookkeeping check.
       
       const queryPlan = JSON.parse(jsonContent);
       console.log('🤖 AI Query Plan:', queryPlan);
+      
+      // Validate query plan against consistency playbook
+      const validation = this.validateQueryPlan(queryPlan);
+      if (!validation.isValid) {
+        throw new Error(`Invalid query plan: ${validation.errors.join(', ')}`);
+      }
+      
       return queryPlan;
     } catch (parseError) {
       console.error('❌ Failed to parse AI response:', content);
       console.error('❌ Parse error:', parseError.message);
       throw new Error('AI returned invalid query plan');
     }
+  }
+
+  /**
+   * Validate query plan against consistency playbook
+   */
+  validateQueryPlan(queryPlan) {
+    const errors = [];
+
+    // Check required fields
+    if (!queryPlan.model) {
+      errors.push('Missing model');
+    }
+
+    if (!Array.isArray(queryPlan.domain)) {
+      errors.push('Domain must be an array of triplets');
+    } else {
+      // Validate domain format
+      queryPlan.domain.forEach((filter, index) => {
+        if (!Array.isArray(filter) || filter.length !== 3) {
+          errors.push(`Domain filter ${index} must be [field, operator, value]`);
+        }
+      });
+    }
+
+    if (!Array.isArray(queryPlan.fields)) {
+      errors.push('Fields must be an array');
+    }
+
+    if (queryPlan.limit && (typeof queryPlan.limit !== 'number' || queryPlan.limit <= 0 || queryPlan.limit > 1000)) {
+      errors.push('Limit must be a positive number <= 1000');
+    }
+
+    if (queryPlan.order && typeof queryPlan.order !== 'string') {
+      errors.push('Order must be a string');
+    }
+
+    // Check for consistency playbook compliance
+    if (queryPlan.model === 'account.move' && queryPlan.domain) {
+      const hasStatePosted = queryPlan.domain.some(filter => 
+        filter[0] === 'state' && filter[1] === '=' && filter[2] === 'posted'
+      );
+      if (!hasStatePosted) {
+        errors.push('Missing state=posted filter for account.move queries');
+      }
+    }
+
+    return {
+      isValid: errors.length === 0,
+      errors: errors
+    };
   }
 
   /**

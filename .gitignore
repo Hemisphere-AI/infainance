@@ -3,9 +3,12 @@ node_modules
 zenith-473020-e866f7cc8bb7.json
 .env
 dist/
-
+docker-compose.yml
+mcp-config/*
 
 #Ignore cursor AI rules
 .cursor/rules/codacy.mdc
 .codacy/
 .env
+docker-desktop-setup.sh
+docker-setup.sh
