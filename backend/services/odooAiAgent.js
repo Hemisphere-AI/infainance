@@ -72,163 +72,46 @@ export class OdooAiAgent {
    * Execute an AI-driven check based on description
    */
   async executeCheck(checkDescription, checkTitle = 'Custom Check', acceptanceCriteria = '') {
-    const steps = [];
-    let finalResult = null;
-
     try {
-      console.log(`🎯 Starting check: ${checkTitle}`);
+      console.log(`🎯 FRONTEND AGENT - Starting check: ${checkTitle}`);
+      console.log(`📝 FRONTEND AGENT - Description: ${checkDescription}`);
 
-      // Step 1: AI Analysis of Check Description
-      steps.push({
-        step: 'analyze',
-        status: 'running',
-        message: 'Analyzing check description with AI',
-        timestamp: new Date()
-      });
-
+      // Generate Odoo query using LLM
+      console.log('🤖 FRONTEND AGENT - Calling LLM for query generation...');
       const queryPlan = await this.analyzeCheckDescription(checkDescription, checkTitle);
-      console.log('📋 Query plan:', queryPlan.model, queryPlan.domain);
-      
-      steps.push({
-        step: 'analyze',
-        status: 'completed',
-        message: `AI determined: ${queryPlan.model} with domain ${JSON.stringify(queryPlan.domain)}`,
-        timestamp: new Date()
-      });
+      console.log('🧠 FRONTEND AGENT - LLM Generated Query:', JSON.stringify(queryPlan, null, 2));
 
-      // Step 2: Execute Odoo Query
-      steps.push({
-        step: 'query',
-        status: 'running',
-        message: 'Executing Odoo query',
-        timestamp: new Date()
-      });
+      // Execute query using consistent service
+      console.log('🔍 FRONTEND AGENT - Executing query with consistent service...');
+      const queryResult = await this.consistentService.executeValidatedQuery(queryPlan);
+      console.log('📊 FRONTEND AGENT - Query result:', `${queryResult.count} records found`);
+      console.log('📋 FRONTEND AGENT - Data preview:', queryResult.data?.slice(0, 2) || 'No data');
 
-      let queryResult;
-      let analysisResult;
-      try {
-        // Use consistent service for reliable queries
-        queryResult = await this.consistentService.executeValidatedQuery(queryPlan);
-
-        console.log('📊 Query result:', `${queryResult.count} records found from model: ${queryPlan.model}`);
-
-        steps.push({
-          step: 'query',
-          status: 'completed',
-          message: `Found ${queryResult.count} records`,
-          timestamp: new Date()
-        });
-
-        // Step 3: AI Analysis of Results
-        steps.push({
-          step: 'analyze_results',
-          status: 'running',
-          message: 'Analyzing results with AI',
-          timestamp: new Date()
-        });
-
-        analysisResult = await this.analyzeResults(checkDescription, checkTitle, queryResult, acceptanceCriteria);
-        console.log('✅ Analysis result:', analysisResult.analysis);
-
-        steps.push({
-          step: 'analyze_results',
-          status: 'completed',
-          message: 'AI analysis completed',
-          timestamp: new Date()
-        });
-
-      } catch (queryError) {
-        console.error('❌ Odoo query failed:', queryError.message);
-        
-        // Check if this is a connection/authentication error
-        const isConnectionError = queryError.message.includes('authentication') || 
-                                 queryError.message.includes('connection') ||
-                                 queryError.message.includes('timeout') ||
-                                 queryError.message.includes('network') ||
-                                 queryError.message.includes('refused') ||
-                                 queryError.message.includes('unauthorized') ||
-                                 queryError.message.includes('forbidden');
-
-        steps.push({
-          step: 'query',
-          status: 'failed',
-          message: isConnectionError ? 'Failed to connect to Odoo database' : `Query failed: ${queryError.message}`,
-          timestamp: new Date()
-        });
-
-        // Return connection error immediately without analysis
-        if (isConnectionError) {
-          return {
-            success: false,
-            error: 'Unable to connect to Odoo database. Please check your Odoo configuration and credentials.',
-            connectionError: true,
-            steps: steps,
-            timestamp: new Date().toISOString()
-          };
-        }
-
-        // For other query errors, still try to analyze
-        queryResult = {
-          success: false,
-          model: queryPlan.model,
-          domain: queryPlan.domain,
-          records: [],
-          count: 0,
-          error: queryError.message
-        };
-
-        analysisResult = await this.analyzeResults(checkDescription, checkTitle, queryResult, acceptanceCriteria);
-        console.log('✅ Analysis result (with error):', analysisResult.analysis);
-
-        steps.push({
-          step: 'analyze_results',
-          status: 'completed',
-          message: 'AI analysis completed with error context',
-          timestamp: new Date()
-        });
-      }
-
-      // Step 4: Complete
-      steps.push({
-        step: 'complete',
-        status: 'completed',
-        message: 'Check execution completed',
-        timestamp: new Date()
-      });
-
-      finalResult = {
+      // Return simple result matching test format
+      const result = {
         success: true,
+        query: queryPlan,
         count: queryResult.count,
-        duration: Date.now() - steps[0].timestamp.getTime(),
-        tokensUsed: analysisResult.tokensUsed || 0,
-        llmAnalysis: analysisResult.analysis,
-        status: analysisResult.status || 'unknown',
-        records: queryResult.records || [],
-        queryPlan: queryPlan,
-        steps: steps,
-        timestamp: new Date().toISOString()
+        data: queryResult.data || [],
+        timestamp: new Date()
       };
-
-      console.log('🎯 Check completed successfully');
-
-      return finalResult;
+      
+      console.log('✅ FRONTEND AGENT - Final result:', {
+        success: result.success,
+        count: result.count,
+        dataLength: result.data?.length || 0
+      });
+      
+      return result;
 
     } catch (error) {
-      console.error('❌ Check execution failed:', error);
-      
-      // Add error step
-      steps.push({
-        step: 'error',
-        status: 'failed',
-        message: `Error: ${error.message}`,
-        timestamp: new Date()
-      });
-
+      console.error('❌ FRONTEND AGENT - Check failed:', error.message);
       return {
         success: false,
         error: error.message,
-        steps: steps,
-        timestamp: new Date().toISOString()
+        count: 0,
+        data: [],
+        timestamp: new Date()
       };
     }
   }
@@ -238,59 +121,31 @@ export class OdooAiAgent {
    */
   async analyzeCheckDescription(description, title) {
 
-    const systemPrompt = `You are an expert Odoo ERP analyst following the MCP consistency playbook. Your task is to analyze a bookkeeping check description and determine the appropriate Odoo query parameters.
-
-## Available Odoo Models (most relevant for bookkeeping):
-${this.accountingModels?.map(m => `- ${m.model}: ${m.name}`).join('\n') || 'Loading models...'}
+    const systemPrompt = `You are an expert Odoo ERP analyst. Generate a canonical query for Dutch accounting rules.
 
 ## CONSISTENCY PLAYBOOK - ALWAYS OUTPUT THIS EXACT JSON FORMAT:
 
-For Dutch rule queries (creditor-related checks), ALWAYS use this exact format:
 {
   "model": "account.move",
-  "domain": [
-    ["line_ids.account_id.code","in",["480500","481000","482000","483000","484000"]],
-    ["move_type","=","in_invoice"],
-    ["state","=","posted"]
+  "domain": ["...", ...]
   ],
-  "fields": ["id","name","move_type","date","partner_id","line_ids"],
+  "fields": ["...", ...],
   "limit": 1000,
   "order": "id asc"
 }
 
-## Field Selection Rules:
-- **Many2many fields** (line_ids): Request field name only, not sub-fields
-- **Many2one fields** (account_id): Can request specific attributes like .code
-- **Always include**: 'name' field for record identification
-- **AVOID**: Requesting sub-fields of Many2many relationships
+## Critical Rules:
+- Domain must be list of triplets only
+- Always include state="posted" 
+- Use stable order (id asc)
+- Fixed field set every time
+- Temperature 0, JSON-mode only
+- Extract account codes from the check description
+- Focus on line_ids.account_id.code for account filtering
 
-## Model Selection Guidelines:
-- Use 'account.move' for invoices, bills, and journal entries (the main documents)
-- Use 'account.move.line' only when you need to analyze individual accounting line items
-- Use 'account.bank.statement.line' for bank transactions
-- Use 'res.partner' for customer/vendor information
+Return ONLY the JSON object, no other text.`;
 
-## CRITICAL: Use temperature 0, top_p 1, JSON-mode - NO FREE TEXT
-## CRITICAL: Keep domain as list of triplets only (no object form)
-## CRITICAL: Add state = posted to prevent draft flickering
-## CRITICAL: Use stable order (id asc) and fixed field set every time
-
-## Response Format:
-Return ONLY a valid JSON object with this exact structure:
-{
-  "model": "model_name",
-  "domain": [["field", "operator", "value"]],
-  "fields": ["field1", "field2", "field3"],
-  "limit": 1000,
-  "order": "id asc",
-  "reasoning": "Brief explanation of your choices"
-}`;
-
-    const userMessage = `Check Title: "${title}"
-Check Description: "${description}"
-
-Determine the appropriate Odoo query parameters for this bookkeeping check.
-`;
+    const userMessage = `Generate a query to find invoices that violate the Dutch rule: ${description}`;
 
     const response = await this.openai.chat.completions.create({
       model: "gpt-4o",

@@ -18,7 +18,7 @@ if (isLocalDev) {
   if (isNetlifyDev) {
     API_BASE = 'http://localhost:8888'; // Netlify Dev with functions
   } else if (isViteDev) {
-    API_BASE = 'http://localhost:3002'; // Vite dev with Express server
+    API_BASE = 'http://localhost:3004'; // Vite dev with Express server
   }
 }
 // For production (not localhost), API_BASE remains empty (relative URLs)

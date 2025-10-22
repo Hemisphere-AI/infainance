@@ -443,8 +443,20 @@ app.post('/api/odoo/check', async (req, res) => {
     const aiAgent = await getOdooAiAgent(odooConfig)
     
     // Execute AI-driven check
+    console.log('🚀 FRONTEND CHECK EXECUTION - Starting AI Agent');
+    console.log('📝 Check Description:', checkDescription);
+    console.log('📝 Check Title:', checkTitle);
+    console.log('📝 Acceptance Criteria:', acceptanceCriteria);
+    
     const result = await aiAgent.executeCheck(checkDescription, checkTitle, acceptanceCriteria || '')
-    console.log('🧠 Agent conclude status:', result?.status || 'unknown')
+    
+    console.log('🧠 FRONTEND CHECK RESULT:');
+    console.log('  ✅ Success:', result?.success);
+    console.log('  📊 Count:', result?.count);
+    console.log('  📋 Data Length:', result?.data?.length || 0);
+    console.log('  🔍 Query:', JSON.stringify(result?.query, null, 2));
+    console.log('  ⏰ Timestamp:', result?.timestamp);
+    console.log('  ❌ Error:', result?.error);
     
     console.log('✅ API response sent');
     

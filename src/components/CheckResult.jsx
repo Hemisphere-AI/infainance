@@ -230,13 +230,29 @@ const CheckResult = ({
       
       console.log('📤 Request body:', requestBody);
       
-      const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody)
-      });
+      let response;
+      try {
+        // Create an AbortController for timeout
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+        
+        response = await fetch(apiUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(requestBody),
+          signal: controller.signal
+        });
+        
+        clearTimeout(timeoutId);
+      } catch (error) {
+        if (error.name === 'AbortError') {
+          console.error('⏰ Request timed out after 30 seconds');
+          throw new Error('Request timed out. Please try again.');
+        }
+        throw error;
+      }
 
       console.log('📥 Response received:', {
         status: response.status,
@@ -395,10 +411,7 @@ const CheckResult = ({
             totalRecords: data.result.records.length,
             odooConfig: odooConfig ? { url: odooConfig.url, db: odooConfig.db } : null,
             recordIds: data.result.records.map(record => record.id),
-            recordNames: data.result.records.map(record => record.name || record.display_name || 'No name'),
-            allOdooUrls: data.result.records.map(record => 
-              getOdooRecordUrl(data.result.queryPlan?.model, record.id)
-            ).filter(url => url !== null)
+            recordNames: data.result.records.map(record => record.name || record.display_name || 'No name')
           });
         }
         
@@ -893,29 +906,31 @@ const CheckResult = ({
                               </div>
                               <div className="text-xs text-gray-500">
                                 ID: {record.id}
-                                {result?.queryPlan?.model && getOdooRecordUrl(result.queryPlan.model, record.id) && (
-                                  <span className="ml-2">
-                                    <a 
-                                      href={getOdooRecordUrl(result.queryPlan.model, record.id)}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="text-blue-600 hover:text-blue-800 underline"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        const url = getOdooRecordUrl(result.queryPlan.model, record.id);
-                                        console.log('🔗 Opening Odoo record:', {
-                                          recordId: record.id,
-                                          model: result.queryPlan.model,
-                                          url: url,
-                                          recordName: record.name || record.display_name || 'No name',
-                                          timestamp: new Date().toISOString()
-                                        });
-                                      }}
-                                    >
-                                      View in Odoo
-                                    </a>
-                                  </span>
-                                )}
+                                {(() => {
+                                  const odooUrl = result?.queryPlan?.model ? getOdooRecordUrl(result.queryPlan.model, record.id) : null;
+                                  return odooUrl && (
+                                    <span className="ml-2">
+                                      <a 
+                                        href={odooUrl}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-blue-600 hover:text-blue-800 underline"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          console.log('🔗 Opening Odoo record:', {
+                                            recordId: record.id,
+                                            model: result.queryPlan.model,
+                                            url: odooUrl,
+                                            recordName: record.name || record.display_name || 'No name',
+                                            timestamp: new Date().toISOString()
+                                          });
+                                        }}
+                                      >
+                                        View in Odoo
+                                      </a>
+                                    </span>
+                                  );
+                                })()}
                               </div>
                             </div>
                           </div>

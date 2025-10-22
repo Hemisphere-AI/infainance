@@ -27,14 +27,7 @@ const openai = new OpenAI({
  * Step 1: Input - Dutch Accounting Rule
  */
 const dutchRule = {
-  description: "Er mag nooit een factuur geboekt worden op een van onderstaande grootboekrekeningen",
-  forbiddenAccounts: [
-    { code: "480500", name: "Goodwill Afschrijving" },
-    { code: "481000", name: "Gebouwen / verbouwingen Afschrijving" },
-    { code: "482000", name: "Machine Afschrijving" },
-    { code: "483000", name: "Inventaris Afschrijving" },
-    { code: "484000", name: "Vervoermiddelen Afschrijving" }
-  ]
+  checkDescription: "Er mag nooit een factuur geboekt worden op een van onderstaande grootboekrekeningen: 480500 (Goodwill Afschrijving), 481000 (Gebouwen / verbouwingen Afschrijving), 482000 (Machine Afschrijving), 483000 (Inventaris Afschrijving), 484000 (Vervoermiddelen Afschrijving)"
 };
 
 /**
@@ -70,7 +63,7 @@ Return ONLY the JSON object, no other text.`;
       model: "gpt-4o",
       messages: [
         { role: "system", content: systemPrompt },
-        { role: "user", content: `Generate a query to find invoices that violate the Dutch rule: ${dutchRule.description}. Forbidden accounts: ${dutchRule.forbiddenAccounts.map(a => a.code).join(', ')}` }
+        { role: "user", content: `Generate a query to find invoices that violate the Dutch rule: ${dutchRule.checkDescription}` }
       ],
       temperature: 0,
       top_p: 1,
@@ -214,11 +207,7 @@ async function runCompleteTest() {
   
   // Step 1: Show input
   console.log('📝 Step 1: Input - Dutch Accounting Rule');
-  console.log(`Rule: ${dutchRule.description}`);
-  console.log('Forbidden Accounts:');
-  dutchRule.forbiddenAccounts.forEach(account => {
-    console.log(`  ${account.code} - ${account.name}`);
-  });
+  console.log(`Check Description: ${dutchRule.checkDescription}`);
   console.log('');
   
   // Step 2: LLM generates query

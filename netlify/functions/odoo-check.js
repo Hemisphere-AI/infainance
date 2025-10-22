@@ -127,38 +127,31 @@ class OdooAiAgent {
   }
 
   async analyzeCheckDescription(description, title) {
-    const systemPrompt = `You are an expert Odoo ERP analyst. Your task is to analyze a bookkeeping check description and determine the appropriate Odoo query parameters.
+    const systemPrompt = `You are an expert Odoo ERP analyst. Generate a canonical query for Dutch accounting rules.
 
-## Available Odoo Models (most relevant for bookkeeping):
-${this.accountingModels?.map(m => `- ${m.model}: ${m.name}`).join('\n') || 'Loading models...'}
+## CONSISTENCY PLAYBOOK - ALWAYS OUTPUT THIS EXACT JSON FORMAT:
 
-## Your Task:
-Given a check description, determine:
-1. **model**: The Odoo model to query (e.g., 'account.move', 'account.move.line', 'res.partner')
-2. **domain**: The search domain as a JavaScript array (e.g., [['state', '=', 'draft']])
-3. **fields**: Relevant fields to retrieve (e.g., ['id', 'name', 'amount_total', 'partner_id'])
-4. **limit**: Maximum records to return (default 100)
-
-## Model Selection Guidelines:
-- Use 'account.move' for invoices, bills, and journal entries
-- Use 'account.move.line' only when analyzing individual accounting line items
-- Use 'account.bank.statement.line' for bank transactions
-- Use 'res.partner' for customer/vendor information
-
-## Response Format:
-Return ONLY a valid JSON object with this exact structure:
 {
-  "model": "model_name",
-  "domain": [["field", "operator", "value"]],
-  "fields": ["field1", "field2", "field3"],
-  "limit": 100,
-  "reasoning": "Brief explanation of your choices"
-}`;
+  "model": "account.move",
+  "domain": ["...", ...]
+  ],
+  "fields": ["...", ...],
+  "limit": 1000,
+  "order": "id asc"
+}
 
-    const userMessage = `Check Title: "${title}"
-Check Description: "${description}"
+## Critical Rules:
+- Domain must be list of triplets only
+- Always include state="posted" 
+- Use stable order (id asc)
+- Fixed field set every time
+- Temperature 0, JSON-mode only
+- Extract account codes from the check description
+- Focus on line_ids.account_id.code for account filtering
 
-Determine the appropriate Odoo query parameters for this bookkeeping check.`;
+Return ONLY the JSON object, no other text.`;
+
+    const userMessage = `Generate a query to find invoices that violate the Dutch rule: ${description}`;
 
     const response = await this.openai.chat.completions.create({
       model: "gpt-4o",
@@ -166,8 +159,9 @@ Determine the appropriate Odoo query parameters for this bookkeeping check.`;
         { role: "system", content: systemPrompt },
         { role: "user", content: userMessage }
       ],
-      temperature: 0.1,
-      max_tokens: 1000
+      temperature: 0,
+      top_p: 1,
+      response_format: { type: "json_object" }
     });
 
     const content = response.choices[0].message.content.trim();
@@ -289,112 +283,51 @@ Please analyze these results and use the 'conclude' tool to determine the status
   }
 
   async executeCheck(checkDescription, checkTitle = 'Custom Check', acceptanceCriteria = '') {
-    const steps = [];
-    let finalResult = null;
-
     try {
-      console.log(`🎯 Starting check: ${checkTitle}`);
+      console.log(`🎯 NETLIFY FRONTEND - Starting check: ${checkTitle}`);
+      console.log(`📝 NETLIFY FRONTEND - Description: ${checkDescription}`);
 
-      // Step 1: AI Analysis of Check Description
-      steps.push({
-        step: 'analyze',
-        status: 'running',
-        message: 'Analyzing check description with AI',
-        timestamp: new Date()
-      });
-
+      // Generate Odoo query using LLM
+      console.log('🤖 NETLIFY FRONTEND - Calling LLM for query generation...');
       const queryPlan = await this.analyzeCheckDescription(checkDescription, checkTitle);
-      console.log('📋 Query plan:', queryPlan.model, queryPlan.domain);
-      
-      steps.push({
-        step: 'analyze',
-        status: 'completed',
-        message: `AI determined: ${queryPlan.model} with domain ${JSON.stringify(queryPlan.domain)}`,
-        timestamp: new Date()
-      });
+      console.log('🧠 NETLIFY FRONTEND - LLM Generated Query:', JSON.stringify(queryPlan, null, 2));
 
-      // Step 2: Execute Odoo Query
-      steps.push({
-        step: 'query',
-        status: 'running',
-        message: 'Executing Odoo query',
-        timestamp: new Date()
-      });
-
+      // Execute query using MCP client
+      console.log('🔍 NETLIFY FRONTEND - Executing query with MCP client...');
       const queryResult = await this.mcpClient.searchRecords(
         queryPlan.model,
         queryPlan.domain,
         queryPlan.fields,
         queryPlan.limit || 100
       );
+      console.log('📊 NETLIFY FRONTEND - Query result:', `${queryResult.count} records found`);
+      console.log('📋 NETLIFY FRONTEND - Data preview:', queryResult.records?.slice(0, 2) || 'No data');
 
-      console.log('📊 Query result:', `${queryResult.count} records found from model: ${queryPlan.model}`);
-
-      steps.push({
-        step: 'query',
-        status: 'completed',
-        message: `Found ${queryResult.count} records`,
-        timestamp: new Date()
-      });
-
-      // Step 3: AI Analysis of Results
-      steps.push({
-        step: 'analyze_results',
-        status: 'running',
-        message: 'Analyzing results with AI',
-        timestamp: new Date()
-      });
-
-      const analysisResult = await this.analyzeResults(checkDescription, checkTitle, queryResult, acceptanceCriteria);
-      console.log('✅ Analysis result:', analysisResult.analysis);
-
-      steps.push({
-        step: 'analyze_results',
-        status: 'completed',
-        message: 'AI analysis completed',
-        timestamp: new Date()
-      });
-
-      // Step 4: Complete
-      steps.push({
-        step: 'complete',
-        status: 'completed',
-        message: 'Check execution completed',
-        timestamp: new Date()
-      });
-
-      finalResult = {
+      // Return simple result matching test format
+      const result = {
         success: true,
+        query: queryPlan,
         count: queryResult.count,
-        duration: Date.now() - steps[0].timestamp.getTime(),
-        tokensUsed: analysisResult.tokensUsed || 0,
-        llmAnalysis: analysisResult.analysis,
-        status: analysisResult.status || 'unknown',
-        records: queryResult.records || [],
-        queryPlan: queryPlan,
-        steps: steps,
-        timestamp: new Date().toISOString()
+        data: queryResult.records || [],
+        timestamp: new Date()
       };
-
-      console.log('🎯 Check completed successfully');
-
-      return finalResult;
+      
+      console.log('✅ NETLIFY FRONTEND - Final result:', {
+        success: result.success,
+        count: result.count,
+        dataLength: result.data?.length || 0
+      });
+      
+      return result;
 
     } catch (error) {
-      console.error('❌ Check execution failed:', error);
-      
-      steps.push({
-        step: 'error',
-        status: 'failed',
-        message: `Error: ${error.message}`,
-        timestamp: new Date()
-      });
-
+      console.error('❌ NETLIFY FRONTEND - Check failed:', error.message);
       return {
         success: false,
         error: error.message,
-        steps: steps,
-        timestamp: new Date().toISOString()
+        count: 0,
+        data: [],
+        timestamp: new Date()
       };
     }
   }
