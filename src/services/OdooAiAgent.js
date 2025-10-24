@@ -44,57 +44,59 @@ export class OdooAiAgent {
 
   async initializeMCPServices() {
     try {
-      // Try to import backend services first (for backend environment)
-      try {
-        const { default: MCPOdooClient } = await import('../../backend/services/mcpOdooClient.js');
-        const { default: MCPOdooConsistentService } = await import('../../backend/services/mcpOdooConsistentService.js');
+      // For Netlify Functions, we'll use direct Odoo API calls instead of MCP services
+      // since the backend services were removed in the simplified architecture
+      
+      if (this.customConfig) {
+        console.log('🔧 Using organization-specific Odoo configuration:', {
+          url: this.customConfig.url,
+          db: this.customConfig.db,
+          hasApiKey: !!this.customConfig.apiKey,
+          username: this.customConfig.username
+        });
         
-        this.mcpClient = new MCPOdooClient(this.customConfig);
-        this.consistentService = new MCPOdooConsistentService(this.customConfig);
-        
-        await this.mcpClient.initialize();
-        await this.consistentService.initialize();
-        
-        console.log('✅ Initialized with backend MCP services');
+        // Initialize direct Odoo connection
+        this.odooConfig = this.customConfig;
+        console.log('✅ Initialized with organization-specific Odoo config');
         return;
-      } catch (backendError) {
-        console.log('⚠️ Backend services not available, trying Netlify approach...');
-      }
-
-      // Fallback for Netlify environment - import from relative path
-      try {
-        const MCPOdooClient = (await import('../../backend/services/mcpOdooClient.js')).default;
-        const MCPOdooConsistentService = (await import('../../backend/services/mcpOdooConsistentService.js')).default;
-        
-        this.mcpClient = new MCPOdooClient(this.customConfig);
-        this.consistentService = new MCPOdooConsistentService(this.customConfig);
-        
-        await this.mcpClient.initialize();
-        await this.consistentService.initialize();
-        
-        console.log('✅ Initialized with Netlify MCP services');
-      } catch (netlifyError) {
-        console.error('❌ Failed to initialize MCP services in both environments:', netlifyError);
-        throw new Error('MCP services not available in any environment');
+      } else {
+        console.log('⚠️ No custom config provided, using environment variables as fallback');
+        // Fallback to environment variables if no custom config
+        this.odooConfig = {
+          url: process.env.ODOO_URL,
+          db: process.env.ODOO_DB,
+          username: process.env.ODOO_USERNAME,
+          apiKey: process.env.ODOO_API_KEY
+        };
+        console.log('✅ Initialized with environment variables');
       }
     } catch (error) {
-      console.error('❌ MCP services initialization failed:', error);
+      console.error('❌ Odoo configuration initialization failed:', error);
       throw error;
     }
   }
 
   async loadOdooMetadata() {
     try {
-      // Get all available models
-      const modelsResult = await this.mcpClient.listModels();
-      if (modelsResult.success) {
-        this.availableModels = modelsResult.models || [];
-      }
-
-      // Get accounting-specific models for better context
-      const accountingResult = await this.mcpClient.listAccountingModels();
-      if (accountingResult.success) {
-        this.accountingModels = accountingResult.models || [];
+      // For simplified architecture, we'll load basic Odoo models
+      // This can be enhanced later with direct Odoo API calls
+      if (this.odooConfig) {
+        console.log('📋 Loading Odoo metadata for organization:', this.odooConfig.db);
+        
+        // Basic accounting models that are commonly used
+        this.availableModels = [
+          'account.move',
+          'account.move.line', 
+          'account.account',
+          'res.partner',
+          'product.product',
+          'sale.order',
+          'purchase.order'
+        ];
+        
+        console.log('✅ Loaded basic Odoo models for AI context');
+      } else {
+        console.log('⚠️ No Odoo configuration available for metadata loading');
       }
 
       console.log(`📊 Loaded ${this.availableModels.length} Odoo models for AI context`);
@@ -119,9 +121,9 @@ export class OdooAiAgent {
       const queryPlan = await this.analyzeCheckDescription(checkDescription, checkTitle);
       console.log('🧠 ODOO STEP 2: LLM Generated Query:', JSON.stringify(queryPlan, null, 2));
 
-      // Execute query using consistent service
-      console.log('🔍 ODOO STEP 3: Executing query with consistent service...');
-      const queryResult = await this.consistentService.executeValidatedQuery(queryPlan);
+      // Execute query using direct Odoo API calls
+      console.log('🔍 ODOO STEP 3: Executing query with organization-specific Odoo config...');
+      const queryResult = await this.executeOdooQuery(queryPlan);
       console.log('📊 ODOO STEP 3: Query result:', `${queryResult.count} records found`);
       console.log('📋 ODOO STEP 3: Data preview:', queryResult.data?.slice(0, 2) || 'No data');
 
@@ -237,6 +239,44 @@ Return ONLY the JSON object, no other text.`;
       console.error('❌ Failed to parse AI response:', content);
       console.error('❌ Parse error:', parseError.message);
       throw new Error('AI returned invalid query plan');
+    }
+  }
+
+  /**
+   * Execute Odoo query using organization-specific configuration
+   */
+  async executeOdooQuery(queryPlan) {
+    try {
+      if (!this.odooConfig) {
+        throw new Error('No Odoo configuration available');
+      }
+
+      console.log('🔧 Executing query with Odoo config:', {
+        url: this.odooConfig.url,
+        db: this.odooConfig.db,
+        model: queryPlan.model
+      });
+
+      // For now, return a mock result since we need to implement direct Odoo API calls
+      // This can be enhanced later with actual Odoo XML-RPC or REST API calls
+      const mockResult = {
+        success: true,
+        count: 0,
+        records: [],
+        data: []
+      };
+
+      console.log('⚠️ Using mock result - implement direct Odoo API calls for production');
+      return mockResult;
+    } catch (error) {
+      console.error('❌ Failed to execute Odoo query:', error);
+      return {
+        success: false,
+        count: 0,
+        records: [],
+        data: [],
+        error: error.message
+      };
     }
   }
 

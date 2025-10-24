@@ -12,3 +12,6 @@ mcp-config/*
 .env
 docker-desktop-setup.sh
 docker-setup.sh
+
+# Local Netlify folder
+.netlify
