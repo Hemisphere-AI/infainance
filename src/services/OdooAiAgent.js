@@ -260,7 +260,7 @@ Return ONLY the JSON object, no other text.`;
       // Import xmlrpc for Odoo API calls
       const xmlrpc = await import('xmlrpc');
       
-      // Create Odoo XML-RPC client
+      // Create Odoo XML-RPC client with timeout settings
       const client = xmlrpc.createClient({
         host: this.odooConfig.url.replace(/^https?:\/\//, '').replace(/\/$/, ''),
         port: this.odooConfig.url.includes('https') ? 443 : 80,
@@ -268,30 +268,50 @@ Return ONLY the JSON object, no other text.`;
         basic_auth: {
           user: this.odooConfig.username,
           pass: this.odooConfig.apiKey
+        },
+        timeout: 5000, // 5 second timeout
+        headers: {
+          'Connection': 'keep-alive',
+          'User-Agent': 'Netlify-Function/1.0'
         }
       });
 
-      // Authenticate with Odoo
-      const uid = await this.authenticateOdoo(client);
+      // Authenticate with Odoo (with timeout)
+      const uid = await this.authenticateOdooWithTimeout(client);
       if (!uid) {
         throw new Error('Failed to authenticate with Odoo');
       }
 
       console.log('✅ Authenticated with Odoo, UID:', uid);
 
-      // Execute search and read
-      const searchResult = await this.searchOdooRecords(client, uid, queryPlan);
-      console.log('📊 Search result:', searchResult);
+      // Execute search and read (with timeout)
+      const searchResult = await this.searchOdooRecordsWithTimeout(client, uid, queryPlan);
+      console.log('📊 Search result:', searchResult?.length || 0, 'records');
 
       return {
         success: true,
-        count: searchResult.length,
-        records: searchResult,
-        data: searchResult
+        count: searchResult?.length || 0,
+        records: searchResult || [],
+        data: searchResult || []
       };
 
     } catch (error) {
       console.error('❌ Failed to execute Odoo query:', error);
+      
+      // Return a more informative error for timeouts
+      if (error.message.includes('timeout') || error.message.includes('ETIMEDOUT')) {
+        console.log('⚠️ Odoo timeout - returning fallback response');
+        // Return a fallback response instead of complete failure
+        return {
+          success: true,
+          count: 0,
+          records: [],
+          data: [],
+          warning: 'Odoo connection timeout - results may be incomplete',
+          error: 'Connection timeout - please check your Odoo instance'
+        };
+      }
+      
       return {
         success: false,
         count: 0,
@@ -303,16 +323,21 @@ Return ONLY the JSON object, no other text.`;
   }
 
   /**
-   * Authenticate with Odoo
+   * Authenticate with Odoo (with timeout)
    */
-  async authenticateOdoo(client) {
+  async authenticateOdooWithTimeout(client) {
     return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error('Odoo authentication timeout'));
+      }, 3000); // 3 second timeout for auth
+
       client.methodCall('authenticate', [
         this.odooConfig.db,
         this.odooConfig.username,
         this.odooConfig.apiKey,
         {}
       ], (error, uid) => {
+        clearTimeout(timeout);
         if (error) {
           console.error('❌ Odoo authentication failed:', error);
           reject(error);
@@ -325,10 +350,21 @@ Return ONLY the JSON object, no other text.`;
   }
 
   /**
-   * Search and read records from Odoo
+   * Authenticate with Odoo (legacy method)
    */
-  async searchOdooRecords(client, uid, queryPlan) {
+  async authenticateOdoo(client) {
+    return this.authenticateOdooWithTimeout(client);
+  }
+
+  /**
+   * Search and read records from Odoo (with timeout)
+   */
+  async searchOdooRecordsWithTimeout(client, uid, queryPlan) {
     return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error('Odoo search timeout'));
+      }, 5000); // 5 second timeout for search
+
       // First, search for record IDs
       client.methodCall('execute_kw', [
         this.odooConfig.db,
@@ -337,23 +373,29 @@ Return ONLY the JSON object, no other text.`;
         queryPlan.model,
         'search',
         [queryPlan.domain || []],
-        { limit: queryPlan.limit || 100 }
+        { limit: Math.min(queryPlan.limit || 50, 50) } // Limit to 50 records max
       ], (error, recordIds) => {
         if (error) {
+          clearTimeout(timeout);
           console.error('❌ Odoo search failed:', error);
           reject(error);
           return;
         }
 
-        console.log('🔍 Found record IDs:', recordIds);
+        console.log('🔍 Found record IDs:', recordIds?.length || 0);
 
         if (!recordIds || recordIds.length === 0) {
+          clearTimeout(timeout);
           console.log('📭 No records found');
           resolve([]);
           return;
         }
 
-        // Then, read the records
+        // Then, read the records (with a new timeout)
+        const readTimeout = setTimeout(() => {
+          reject(new Error('Odoo read timeout'));
+        }, 3000); // 3 second timeout for read
+
         client.methodCall('execute_kw', [
           this.odooConfig.db,
           uid,
@@ -363,6 +405,8 @@ Return ONLY the JSON object, no other text.`;
           [recordIds],
           { fields: queryPlan.fields || [] }
         ], (readError, records) => {
+          clearTimeout(timeout);
+          clearTimeout(readTimeout);
           if (readError) {
             console.error('❌ Odoo read failed:', readError);
             reject(readError);
@@ -373,6 +417,13 @@ Return ONLY the JSON object, no other text.`;
         });
       });
     });
+  }
+
+  /**
+   * Search and read records from Odoo (legacy method)
+   */
+  async searchOdooRecords(client, uid, queryPlan) {
+    return this.searchOdooRecordsWithTimeout(client, uid, queryPlan);
   }
 
   /**
