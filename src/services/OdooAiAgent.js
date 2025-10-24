@@ -1,11 +1,10 @@
 /* eslint-env node */
 import OpenAI from 'openai';
-import MCPOdooClient from './mcpOdooClient.js';
-import MCPOdooConsistentService from './mcpOdooConsistentService.js';
 
 /**
  * Odoo AI Agent Service
- * Handles AI-driven Odoo queries and analysis based on check descriptions
+ * Single source of truth for AI-driven Odoo queries and analysis
+ * Works in both backend and Netlify environments
  */
 export class OdooAiAgent {
   constructor(customConfig = null) {
@@ -29,13 +28,8 @@ export class OdooAiAgent {
         apiKey: apiKey
       });
 
-      // Initialize MCP Odoo Client with custom config if provided
-      this.mcpClient = new MCPOdooClient(this.customConfig);
-      await this.mcpClient.initialize();
-
-      // Initialize Consistent Service for reliable queries
-      this.consistentService = new MCPOdooConsistentService(this.customConfig);
-      await this.consistentService.initialize();
+      // Initialize MCP services based on environment
+      await this.initializeMCPServices();
 
       // Load available models and fields for AI context
       await this.loadOdooMetadata();
@@ -45,6 +39,47 @@ export class OdooAiAgent {
     } catch (error) {
       console.error('❌ Failed to initialize Odoo AI Agent:', error);
       return false;
+    }
+  }
+
+  async initializeMCPServices() {
+    try {
+      // Try to import backend services first (for backend environment)
+      try {
+        const { default: MCPOdooClient } = await import('../../backend/services/mcpOdooClient.js');
+        const { default: MCPOdooConsistentService } = await import('../../backend/services/mcpOdooConsistentService.js');
+        
+        this.mcpClient = new MCPOdooClient(this.customConfig);
+        this.consistentService = new MCPOdooConsistentService(this.customConfig);
+        
+        await this.mcpClient.initialize();
+        await this.consistentService.initialize();
+        
+        console.log('✅ Initialized with backend MCP services');
+        return;
+      } catch (backendError) {
+        console.log('⚠️ Backend services not available, trying Netlify approach...');
+      }
+
+      // Fallback for Netlify environment - import from relative path
+      try {
+        const MCPOdooClient = (await import('../../backend/services/mcpOdooClient.js')).default;
+        const MCPOdooConsistentService = (await import('../../backend/services/mcpOdooConsistentService.js')).default;
+        
+        this.mcpClient = new MCPOdooClient(this.customConfig);
+        this.consistentService = new MCPOdooConsistentService(this.customConfig);
+        
+        await this.mcpClient.initialize();
+        await this.consistentService.initialize();
+        
+        console.log('✅ Initialized with Netlify MCP services');
+      } catch (netlifyError) {
+        console.error('❌ Failed to initialize MCP services in both environments:', netlifyError);
+        throw new Error('MCP services not available in any environment');
+      }
+    } catch (error) {
+      console.error('❌ MCP services initialization failed:', error);
+      throw error;
     }
   }
 
@@ -72,163 +107,69 @@ export class OdooAiAgent {
    * Execute an AI-driven check based on description
    */
   async executeCheck(checkDescription, checkTitle = 'Custom Check', acceptanceCriteria = '') {
-    const steps = [];
-    let finalResult = null;
-
+    const startTime = Date.now(); // Start timing
+    
     try {
-      console.log(`🎯 Starting check: ${checkTitle}`);
+      console.log(`🎯 ODOO STEP 1: Starting check: ${checkTitle}`);
+      console.log(`📝 ODOO STEP 1: Description: ${checkDescription}`);
+      console.log(`📋 ODOO STEP 1: Acceptance Criteria: ${acceptanceCriteria}`);
 
-      // Step 1: AI Analysis of Check Description
-      steps.push({
-        step: 'analyze',
-        status: 'running',
-        message: 'Analyzing check description with AI',
-        timestamp: new Date()
-      });
-
+      // Generate Odoo query using LLM
+      console.log('🤖 ODOO STEP 2: Calling LLM for query generation...');
       const queryPlan = await this.analyzeCheckDescription(checkDescription, checkTitle);
-      console.log('📋 Query plan:', queryPlan.model, queryPlan.domain);
-      
-      steps.push({
-        step: 'analyze',
-        status: 'completed',
-        message: `AI determined: ${queryPlan.model} with domain ${JSON.stringify(queryPlan.domain)}`,
-        timestamp: new Date()
-      });
+      console.log('🧠 ODOO STEP 2: LLM Generated Query:', JSON.stringify(queryPlan, null, 2));
 
-      // Step 2: Execute Odoo Query
-      steps.push({
-        step: 'query',
-        status: 'running',
-        message: 'Executing Odoo query',
-        timestamp: new Date()
-      });
+      // Execute query using consistent service
+      console.log('🔍 ODOO STEP 3: Executing query with consistent service...');
+      const queryResult = await this.consistentService.executeValidatedQuery(queryPlan);
+      console.log('📊 ODOO STEP 3: Query result:', `${queryResult.count} records found`);
+      console.log('📋 ODOO STEP 3: Data preview:', queryResult.data?.slice(0, 2) || 'No data');
 
-      let queryResult;
-      let analysisResult;
-      try {
-        // Use consistent service for reliable queries
-        queryResult = await this.consistentService.executeValidatedQuery(queryPlan);
+      // Generate LLM analysis of the results
+      console.log('🧠 ODOO STEP 4: Generating LLM analysis...');
+      const analysisResult = await this.analyzeResults(checkDescription, checkTitle, queryResult, acceptanceCriteria);
+      console.log('📝 ODOO STEP 4: LLM Analysis:', analysisResult.analysis);
 
-        console.log('📊 Query result:', `${queryResult.count} records found from model: ${queryPlan.model}`);
+      // Calculate total execution time
+      const totalDuration = Date.now() - startTime;
 
-        steps.push({
-          step: 'query',
-          status: 'completed',
-          message: `Found ${queryResult.count} records`,
-          timestamp: new Date()
-        });
-
-        // Step 3: AI Analysis of Results
-        steps.push({
-          step: 'analyze_results',
-          status: 'running',
-          message: 'Analyzing results with AI',
-          timestamp: new Date()
-        });
-
-        analysisResult = await this.analyzeResults(checkDescription, checkTitle, queryResult, acceptanceCriteria);
-        console.log('✅ Analysis result:', analysisResult.analysis);
-
-        steps.push({
-          step: 'analyze_results',
-          status: 'completed',
-          message: 'AI analysis completed',
-          timestamp: new Date()
-        });
-
-      } catch (queryError) {
-        console.error('❌ Odoo query failed:', queryError.message);
-        
-        // Check if this is a connection/authentication error
-        const isConnectionError = queryError.message.includes('authentication') || 
-                                 queryError.message.includes('connection') ||
-                                 queryError.message.includes('timeout') ||
-                                 queryError.message.includes('network') ||
-                                 queryError.message.includes('refused') ||
-                                 queryError.message.includes('unauthorized') ||
-                                 queryError.message.includes('forbidden');
-
-        steps.push({
-          step: 'query',
-          status: 'failed',
-          message: isConnectionError ? 'Failed to connect to Odoo database' : `Query failed: ${queryError.message}`,
-          timestamp: new Date()
-        });
-
-        // Return connection error immediately without analysis
-        if (isConnectionError) {
-          return {
-            success: false,
-            error: 'Unable to connect to Odoo database. Please check your Odoo configuration and credentials.',
-            connectionError: true,
-            steps: steps,
-            timestamp: new Date().toISOString()
-          };
-        }
-
-        // For other query errors, still try to analyze
-        queryResult = {
-          success: false,
-          model: queryPlan.model,
-          domain: queryPlan.domain,
-          records: [],
-          count: 0,
-          error: queryError.message
-        };
-
-        analysisResult = await this.analyzeResults(checkDescription, checkTitle, queryResult, acceptanceCriteria);
-        console.log('✅ Analysis result (with error):', analysisResult.analysis);
-
-        steps.push({
-          step: 'analyze_results',
-          status: 'completed',
-          message: 'AI analysis completed with error context',
-          timestamp: new Date()
-        });
-      }
-
-      // Step 4: Complete
-      steps.push({
-        step: 'complete',
-        status: 'completed',
-        message: 'Check execution completed',
-        timestamp: new Date()
-      });
-
-      finalResult = {
+      // Return result with proper LLM analysis
+      const result = {
         success: true,
+        query: queryPlan,
+        queryPlan: queryPlan, // Add queryPlan field for backend compatibility
         count: queryResult.count,
-        duration: Date.now() - steps[0].timestamp.getTime(),
-        tokensUsed: analysisResult.tokensUsed || 0,
+        data: queryResult.records || [],
+        records: queryResult.records || [], // Use records from consistent service
         llmAnalysis: analysisResult.analysis,
-        status: analysisResult.status || 'unknown',
-        records: queryResult.records || [],
-        queryPlan: queryPlan,
-        steps: steps,
-        timestamp: new Date().toISOString()
+        tokensUsed: analysisResult.tokensUsed || 0,
+        duration: totalDuration, // Use actual measured duration
+        timestamp: new Date()
       };
-
-      console.log('🎯 Check completed successfully');
-
-      return finalResult;
+      
+      console.log('✅ ODOO STEP 5: Final result:', {
+        success: result.success,
+        count: result.count,
+        dataLength: result.data?.length || 0,
+        recordsLength: result.records?.length || 0,
+        hasLlmAnalysis: !!result.llmAnalysis,
+        hasQuery: !!result.query,
+        hasQueryPlan: !!result.queryPlan,
+        recordsPreview: result.records?.slice(0, 2) || 'No records'
+      });
+      
+      return result;
 
     } catch (error) {
-      console.error('❌ Check execution failed:', error);
-      
-      // Add error step
-      steps.push({
-        step: 'error',
-        status: 'failed',
-        message: `Error: ${error.message}`,
-        timestamp: new Date()
-      });
-
+      const totalDuration = Date.now() - startTime; // Calculate duration even on error
+      console.error('❌ ODOO - Check failed:', error.message);
       return {
         success: false,
         error: error.message,
-        steps: steps,
-        timestamp: new Date().toISOString()
+        count: 0,
+        data: [],
+        duration: totalDuration,
+        timestamp: new Date()
       };
     }
   }
@@ -236,61 +177,28 @@ export class OdooAiAgent {
   /**
    * Analyze check description to determine Odoo query parameters
    */
-  async analyzeCheckDescription(description, title) {
+  async analyzeCheckDescription(description) {
+    const systemPrompt = `You are an expert Odoo ERP analyst. Generate an Odoo query based on the check description.
 
-    const systemPrompt = `You are an expert Odoo ERP analyst following the MCP consistency playbook. Your task is to analyze a bookkeeping check description and determine the appropriate Odoo query parameters.
+## OUTPUT FORMAT - ALWAYS OUTPUT THIS EXACT JSON FORMAT:
 
-## Available Odoo Models (most relevant for bookkeeping):
-${this.accountingModels?.map(m => `- ${m.model}: ${m.name}`).join('\n') || 'Loading models...'}
-
-## CONSISTENCY PLAYBOOK - ALWAYS OUTPUT THIS EXACT JSON FORMAT:
-
-For Dutch rule queries (creditor-related checks), ALWAYS use this exact format:
 {
-  "model": "account.move",
+  "model": ...,
   "domain": [
-    ["line_ids.account_id.code","in",["480500","481000","482000","483000","484000"]],
-    ["move_type","=","in_invoice"],
-    ["state","=","posted"]
+    ["...", ...]
   ],
-  "fields": ["id","name","move_type","date","partner_id","line_ids"],
+  "fields": ["...", ...],
   "limit": 1000,
   "order": "id asc"
 }
 
-## Field Selection Rules:
-- **Many2many fields** (line_ids): Request field name only, not sub-fields
-- **Many2one fields** (account_id): Can request specific attributes like .code
-- **Always include**: 'name' field for record identification
-- **AVOID**: Requesting sub-fields of Many2many relationships
+## Critical Rules:
+- Domain must be array of triplets ONLY: [field, operator, value]
+- NO OR operators ("|") - use simple AND filters only
 
-## Model Selection Guidelines:
-- Use 'account.move' for invoices, bills, and journal entries (the main documents)
-- Use 'account.move.line' only when you need to analyze individual accounting line items
-- Use 'account.bank.statement.line' for bank transactions
-- Use 'res.partner' for customer/vendor information
+Return ONLY the JSON object, no other text.`;
 
-## CRITICAL: Use temperature 0, top_p 1, JSON-mode - NO FREE TEXT
-## CRITICAL: Keep domain as list of triplets only (no object form)
-## CRITICAL: Add state = posted to prevent draft flickering
-## CRITICAL: Use stable order (id asc) and fixed field set every time
-
-## Response Format:
-Return ONLY a valid JSON object with this exact structure:
-{
-  "model": "model_name",
-  "domain": [["field", "operator", "value"]],
-  "fields": ["field1", "field2", "field3"],
-  "limit": 1000,
-  "order": "id asc",
-  "reasoning": "Brief explanation of your choices"
-}`;
-
-    const userMessage = `Check Title: "${title}"
-Check Description: "${description}"
-
-Determine the appropriate Odoo query parameters for this bookkeeping check.
-`;
+    const userMessage = `Generate an Odoo query based on this check description: ${description}`;
 
     const response = await this.openai.chat.completions.create({
       model: "gpt-4o",
@@ -366,15 +274,8 @@ Determine the appropriate Odoo query parameters for this bookkeeping check.
       errors.push('Order must be a string');
     }
 
-    // Check for consistency playbook compliance
-    if (queryPlan.model === 'account.move' && queryPlan.domain) {
-      const hasStatePosted = queryPlan.domain.some(filter => 
-        filter[0] === 'state' && filter[1] === '=' && filter[2] === 'posted'
-      );
-      if (!hasStatePosted) {
-        errors.push('Missing state=posted filter for account.move queries');
-      }
-    }
+    // Additional validation can be added here for specific business rules
+    // This keeps the core service generic and flexible
 
     return {
       isValid: errors.length === 0,
@@ -386,7 +287,7 @@ Determine the appropriate Odoo query parameters for this bookkeeping check.
    * Use LLM with conclude tool to analyze results and determine status
    */
   async analyzeResults(description, title, queryResult, acceptanceCriteria = '') {
-    console.log('🔍 BACKEND LLM ANALYSIS INPUT:');
+    console.log('🔍 ODOO LLM ANALYSIS INPUT:');
     console.log('📋 Description:', description);
     console.log('📋 Title:', title);
     console.log('📊 Model:', queryResult.model);
@@ -396,7 +297,7 @@ Determine the appropriate Odoo query parameters for this bookkeeping check.
     // Check if this is a connection error
     if (queryResult.error) {
       const analysis = `Connection error: ${queryResult.error}. Please check your Odoo configuration and credentials.`;
-      console.log('✅ BACKEND LLM ANALYSIS OUTPUT (ERROR):', analysis);
+      console.log('✅ ODOO LLM ANALYSIS OUTPUT (ERROR):', analysis);
       
       return {
         success: false,
@@ -457,8 +358,35 @@ ${JSON.stringify(analysisData, null, 2)}
 
 Please analyze these results and use the 'conclude' tool to determine the status based on the acceptance criteria.`;
 
-      // Import tools only
-      const { tools } = await import('../../src/utils/tools.js');
+      // Define tools inline for analysis
+      const tools = [
+        {
+          type: "function",
+          function: {
+            name: "conclude",
+            description: "Conclude the analysis with a final status determination",
+            parameters: {
+              type: "object",
+              properties: {
+                status: {
+                  type: "string",
+                  enum: ["passed", "failed", "unknown", "warning"],
+                  description: "The final status of the check"
+                },
+                reasoning: {
+                  type: "string",
+                  description: "Detailed reasoning for the status determination"
+                },
+                summary: {
+                  type: "string", 
+                  description: "Brief summary of the analysis"
+                }
+              },
+              required: ["status", "reasoning", "summary"]
+            }
+          }
+        }
+      ];
       
       const response = await this.openai.chat.completions.create({
         model: "gpt-4o",
@@ -483,9 +411,9 @@ Please analyze these results and use the 'conclude' tool to determine the status
           
           return {
             success: true,
-            analysis: args.answer,
+            analysis: args.reasoning,
             status: args.status,
-            acceptance_criteria: args.acceptance_criteria,
+            summary: args.summary,
             tokensUsed: response.usage?.total_tokens || 0
           };
         }

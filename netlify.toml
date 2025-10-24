@@ -46,7 +46,7 @@
 
 [[redirects]]
   from = "/api/odoo/check"
-  to = "/.netlify/functions/odoo-check"
+  to = "/.netlify/functions/NetlifyOdooAiAgent"
   status = 200
 
 [[redirects]]

@@ -45,6 +45,26 @@ const CheckResult = ({
   const [odooConfig, setOdooConfig] = useState(null);
   const [checkResultsHistory, setCheckResultsHistory] = useState({});
   const [selectedResultVersion, setSelectedResultVersion] = useState({});
+  const [showAllRecords, setShowAllRecords] = useState({});
+
+  // Auto-expand the current check when it changes
+  useEffect(() => {
+    if (currentCheckId && !expandedChecks.has(currentCheckId)) {
+      setExpandedChecks(prev => new Set([...prev, currentCheckId]));
+    }
+  }, [currentCheckId, expandedChecks]);
+
+  // Auto-expand check if it has results (from history or current run)
+  useEffect(() => {
+    if (currentCheckId) {
+      const hasResults = checkResults[currentCheckId] || 
+                        (checkResultsHistory[currentCheckId] && checkResultsHistory[currentCheckId].length > 0);
+      
+      if (hasResults && !expandedChecks.has(currentCheckId)) {
+        setExpandedChecks(prev => new Set([...prev, currentCheckId]));
+      }
+    }
+  }, [currentCheckId, checkResults, checkResultsHistory, expandedChecks]);
 
   // Load Odoo configuration
   useEffect(() => {
@@ -96,39 +116,33 @@ const CheckResult = ({
               [currentCheckId]: results
             }));
             
-            // Set the latest result as selected by default
-            if (data.results.length > 0) {
+            // Set the latest result as selected
+            if (results.length > 0) {
               setSelectedResultVersion(prev => ({
                 ...prev,
-                [currentCheckId]: data.results[0].id
+                [currentCheckId]: results[0].id
               }));
             }
           }
+        } else {
+          console.error('❌ Failed to load check results history:', response.status, response.statusText);
         }
       } catch (error) {
         console.error('Failed to load check results history:', error);
       }
     };
-    
+
     loadCheckResultsHistory();
   }, [currentCheckId]);
 
   // Generate Odoo URL for a record
   const getOdooRecordUrl = useCallback((model, recordId) => {
-    console.log('🔗 getOdooRecordUrl called:', { 
-      model, 
-      recordId, 
-      odooConfig: odooConfig ? { url: odooConfig.url, db: odooConfig.db } : null 
-    });
-    
     if (!odooConfig?.url) {
-      console.log('❌ No Odoo config URL available');
       return null;
     }
     
     // Validate record ID
     if (!recordId || recordId === 'undefined' || recordId === 'null') {
-      console.log('❌ Invalid record ID:', recordId);
       return null;
     }
     
@@ -137,14 +151,6 @@ const CheckResult = ({
     
     // Construct the correct Odoo record URL format: /web#id=X&model=Y&view_type=form
     const url = `${baseUrl}/web#id=${recordId}&model=${model}&view_type=form`;
-    console.log('✅ Generated Odoo URL:', url);
-    console.log('📊 Record Details:', { 
-      model, 
-      recordId, 
-      database: odooConfig.db,
-      url: url,
-      note: 'If this record does not exist in Odoo, the URL will show a "Record not found" error'
-    });
     return url;
   }, [odooConfig]);
 
@@ -189,7 +195,6 @@ const CheckResult = ({
   const runCheck = async (check) => {
     try {
       const checkId = check.id;
-      console.log('🚀 Starting check execution for:', check.name, 'ID:', checkId);
       setRunningChecks(prev => new Set([...prev, checkId]));
       
       // Initialize execution steps
@@ -216,33 +221,43 @@ const CheckResult = ({
       await updateStep(checkId, 'connect', 'completed');
       await updateStep(checkId, 'query', 'running');
 
-      // Step 3: Execute AI-driven check
-      const apiUrl = buildApiUrl(API_ENDPOINTS.ODOO_CHECK);
-      console.log('📡 Making API call to:', apiUrl);
+      // Step 3: Execute AI-driven check using the current check's description
+      const apiUrl = buildApiUrl('/api/odoo/check');
       
+      // Use the AI agent to generate query based on current check description
       const requestBody = {
-        checkDescription: check.description || 'Analyze this check',
-        checkTitle: check.name || 'Custom Check',
+        checkDescription: check.description || '',
+        checkTitle: check.name,
         checkId: check.id,
         organizationId: organizationId,
         acceptanceCriteria: check.acceptance_criteria || ''
       };
       
-      console.log('📤 Request body:', requestBody);
       
-      const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody)
-      });
+      let response;
+      try {
+        // Create an AbortController for timeout
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+        
+        response = await fetch(apiUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(requestBody),
+          signal: controller.signal
+        });
+        
+        clearTimeout(timeoutId);
+      } catch (error) {
+        if (error.name === 'AbortError') {
+          console.error('⏰ Request timed out after 30 seconds');
+          throw new Error('Request timed out. Please try again.');
+        }
+        throw error;
+      }
 
-      console.log('📥 Response received:', {
-        status: response.status,
-        ok: response.ok,
-        statusText: response.statusText
-      });
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
@@ -277,161 +292,92 @@ const CheckResult = ({
         return; // Exit early for connection errors
       }
 
-      const data = await response.json();
-      console.log('📊 Response data received:', {
-        success: data.success,
-        hasResult: !!data.result,
-        resultStatus: data.result?.status,
-        stepsCount: data.result?.steps?.length,
-        recordCount: data.result?.records?.length || 0,
-        model: data.result?.queryPlan?.model
-      });
+      const responseData = await response.json();
 
-      // Log all records found in the check result
-      if (data.result?.records && data.result.records.length > 0) {
-        console.log('📋 Records found in check result:', {
-          model: data.result.queryPlan?.model,
-          recordCount: data.result.records.length,
-          records: data.result.records.map((record, index) => ({
-            index: index + 1,
-            id: record.id,
-            name: record.name || record.display_name || 'No name',
-            // Log first few fields to help identify the record
-            sampleFields: Object.keys(record).slice(0, 5).reduce((acc, key) => {
-              acc[key] = record[key];
-              return acc;
-            }, {})
-          }))
-        });
-      }
+      // Extract the actual result from the nested response
+      const data = responseData.result || responseData;
       
+      // Handle the /api/odoo/check response format
       if (!data.success) {
-        // Handle API-level errors - mark connect as completed, query as failed, others as pending
         await updateStep(checkId, 'connect', 'completed');
         await updateStep(checkId, 'query', 'error');
         await updateStep(checkId, 'analyze', 'pending');
         await updateStep(checkId, 'complete', 'pending');
         
-        // Store error result
         setCheckResults(prev => ({
           ...prev,
           [checkId]: {
             success: false,
             error: data.error || 'Check execution failed',
-            connectionError: true,
+            connectionError: false,
             count: 0,
-            duration: 0,
-            tokensUsed: 0,
-            llmAnalysis: data.error || 'Check execution failed',
+            duration: data.duration || 0,
+            tokensUsed: data.tokensUsed || 0,
+            llmAnalysis: data.llmAnalysis || 'Check execution failed',
             records: [],
-            queryPlan: null,
-            steps: [],
+            queryPlan: data.queryPlan,
+            steps: [
+              { step: 'connect', status: 'completed' },
+              { step: 'query', status: 'error' },
+              { step: 'analyze', status: 'pending' },
+              { step: 'complete', status: 'pending' }
+            ],
             executedAt: new Date()
           }
         }));
         
-        // Expand the check to show results
         setExpandedChecks(prev => new Set([...prev, checkId]));
-        return; // Exit early for API errors
+        return;
       }
 
-      // Check for connection errors
-      if (data.result.connectionError || (data.result.success === false && data.result.error)) {
-        // Handle connection error - mark connect as failed, others as pending
-        await updateStep(checkId, 'connect', 'error');
-        await updateStep(checkId, 'query', 'pending');
-        await updateStep(checkId, 'analyze', 'pending');
-        await updateStep(checkId, 'complete', 'pending');
-        
-        // Store error result
-        setCheckResults(prev => ({
-          ...prev,
-          [checkId]: {
-            success: false,
-            error: data.result.error,
-            connectionError: true,
-            count: 0,
-            duration: data.result.duration || 0,
-            tokensUsed: 0,
-            llmAnalysis: data.result.error || 'Connection failed',
-            records: [],
-            queryPlan: data.result.queryPlan || null,
-            steps: data.result.steps || [],
-            executedAt: new Date(data.result.timestamp || new Date().toISOString())
-          }
-        }));
-      } else {
-        // Update steps based on AI agent response for successful connections
-        if (data.result.steps) {
-          for (const step of data.result.steps) {
-            await updateStep(checkId, step.step, step.status);
-            // Add a small delay for better UX
-            await new Promise(resolve => setTimeout(resolve, 200));
-          }
-        }
+      
+      // Handle successful AI-driven response
+      await updateStep(checkId, 'query', 'completed');
+      await updateStep(checkId, 'analyze', 'completed');
+      await updateStep(checkId, 'complete', 'completed');
 
-        // Store real results from AI agent
-        setCheckResults(prev => ({
-          ...prev,
-          [checkId]: {
-            success: data.result.success,
-            count: data.result.count,
-            duration: data.result.duration,
-            tokensUsed: data.result.tokensUsed,
-            llmAnalysis: data.result.llmAnalysis,
-            records: data.result.records || [],
-            queryPlan: data.result.queryPlan,
-            steps: data.result.steps,
-            executedAt: new Date(data.result.timestamp)
-          }
-        }));
-
-        // Log summary of all records found
-        if (data.result.records && data.result.records.length > 0) {
-          console.log('✅ Check completed - Summary of all records found:', {
-            checkId: checkId,
-            checkName: check.name,
-            model: data.result.queryPlan?.model,
-            totalRecords: data.result.records.length,
-            odooConfig: odooConfig ? { url: odooConfig.url, db: odooConfig.db } : null,
-            recordIds: data.result.records.map(record => record.id),
-            recordNames: data.result.records.map(record => record.name || record.display_name || 'No name'),
-            allOdooUrls: data.result.records.map(record => 
-              getOdooRecordUrl(data.result.queryPlan?.model, record.id)
-            ).filter(url => url !== null)
-          });
+      // Store results from AI-driven check
+      
+      setCheckResults(prev => ({
+        ...prev,
+        [checkId]: {
+          success: data.success,
+          count: data.count || 0,
+          duration: data.duration || 0,
+          tokensUsed: data.tokensUsed || 0,
+          llmAnalysis: data.llmAnalysis || `Found ${data.count || 0} records matching the check criteria.`,
+          records: data.data || [],
+          queryPlan: data.query,
+          steps: [
+            { step: 'connect', status: 'completed' },
+            { step: 'query', status: 'completed' },
+            { step: 'analyze', status: 'completed' },
+            { step: 'complete', status: 'completed' }
+          ],
+          executedAt: new Date()
         }
-        
-        console.log('✅ Check execution completed successfully:', {
-          checkId,
-          status: data.result.status,
-          count: data.result.count,
-          duration: data.result.duration,
-          stepsCompleted: data.result.steps?.length || 0
-        });
-      }
+      }));
+      
 
-      // Update check status if backend (agent) provided it
-      const statusFromAgent = data?.result?.status;
-      if (statusFromAgent) {
-        try {
-          const { createClient } = await import('@supabase/supabase-js');
-          const supabase = createClient(
-            import.meta.env.VITE_SUPABASE_URL,
-            import.meta.env.VITE_SUPABASE_ANON_KEY
-          );
-          const { error: updateError } = await supabase
-            .from('checks')
-            .update({ status: statusFromAgent, updated_at: new Date().toISOString() })
-            .eq('id', checkId);
-          if (updateError) {
-            console.error('Failed to update check status:', updateError);
-          } else if (onRefreshChecks) {
-            onRefreshChecks();
-          }
-        } catch (err) {
-          console.error('Failed to update check status (agent):', err);
+      // Update check status based on results (map to expected values)
+      const checkStatus = data.count > 0 ? 'failed' : 'passed';
+      try {
+        const { createClient } = await import('@supabase/supabase-js');
+        const supabase = createClient(
+          import.meta.env.VITE_SUPABASE_URL,
+          import.meta.env.VITE_SUPABASE_ANON_KEY
+        );
+        const { error: updateError } = await supabase
+          .from('checks')
+          .update({ status: checkStatus, updated_at: new Date().toISOString() })
+          .eq('id', checkId);
+        if (updateError) {
+          console.error('Failed to update check status:', updateError);
+        } else if (onRefreshChecks) {
+          onRefreshChecks();
         }
+      } catch (err) {
+        console.error('Failed to update check status:', err);
       }
 
       // Expand the check to show results
@@ -457,10 +403,6 @@ const CheckResult = ({
               }));
             }
             
-            console.log('📚 Results history refreshed:', {
-              checkId,
-              historyCount: historyData.results.length
-            });
           }
         }
       } catch (error) {
@@ -477,7 +419,6 @@ const CheckResult = ({
         }
       }));
     } finally {
-      console.log('🏁 Check execution finished for:', check.name, 'ID:', check.id);
       setRunningChecks(prev => {
         const newSet = new Set(prev);
         newSet.delete(check.id);
@@ -530,6 +471,13 @@ const CheckResult = ({
       }
       return newSet;
     });
+  };
+
+  const toggleShowAllRecords = (checkId) => {
+    setShowAllRecords(prev => ({
+      ...prev,
+      [checkId]: !prev[checkId]
+    }));
   };
 
   // Convert milliseconds to hh:mm:ss format
@@ -586,9 +534,15 @@ const CheckResult = ({
 
   // Get the current result based on selected version or latest from checkResults
   const getCurrentResult = (checkId) => {
+    // First priority: use live results from current run (ensures UI reflects latest execution)
+    if (checkResults[checkId]) {
+      return checkResults[checkId];
+    }
+
     const selectedVersionId = selectedResultVersion[checkId];
     const history = checkResultsHistory[checkId] || [];
     
+    // If a specific version is selected from dropdown, use that
     if (selectedVersionId && history.length > 0) {
       const selectedResult = history.find(r => r.id === selectedVersionId);
       if (selectedResult) {
@@ -606,8 +560,23 @@ const CheckResult = ({
       }
     }
     
-    // Fallback to current checkResults (for real-time results)
-    return checkResults[checkId];
+    // Fallback: latest from history if available
+    if (history.length > 0) {
+      const latest = history[0];
+      return {
+        success: latest.success,
+        count: latest.record_count,
+        duration: latest.duration,
+        tokensUsed: latest.tokens_used,
+        llmAnalysis: latest.llm_analysis,
+        records: latest.records || [],
+        queryPlan: latest.query_plan,
+        steps: latest.execution_steps,
+        executedAt: new Date(latest.executed_at)
+      };
+    }
+
+    return null; // No result found
   };
 
   // Find the current check
@@ -632,6 +601,7 @@ const CheckResult = ({
   const acceptanceCriteriaText = acceptanceCriteriaTexts[currentCheck.id] || currentCheck.acceptance_criteria || '';
   const history = checkResultsHistory[currentCheck.id] || [];
   const selectedVersionId = selectedResultVersion[currentCheck.id];
+  
 
   return (
     <div className="h-full overflow-y-auto">
@@ -858,14 +828,18 @@ const CheckResult = ({
             )}
 
             {/* Records */}
-            {result?.records && result.records.length > 0 && (
+            {result && (
               <div className="p-4">
                 <h4 className="font-medium text-gray-900 mb-3 flex items-center space-x-2">
                   <Database className="w-4 h-4" />
-                  <span>Records ({result.records.length})</span>
+                  <span>Records ({result.records?.length || 0})</span>
                 </h4>
+                {result.records && result.records.length > 0 ? (
                 <div className="space-y-2">
-                  {result.records.slice(0, 10).map((record, index) => {
+                  {(() => {
+                    const showAll = showAllRecords[currentCheck.id];
+                    const recordsToShow = showAll ? result.records : result.records.slice(0, 5);
+                    return recordsToShow.map((record, index) => {
                     const recordId = `${currentCheck.id}-${record.id || index}`;
                     const isRecordExpanded = expandedRecords.has(recordId);
 
@@ -893,29 +867,31 @@ const CheckResult = ({
                               </div>
                               <div className="text-xs text-gray-500">
                                 ID: {record.id}
-                                {result?.queryPlan?.model && getOdooRecordUrl(result.queryPlan.model, record.id) && (
-                                  <span className="ml-2">
-                                    <a 
-                                      href={getOdooRecordUrl(result.queryPlan.model, record.id)}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="text-blue-600 hover:text-blue-800 underline"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        const url = getOdooRecordUrl(result.queryPlan.model, record.id);
-                                        console.log('🔗 Opening Odoo record:', {
-                                          recordId: record.id,
-                                          model: result.queryPlan.model,
-                                          url: url,
-                                          recordName: record.name || record.display_name || 'No name',
-                                          timestamp: new Date().toISOString()
-                                        });
-                                      }}
-                                    >
-                                      View in Odoo
-                                    </a>
-                                  </span>
-                                )}
+                                {(() => {
+                                  const odooUrl = result?.queryPlan?.model ? getOdooRecordUrl(result.queryPlan.model, record.id) : null;
+                                  return odooUrl && (
+                                    <span className="ml-2">
+                                      <a 
+                                        href={odooUrl}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-blue-600 hover:text-blue-800 underline"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          console.log('🔗 Opening Odoo record:', {
+                                            recordId: record.id,
+                                            model: result.queryPlan.model,
+                                            url: odooUrl,
+                                            recordName: record.name || record.display_name || 'No name',
+                                            timestamp: new Date().toISOString()
+                                          });
+                                        }}
+                                      >
+                                        View in Odoo
+                                      </a>
+                                    </span>
+                                  );
+                                })()}
                               </div>
                             </div>
                           </div>
@@ -948,13 +924,33 @@ const CheckResult = ({
                         </div>
                       </div>
                     );
-                  })}
-                  {result.records.length > 10 && (
-                    <div className="text-center text-sm text-gray-500 py-2">
-                      ... and {result.records.length - 10} more records
+                  })})()}
+                  {result.records.length > 5 && !showAllRecords[currentCheck.id] && (
+                    <div className="text-center py-2">
+                      <button
+                        onClick={() => toggleShowAllRecords(currentCheck.id)}
+                        className="text-blue-600 hover:text-blue-800 text-sm font-medium underline"
+                      >
+                        ... and {result.records.length - 5} more records (click to show all)
+                      </button>
+                    </div>
+                  )}
+                  {result.records.length > 5 && showAllRecords[currentCheck.id] && (
+                    <div className="text-center py-2">
+                      <button
+                        onClick={() => toggleShowAllRecords(currentCheck.id)}
+                        className="text-blue-600 hover:text-blue-800 text-sm font-medium underline"
+                      >
+                        Show less (first 5 records)
+                      </button>
                     </div>
                   )}
                 </div>
+                ) : (
+                  <div className="text-center text-gray-500 py-4">
+                    <p>No records found</p>
+                  </div>
+                )}
               </div>
             )}
           </div>

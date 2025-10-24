@@ -61,7 +61,16 @@ const Checks = ({
 
   const handleDescriptionChange = useCallback((e) => {
     setDescriptionText(e.target.value);
-  }, []);
+    
+    // Auto-save description after a short delay
+    if (onUpdateDescription && currentCheckId) {
+      const timeoutId = setTimeout(() => {
+        onUpdateDescription(currentCheckId, e.target.value);
+      }, 1000); // 1 second delay
+      
+      return () => clearTimeout(timeoutId);
+    }
+  }, [onUpdateDescription, currentCheckId]);
 
   const handleAcceptanceCriteriaChange = useCallback((e) => {
     setAcceptanceCriteriaText(e.target.value);

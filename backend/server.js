@@ -79,8 +79,8 @@ let odooAiAgentPromise = null
 async function getOdooAiAgent(customConfig = null) {
   // If custom config is provided, create a new instance with that config
   if (customConfig) {
-    const { OdooAiAgent } = await import('./services/odooAiAgent.js')
-    const instance = new OdooAiAgent(customConfig)
+        const { BackendOdooAiAgent } = await import('./services/BackendOdooAiAgent.js')
+        const instance = new BackendOdooAiAgent(customConfig)
     const initialized = await instance.initialize()
     if (!initialized) {
       throw new Error('Failed to initialize Odoo AI Agent with custom config')
@@ -92,8 +92,8 @@ async function getOdooAiAgent(customConfig = null) {
   if (!odooAiAgentInstance) {
     if (!odooAiAgentPromise) {
       odooAiAgentPromise = (async () => {
-        const { OdooAiAgent } = await import('./services/odooAiAgent.js')
-        const instance = new OdooAiAgent()
+        const { BackendOdooAiAgent } = await import('./services/BackendOdooAiAgent.js')
+        const instance = new BackendOdooAiAgent()
         const initialized = await instance.initialize()
         if (!initialized) {
           throw new Error('Failed to initialize Odoo AI Agent')
@@ -443,8 +443,20 @@ app.post('/api/odoo/check', async (req, res) => {
     const aiAgent = await getOdooAiAgent(odooConfig)
     
     // Execute AI-driven check
+    console.log('🚀 FRONTEND CHECK EXECUTION - Starting AI Agent');
+    console.log('📝 Check Description:', checkDescription);
+    console.log('📝 Check Title:', checkTitle);
+    console.log('📝 Acceptance Criteria:', acceptanceCriteria);
+    
     const result = await aiAgent.executeCheck(checkDescription, checkTitle, acceptanceCriteria || '')
-    console.log('🧠 Agent conclude status:', result?.status || 'unknown')
+    
+    console.log('🧠 FRONTEND CHECK RESULT:');
+    console.log('  ✅ Success:', result?.success);
+    console.log('  📊 Count:', result?.count);
+    console.log('  📋 Data Length:', result?.data?.length || 0);
+    console.log('  🔍 Query:', JSON.stringify(result?.query, null, 2));
+    console.log('  ⏰ Timestamp:', result?.timestamp);
+    console.log('  ❌ Error:', result?.error);
     
     console.log('✅ API response sent');
     
@@ -466,23 +478,46 @@ app.post('/api/odoo/check', async (req, res) => {
             success: result.success || false,
             query_plan: result.queryPlan || null,
             record_count: result.count || 0,
-            records: result.records || null,
+            records: result.records || result.data || null,
             llm_analysis: result.llmAnalysis || null,
             tokens_used: result.tokensUsed || null,
             execution_steps: result.steps || null,
             error_message: result.error || null
           }
           
+          console.log('💾 BACKEND: Storing result data:', {
+            checkId,
+            recordCount: result.count,
+            hasRecords: !!(result.records || result.data),
+            recordsLength: (result.records || result.data)?.length || 0,
+            recordsPreview: (result.records || result.data)?.slice(0, 2) || 'No records',
+            hasQueryPlan: !!result.queryPlan,
+            hasLlmAnalysis: !!result.llmAnalysis,
+            queryPlanPreview: result.queryPlan ? { model: result.queryPlan.model, domain: result.queryPlan.domain } : 'No query plan',
+            llmAnalysisPreview: result.llmAnalysis ? result.llmAnalysis.substring(0, 100) + '...' : 'No LLM analysis'
+          });
+          
+          console.log('💾 BACKEND: About to insert into database:', {
+            checkId: resultData.check_id,
+            hasQueryPlan: !!resultData.query_plan,
+            hasLlmAnalysis: !!resultData.llm_analysis,
+            queryPlanType: typeof resultData.query_plan,
+            llmAnalysisType: typeof resultData.llm_analysis,
+            queryPlanPreview: resultData.query_plan ? JSON.stringify(resultData.query_plan).substring(0, 100) + '...' : 'null',
+            llmAnalysisPreview: resultData.llm_analysis ? resultData.llm_analysis.substring(0, 100) + '...' : 'null'
+          });
+
           const { error: insertError } = await supabase
             .from('checks_results')
             .insert(resultData)
           
           if (insertError) {
-            console.error('Failed to save check results:', insertError)
+            console.error('❌ Failed to save check results:', insertError)
             console.error('Result data:', JSON.stringify(resultData, null, 2))
           } else {
             console.log('✅ Check results saved to database')
             console.log('🧩 Saved check_result status:', resultData.status)
+            console.log('💾 Database insert successful - query_plan and llm_analysis should be stored')
             // Also update root check status if we have a status from the agent
             if (result.status) {
               const { error: updateCheckError } = await supabase

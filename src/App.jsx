@@ -199,13 +199,6 @@ function MainSpreadsheetApp({ user }) {
       return
     }
 
-    // Check if the organization still exists in our local state
-    const organizationExists = organizations.some(org => org.id === organizationId)
-    if (!organizationExists) {
-      console.log('Organization no longer exists, skipping checks load for:', organizationId)
-      return
-    }
-
     try {
       const result = await organizationService.getOrganizationChecks(organizationId, user.id)
       
@@ -240,7 +233,7 @@ function MainSpreadsheetApp({ user }) {
     } catch (err) {
       console.error('Failed to load organization checks:', err)
     }
-  }, [currentOrganizationId, user?.id, checkId, currentCheckId, organizations])
+  }, [currentOrganizationId, user?.id, checkId, currentCheckId])
 
   // Only load checks when currentOrganizationId changes, not on every render
   useEffect(() => {
@@ -249,6 +242,21 @@ function MainSpreadsheetApp({ user }) {
     }
   }, [currentOrganizationId, user?.id, loadOrganizationChecks])
 
+  // Auto-select first check when organization changes and no check is selected
+  // BUT only if we're on the main app page, not on organization or check pages
+  useEffect(() => {
+    const currentPath = window.location.pathname;
+    const isOnMainAppPage = currentPath === '/app';
+    
+    // Only auto-select if we're on the main app page, not on specific organization/check pages
+    if (currentOrganizationId && !currentCheckId && !checkId && isOnMainAppPage) {
+      const orgChecks = checks.filter(check => check.organization_id === currentOrganizationId);
+      if (orgChecks.length > 0) {
+        setCurrentCheckId(orgChecks[0].id);
+        navigate(`/check/${orgChecks[0].id}`);
+      }
+    }
+  }, [currentOrganizationId, currentCheckId, checkId, checks, navigate])
 
   // Handle sidebar toggle
   const handleSidebarToggle = useCallback(() => {

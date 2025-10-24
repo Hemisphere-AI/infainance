@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import PropTypes from 'prop-types';
 import { Square, Plus, ChevronLeft, ChevronRight, Building2, ChevronDown, ChevronRight as ChevronRightIcon, X } from 'lucide-react';
 import { getStatusIcon } from '../utils/statusIcons.jsx';
@@ -26,6 +26,13 @@ const Sidebar = ({
   const [editingName, setEditingName] = useState('');
   const [hoveredId, setHoveredId] = useState(null);
   const [expandedOrganizations, setExpandedOrganizations] = useState(new Set());
+
+  // Expand the first organization by default
+  useEffect(() => {
+    if (organizations.length > 0 && expandedOrganizations.size === 0) {
+      setExpandedOrganizations(new Set([organizations[0].id]));
+    }
+  }, [organizations, expandedOrganizations.size]);
 
   const handleRenameStart = useCallback((e, check) => {
     e.stopPropagation();
