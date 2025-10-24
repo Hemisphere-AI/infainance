@@ -257,35 +257,22 @@ Return ONLY the JSON object, no other text.`;
         model: queryPlan.model
       });
 
-      // Import xmlrpc for Odoo API calls
-      const xmlrpc = await import('xmlrpc');
+      // Use fetch-based approach for Odoo API calls (better for serverless)
+      const odooUrl = this.odooConfig.url.replace(/\/$/, '');
+      const xmlrpcUrl = `${odooUrl}/xmlrpc/2/object`;
       
-      // Create Odoo XML-RPC client with timeout settings
-      const client = xmlrpc.createClient({
-        host: this.odooConfig.url.replace(/^https?:\/\//, '').replace(/\/$/, ''),
-        port: this.odooConfig.url.includes('https') ? 443 : 80,
-        path: '/xmlrpc/2/object',
-        basic_auth: {
-          user: this.odooConfig.username,
-          pass: this.odooConfig.apiKey
-        },
-        timeout: 5000, // 5 second timeout
-        headers: {
-          'Connection': 'keep-alive',
-          'User-Agent': 'Netlify-Function/1.0'
-        }
-      });
+      console.log('🔧 Using fetch-based Odoo API calls to:', xmlrpcUrl);
 
-      // Authenticate with Odoo (with timeout)
-      const uid = await this.authenticateOdooWithTimeout(client);
+      // Authenticate with Odoo using fetch
+      const uid = await this.authenticateOdooWithFetch(xmlrpcUrl);
       if (!uid) {
         throw new Error('Failed to authenticate with Odoo');
       }
 
       console.log('✅ Authenticated with Odoo, UID:', uid);
 
-      // Execute search and read (with timeout)
-      const searchResult = await this.searchOdooRecordsWithTimeout(client, uid, queryPlan);
+      // Execute search and read using fetch
+      const searchResult = await this.searchOdooRecordsWithFetch(xmlrpcUrl, uid, queryPlan);
       console.log('📊 Search result:', searchResult?.length || 0, 'records');
 
       return {
@@ -323,30 +310,51 @@ Return ONLY the JSON object, no other text.`;
   }
 
   /**
-   * Authenticate with Odoo (with timeout)
+   * Authenticate with Odoo using fetch (serverless-friendly)
    */
-  async authenticateOdooWithTimeout(client) {
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error('Odoo authentication timeout'));
-      }, 3000); // 3 second timeout for auth
-
-      client.methodCall('authenticate', [
-        this.odooConfig.db,
-        this.odooConfig.username,
-        this.odooConfig.apiKey,
-        {}
-      ], (error, uid) => {
-        clearTimeout(timeout);
-        if (error) {
-          console.error('❌ Odoo authentication failed:', error);
-          reject(error);
-        } else {
-          console.log('✅ Odoo authentication successful, UID:', uid);
-          resolve(uid);
-        }
+  async authenticateOdooWithFetch(xmlrpcUrl) {
+    try {
+      const authUrl = xmlrpcUrl.replace('/xmlrpc/2/object', '/xmlrpc/2/common');
+      
+      const response = await fetch(authUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/xml',
+          'User-Agent': 'Netlify-Function/1.0'
+        },
+        body: `<?xml version="1.0"?>
+<methodCall>
+  <methodName>authenticate</methodName>
+  <params>
+    <param><value><string>${this.odooConfig.db}</string></value></param>
+    <param><value><string>${this.odooConfig.username}</string></value></param>
+    <param><value><string>${this.odooConfig.apiKey}</string></value></param>
+    <param><value><struct></struct></value></param>
+  </params>
+</methodCall>`,
+        signal: AbortSignal.timeout(3000) // 3 second timeout
       });
-    });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const xmlResponse = await response.text();
+      console.log('🔐 Auth response received');
+      
+      // Parse XML response to extract UID
+      const uidMatch = xmlResponse.match(/<value><i4>(\d+)<\/i4><\/value>/);
+      if (uidMatch) {
+        const uid = parseInt(uidMatch[1]);
+        console.log('✅ Odoo authentication successful, UID:', uid);
+        return uid;
+      } else {
+        throw new Error('Failed to parse authentication response');
+      }
+    } catch (error) {
+      console.error('❌ Odoo authentication failed:', error);
+      throw error;
+    }
   }
 
   /**
@@ -357,66 +365,169 @@ Return ONLY the JSON object, no other text.`;
   }
 
   /**
-   * Search and read records from Odoo (with timeout)
+   * Search and read records from Odoo using fetch (serverless-friendly)
    */
-  async searchOdooRecordsWithTimeout(client, uid, queryPlan) {
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error('Odoo search timeout'));
-      }, 5000); // 5 second timeout for search
-
+  async searchOdooRecordsWithFetch(xmlrpcUrl, uid, queryPlan) {
+    try {
       // First, search for record IDs
-      client.methodCall('execute_kw', [
-        this.odooConfig.db,
-        uid,
-        this.odooConfig.apiKey,
-        queryPlan.model,
-        'search',
-        [queryPlan.domain || []],
-        { limit: Math.min(queryPlan.limit || 50, 50) } // Limit to 50 records max
-      ], (error, recordIds) => {
-        if (error) {
-          clearTimeout(timeout);
-          console.error('❌ Odoo search failed:', error);
-          reject(error);
-          return;
-        }
-
-        console.log('🔍 Found record IDs:', recordIds?.length || 0);
-
-        if (!recordIds || recordIds.length === 0) {
-          clearTimeout(timeout);
-          console.log('📭 No records found');
-          resolve([]);
-          return;
-        }
-
-        // Then, read the records (with a new timeout)
-        const readTimeout = setTimeout(() => {
-          reject(new Error('Odoo read timeout'));
-        }, 3000); // 3 second timeout for read
-
-        client.methodCall('execute_kw', [
-          this.odooConfig.db,
-          uid,
-          this.odooConfig.apiKey,
-          queryPlan.model,
-          'read',
-          [recordIds],
-          { fields: queryPlan.fields || [] }
-        ], (readError, records) => {
-          clearTimeout(timeout);
-          clearTimeout(readTimeout);
-          if (readError) {
-            console.error('❌ Odoo read failed:', readError);
-            reject(readError);
-          } else {
-            console.log('📋 Read records:', records?.length || 0);
-            resolve(records || []);
-          }
-        });
+      const searchResponse = await fetch(xmlrpcUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/xml',
+          'User-Agent': 'Netlify-Function/1.0'
+        },
+        body: `<?xml version="1.0"?>
+<methodCall>
+  <methodName>execute_kw</methodName>
+  <params>
+    <param><value><string>${this.odooConfig.db}</string></value></param>
+    <param><value><i4>${uid}</i4></value></param>
+    <param><value><string>${this.odooConfig.apiKey}</string></value></param>
+    <param><value><string>${queryPlan.model}</string></value></param>
+    <param><value><string>search</string></value></param>
+    <param><value><array><data><value><array><data>${this.buildDomainXML(queryPlan.domain || [])}</data></array></value></data></array></value></param>
+    <param><value><struct><member><name>limit</name><value><i4>${Math.min(queryPlan.limit || 50, 50)}</i4></value></member></struct></value></param>
+  </params>
+</methodCall>`,
+        signal: AbortSignal.timeout(5000) // 5 second timeout
       });
-    });
+
+      if (!searchResponse.ok) {
+        throw new Error(`Search HTTP ${searchResponse.status}: ${searchResponse.statusText}`);
+      }
+
+      const searchXml = await searchResponse.text();
+      console.log('🔍 Search response received');
+      
+      // Parse search results to get record IDs
+      const recordIds = this.parseSearchResults(searchXml);
+      console.log('🔍 Found record IDs:', recordIds?.length || 0);
+
+      if (!recordIds || recordIds.length === 0) {
+        console.log('📭 No records found');
+        return [];
+      }
+
+      // Then, read the records
+      const readResponse = await fetch(xmlrpcUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/xml',
+          'User-Agent': 'Netlify-Function/1.0'
+        },
+        body: `<?xml version="1.0"?>
+<methodCall>
+  <methodName>execute_kw</methodName>
+  <params>
+    <param><value><string>${this.odooConfig.db}</string></value></param>
+    <param><value><i4>${uid}</i4></value></param>
+    <param><value><string>${this.odooConfig.apiKey}</string></value></param>
+    <param><value><string>${queryPlan.model}</string></value></param>
+    <param><value><string>read</string></value></param>
+    <param><value><array><data>${recordIds.map(id => `<value><i4>${id}</i4></value>`).join('')}</data></array></value></param>
+    <param><value><struct><member><name>fields</name><value><array><data>${this.buildFieldsXML(queryPlan.fields || [])}</data></array></value></member></struct></value></param>
+  </params>
+</methodCall>`,
+        signal: AbortSignal.timeout(3000) // 3 second timeout
+      });
+
+      if (!readResponse.ok) {
+        throw new Error(`Read HTTP ${readResponse.status}: ${readResponse.statusText}`);
+      }
+
+      const readXml = await readResponse.text();
+      console.log('📋 Read response received');
+      
+      // Parse read results
+      const records = this.parseReadResults(readXml);
+      console.log('📋 Read records:', records?.length || 0);
+      
+      return records || [];
+    } catch (error) {
+      console.error('❌ Odoo search/read failed:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Build domain XML for Odoo search
+   */
+  buildDomainXML(domain) {
+    if (!domain || domain.length === 0) {
+      return '';
+    }
+    
+    return domain.map(condition => {
+      if (Array.isArray(condition) && condition.length === 3) {
+        const [field, operator, value] = condition;
+        return `<value><array><data>
+          <value><string>${field}</string></value>
+          <value><string>${operator}</string></value>
+          <value><string>${value}</string></value>
+        </data></array></value>`;
+      }
+      return '';
+    }).filter(xml => xml).join('');
+  }
+
+  /**
+   * Build fields XML for Odoo read
+   */
+  buildFieldsXML(fields) {
+    if (!fields || fields.length === 0) {
+      return '';
+    }
+    
+    return fields.map(field => `<value><string>${field}</string></value>`).join('');
+  }
+
+  /**
+   * Parse search results XML to extract record IDs
+   */
+  parseSearchResults(xml) {
+    try {
+      const idMatches = xml.match(/<value><i4>(\d+)<\/i4><\/value>/g);
+      if (idMatches) {
+        return idMatches.map(match => {
+          const idMatch = match.match(/<value><i4>(\d+)<\/i4><\/value>/);
+          return idMatch ? parseInt(idMatch[1]) : null;
+        }).filter(id => id !== null);
+      }
+      return [];
+    } catch (error) {
+      console.error('❌ Failed to parse search results:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Parse read results XML to extract records
+   */
+  parseReadResults(xml) {
+    try {
+      // This is a simplified parser - in production you might want a more robust XML parser
+      const recordMatches = xml.match(/<value><struct>[\s\S]*?<\/struct><\/value>/g);
+      if (recordMatches) {
+        return recordMatches.map(recordXml => {
+          const record = {};
+          const fieldMatches = recordXml.match(/<member><name>([^<]+)<\/name><value><string>([^<]*)<\/string><\/value><\/member>/g);
+          if (fieldMatches) {
+            fieldMatches.forEach(fieldMatch => {
+              const fieldNameMatch = fieldMatch.match(/<name>([^<]+)<\/name>/);
+              const fieldValueMatch = fieldMatch.match(/<string>([^<]*)<\/string>/);
+              if (fieldNameMatch && fieldValueMatch) {
+                record[fieldNameMatch[1]] = fieldValueMatch[1];
+              }
+            });
+          }
+          return record;
+        });
+      }
+      return [];
+    } catch (error) {
+      console.error('❌ Failed to parse read results:', error);
+      return [];
+    }
   }
 
   /**
