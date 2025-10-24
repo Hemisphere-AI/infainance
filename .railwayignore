@@ -1,0 +1,56 @@
+# Railway ignore file
+# Exclude files that shouldn't be deployed to Railway
+
+# Node modules
+node_modules/
+*/node_modules/
+
+# Build artifacts
+dist/
+build/
+
+# Development files
+.env
+.env.local
+.env.development
+.env.test
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+*.md
+documentation/
+
+# Docker files (except the one we need)
+Dockerfile
+Dockerfile.frontend
+Dockerfile.frontend.dev
+docker-compose.yml
+
+# Netlify
+netlify/
+netlify.toml
+
+# Backend (we only need the MCP server)
+backend/
+
+# Frontend source (we only need the MCP server)
+src/
+public/
+index.html
+vite.config.js
+tailwind.config.js
+postcss.config.js
+
+# Package files (we only need Python dependencies)
+package.json
+package-lock.json
+
+# Other files
+nginx.conf
+simple-mcp-server.py
+mcp-test.js
+mcp-setup.sh
+test-docker-desktop.sh
