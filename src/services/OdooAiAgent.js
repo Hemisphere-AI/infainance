@@ -314,7 +314,19 @@ Return ONLY the JSON object, no other text.`;
    */
   async authenticateOdooWithFetch(xmlrpcUrl) {
     try {
+      // Validate URL before making request
+      if (!xmlrpcUrl || xmlrpcUrl.includes('your_odoo_url_here') || xmlrpcUrl.includes('placeholder')) {
+        throw new Error(`Invalid Odoo URL: ${xmlrpcUrl}. Please set a real Odoo URL in your environment variables.`);
+      }
+      
       const authUrl = xmlrpcUrl.replace('/xmlrpc/2/object', '/xmlrpc/2/common');
+      
+      // Additional URL validation
+      try {
+        new URL(authUrl);
+      } catch (urlError) {
+        throw new Error(`Invalid Odoo URL format: ${authUrl}. Please check your ODOO_URL environment variable.`);
+      }
       
       const response = await fetch(authUrl, {
         method: 'POST',
