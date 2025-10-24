@@ -257,17 +257,39 @@ Return ONLY the JSON object, no other text.`;
         model: queryPlan.model
       });
 
-      // For now, return a mock result since we need to implement direct Odoo API calls
-      // This can be enhanced later with actual Odoo XML-RPC or REST API calls
-      const mockResult = {
+      // Import xmlrpc for Odoo API calls
+      const xmlrpc = await import('xmlrpc');
+      
+      // Create Odoo XML-RPC client
+      const client = xmlrpc.createClient({
+        host: this.odooConfig.url.replace(/^https?:\/\//, '').replace(/\/$/, ''),
+        port: this.odooConfig.url.includes('https') ? 443 : 80,
+        path: '/xmlrpc/2/object',
+        basic_auth: {
+          user: this.odooConfig.username,
+          pass: this.odooConfig.apiKey
+        }
+      });
+
+      // Authenticate with Odoo
+      const uid = await this.authenticateOdoo(client);
+      if (!uid) {
+        throw new Error('Failed to authenticate with Odoo');
+      }
+
+      console.log('✅ Authenticated with Odoo, UID:', uid);
+
+      // Execute search and read
+      const searchResult = await this.searchOdooRecords(client, uid, queryPlan);
+      console.log('📊 Search result:', searchResult);
+
+      return {
         success: true,
-        count: 0,
-        records: [],
-        data: []
+        count: searchResult.length,
+        records: searchResult,
+        data: searchResult
       };
 
-      console.log('⚠️ Using mock result - implement direct Odoo API calls for production');
-      return mockResult;
     } catch (error) {
       console.error('❌ Failed to execute Odoo query:', error);
       return {
@@ -278,6 +300,79 @@ Return ONLY the JSON object, no other text.`;
         error: error.message
       };
     }
+  }
+
+  /**
+   * Authenticate with Odoo
+   */
+  async authenticateOdoo(client) {
+    return new Promise((resolve, reject) => {
+      client.methodCall('authenticate', [
+        this.odooConfig.db,
+        this.odooConfig.username,
+        this.odooConfig.apiKey,
+        {}
+      ], (error, uid) => {
+        if (error) {
+          console.error('❌ Odoo authentication failed:', error);
+          reject(error);
+        } else {
+          console.log('✅ Odoo authentication successful, UID:', uid);
+          resolve(uid);
+        }
+      });
+    });
+  }
+
+  /**
+   * Search and read records from Odoo
+   */
+  async searchOdooRecords(client, uid, queryPlan) {
+    return new Promise((resolve, reject) => {
+      // First, search for record IDs
+      client.methodCall('execute_kw', [
+        this.odooConfig.db,
+        uid,
+        this.odooConfig.apiKey,
+        queryPlan.model,
+        'search',
+        [queryPlan.domain || []],
+        { limit: queryPlan.limit || 100 }
+      ], (error, recordIds) => {
+        if (error) {
+          console.error('❌ Odoo search failed:', error);
+          reject(error);
+          return;
+        }
+
+        console.log('🔍 Found record IDs:', recordIds);
+
+        if (!recordIds || recordIds.length === 0) {
+          console.log('📭 No records found');
+          resolve([]);
+          return;
+        }
+
+        // Then, read the records
+        client.methodCall('execute_kw', [
+          this.odooConfig.db,
+          uid,
+          this.odooConfig.apiKey,
+          queryPlan.model,
+          'read',
+          [recordIds],
+          { fields: queryPlan.fields || [] }
+        ], (readError, records) => {
+          if (readError) {
+            console.error('❌ Odoo read failed:', readError);
+            reject(readError);
+          } else {
+            console.log('📋 Read records:', records?.length || 0);
+            resolve(records || []);
+          }
+        });
+      });
+    });
   }
 
   /**
