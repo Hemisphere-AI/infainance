@@ -24,7 +24,7 @@ const mockEvent = {
   body: JSON.stringify({
     checkDescription: "Find all invoices",
     checkTitle: "Invoice Check",
-    organizationId: "test-org-123"
+    organizationId: "test-org-123"  // This will be used to fetch from organization_integrations
   }),
   queryStringParameters: {},
   multiValueQueryStringParameters: {},
