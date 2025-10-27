@@ -367,8 +367,8 @@ Return ONLY the JSON object, no other text.`;
       console.log('🔍 Auth response length:', xmlResponse.length);
       console.log('🔍 Auth response preview:', xmlResponse.substring(0, 200) + '...');
       
-      // Parse XML response to extract UID
-      const uidMatch = xmlResponse.match(/<value><i4>(\d+)<\/i4><\/value>/);
+      // Parse XML response to extract UID - handle both <i4> and <int> formats
+      const uidMatch = xmlResponse.match(/<value><(?:i4|int)>(\d+)<\/(?:i4|int)><\/value>/);
       if (uidMatch) {
         const uid = parseInt(uidMatch[1]);
         console.log('✅ Odoo authentication successful, UID:', uid);
