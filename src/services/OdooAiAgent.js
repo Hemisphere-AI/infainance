@@ -425,10 +425,13 @@ Return ONLY the JSON object, no other text.`;
 
       const searchXml = await searchResponse.text();
       console.log('🔍 Search response received');
+      console.log('🔍 Search response length:', searchXml.length);
+      console.log('🔍 Search response preview:', searchXml.substring(0, 300) + '...');
       
       // Parse search results to get record IDs
       const recordIds = this.parseSearchResults(searchXml);
       console.log('🔍 Found record IDs:', recordIds?.length || 0);
+      console.log('🔍 Record IDs:', recordIds);
 
       if (!recordIds || recordIds.length === 0) {
         console.log('📭 No records found');
@@ -513,10 +516,11 @@ Return ONLY the JSON object, no other text.`;
    */
   parseSearchResults(xml) {
     try {
-      const idMatches = xml.match(/<value><i4>(\d+)<\/i4><\/value>/g);
+      // Handle both <i4> and <int> formats for record IDs
+      const idMatches = xml.match(/<value><(?:i4|int)>(\d+)<\/(?:i4|int)><\/value>/g);
       if (idMatches) {
         return idMatches.map(match => {
-          const idMatch = match.match(/<value><i4>(\d+)<\/i4><\/value>/);
+          const idMatch = match.match(/<value><(?:i4|int)>(\d+)<\/(?:i4|int)><\/value>/);
           return idMatch ? parseInt(idMatch[1]) : null;
         }).filter(id => id !== null);
       }
