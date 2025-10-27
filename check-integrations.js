@@ -5,7 +5,7 @@
  * This script helps you check and update the organization integration in Supabase
  */
 
-const { createClient } = require('@supabase/supabase-js');
+import { createClient } from '@supabase/supabase-js';
 
 // You'll need to set these environment variables or replace with your values
 const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://your-project.supabase.co';

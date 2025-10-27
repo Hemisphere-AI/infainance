@@ -74,6 +74,8 @@ export const handler = async (event, context) => {
 
         if (error) {
           console.error('❌ Error fetching integrations:', error);
+          console.error('🔍 Organization ID that failed:', organizationId);
+          console.error('🔍 Expected organization ID:', '9a4880df-ba32-4291-bd72-2b13dad95f20');
         } else if (integrations) {
           odooConfig = {
             url: integrations.odoo_url,
@@ -87,6 +89,9 @@ export const handler = async (event, context) => {
             hasApiKey: !!odooConfig.apiKey,
             username: odooConfig.username
           });
+        } else {
+          console.warn('⚠️  No integration found for organization ID:', organizationId);
+          console.warn('🔍 Expected organization ID:', '9a4880df-ba32-4291-bd72-2b13dad95f20');
         }
       } catch (error) {
         console.error('❌ Error processing integrations:', error);
