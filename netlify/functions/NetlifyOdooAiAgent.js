@@ -59,11 +59,19 @@ export const handler = async (event, context) => {
 
     console.log('🎯 API request:', checkTitle);
     console.log('🔍 Organization ID:', organizationId);
+    console.log('🔍 Organization ID type:', typeof organizationId);
+    console.log('🔍 Organization ID length:', organizationId?.length);
+    console.log('🔍 Organization ID trimmed:', organizationId?.trim());
 
     // Get organization integrations
     let odooConfig = null;
     if (organizationId) {
       try {
+        console.log('🔍 About to query Supabase with:');
+        console.log('   organization_id:', organizationId);
+        console.log('   integration_name: odoo');
+        console.log('   is_active: true');
+        
         const { data: integrations, error } = await supabase
           .from('organization_integrations')
           .select('*')
@@ -72,6 +80,10 @@ export const handler = async (event, context) => {
           .eq('is_active', true)
           .single();
 
+        console.log('🔍 Supabase query completed');
+        console.log('   Error:', error);
+        console.log('   Integrations:', integrations);
+        
         if (error) {
           console.error('❌ Error fetching integrations:', error);
           console.error('🔍 Organization ID that failed:', organizationId);
