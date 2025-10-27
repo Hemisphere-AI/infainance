@@ -89,12 +89,26 @@ export const handler = async (event, context) => {
           console.error('🔍 Organization ID that failed:', organizationId);
           console.error('🔍 Expected organization ID:', '9a4880df-ba32-4291-bd72-2b13dad95f20');
         } else if (integrations) {
-          odooConfig = {
-            url: integrations.odoo_url,
-            db: integrations.odoo_db,
-            username: integrations.odoo_username,
-            apiKey: integrations.api_key
-          };
+          // Use config field if available, otherwise fall back to separate fields
+          if (integrations.config && Object.keys(integrations.config).length > 0) {
+            odooConfig = {
+              url: integrations.config.url,
+              db: integrations.config.db,
+              username: integrations.config.username,
+              apiKey: integrations.api_key
+            };
+            console.log('🔧 Using config field from organization integration');
+          } else {
+            // Fallback to separate fields (legacy support)
+            odooConfig = {
+              url: integrations.odoo_url,
+              db: integrations.odoo_db,
+              username: integrations.odoo_username,
+              apiKey: integrations.api_key
+            };
+            console.log('🔧 Using separate fields from organization integration (legacy)');
+          }
+          
           console.log('🔧 Using organization-specific Odoo config:', {
             url: odooConfig.url,
             db: odooConfig.db,
