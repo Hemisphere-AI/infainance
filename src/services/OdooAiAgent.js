@@ -364,6 +364,8 @@ Return ONLY the JSON object, no other text.`;
 
       const xmlResponse = await response.text();
       console.log('🔐 Auth response received');
+      console.log('🔍 Auth response length:', xmlResponse.length);
+      console.log('🔍 Auth response preview:', xmlResponse.substring(0, 200) + '...');
       
       // Parse XML response to extract UID
       const uidMatch = xmlResponse.match(/<value><i4>(\d+)<\/i4><\/value>/);
@@ -372,6 +374,8 @@ Return ONLY the JSON object, no other text.`;
         console.log('✅ Odoo authentication successful, UID:', uid);
         return uid;
       } else {
+        console.error('❌ Failed to parse authentication response');
+        console.error('🔍 Full response:', xmlResponse);
         throw new Error('Failed to parse authentication response');
       }
     } catch (error) {
