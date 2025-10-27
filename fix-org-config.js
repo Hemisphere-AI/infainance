@@ -31,7 +31,7 @@ async function fixOrganizationConfig() {
   const odooConfig = {
     url: 'https://hemisphere1.odoo.com',
     db: 'hemisphere1',
-    username: 'YOUR_USERNAME_HERE' // Replace with actual username
+    username: 'admin' // Replace with your actual Odoo username
   };
 
   console.log('📋 Current config to update:');

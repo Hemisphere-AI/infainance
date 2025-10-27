@@ -89,27 +89,42 @@ export const handler = async (event, context) => {
           console.error('🔍 Organization ID that failed:', organizationId);
           console.error('🔍 Expected organization ID:', '9a4880df-ba32-4291-bd72-2b13dad95f20');
         } else if (integrations) {
-          // Use config field if available, otherwise fall back to separate fields
+          // UNIFIED CONFIGURATION HANDLING
+          // Priority: config field > separate fields > error
+          
+          let configSource = 'none';
+          
           if (integrations.config && Object.keys(integrations.config).length > 0) {
+            // Use config JSON field (preferred)
             odooConfig = {
               url: integrations.config.url,
               db: integrations.config.db,
               username: integrations.config.username,
               apiKey: integrations.api_key
             };
-            console.log('🔧 Using config field from organization integration');
-          } else {
-            // Fallback to separate fields (legacy support)
+            configSource = 'config field';
+          } else if (integrations.odoo_url && integrations.odoo_db && integrations.odoo_username) {
+            // Use separate fields (legacy)
             odooConfig = {
               url: integrations.odoo_url,
               db: integrations.odoo_db,
               username: integrations.odoo_username,
               apiKey: integrations.api_key
             };
-            console.log('🔧 Using separate fields from organization integration (legacy)');
+            configSource = 'separate fields';
+          } else {
+            // No configuration found
+            console.error('❌ No Odoo configuration found in organization integration');
+            console.error('   Config field:', integrations.config);
+            console.error('   Separate fields:', {
+              odoo_url: integrations.odoo_url,
+              odoo_db: integrations.odoo_db,
+              odoo_username: integrations.odoo_username
+            });
+            throw new Error('No Odoo configuration found in organization integration');
           }
           
-          console.log('🔧 Using organization-specific Odoo config:', {
+          console.log(`🔧 Using organization-specific Odoo config (source: ${configSource}):`, {
             url: odooConfig.url,
             db: odooConfig.db,
             hasApiKey: !!odooConfig.apiKey,
