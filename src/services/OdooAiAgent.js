@@ -16,8 +16,19 @@ export class OdooAiAgent {
     this.customConfig = customConfig;
   }
 
-  async initialize() {
+  async initialize(customConfig = null) {
     try {
+      // Use custom config if provided, otherwise use constructor config
+      if (customConfig) {
+        this.customConfig = customConfig;
+        console.log('🔧 Using provided custom config:', {
+          url: customConfig.url,
+          db: customConfig.db,
+          hasApiKey: !!customConfig.apiKey,
+          username: customConfig.username
+        });
+      }
+      
       // Initialize OpenAI
       const apiKey = process.env.VITE_OPENAI_KEY;
       if (!apiKey || apiKey === 'your_openai_api_key_here') {
