@@ -89,23 +89,32 @@ export class OdooAiAgent {
 
   async loadOdooMetadata() {
     try {
-      // For simplified architecture, we'll load basic Odoo models
-      // This can be enhanced later with direct Odoo API calls
       if (this.odooConfig) {
         console.log('📋 Loading Odoo metadata for organization:', this.odooConfig.db);
         
-        // Basic accounting models that are commonly used
-        this.availableModels = [
-          'account.move',
-          'account.move.line', 
-          'account.account',
-          'res.partner',
-          'product.product',
-          'sale.order',
-          'purchase.order'
-        ];
-        
-        console.log('✅ Loaded basic Odoo models for AI context');
+        try {
+          // Try to fetch models dynamically from Odoo
+          const models = await this.fetchOdooModels();
+          if (models && models.length > 0) {
+            this.availableModels = models;
+            console.log('✅ Loaded dynamic Odoo models for AI context');
+          } else {
+            throw new Error('No models returned from Odoo');
+          }
+        } catch (error) {
+          console.warn('⚠️ Failed to fetch dynamic models, using fallback:', error.message);
+          // Fallback to basic models if dynamic fetch fails
+          this.availableModels = [
+            'account.move',
+            'account.move.line', 
+            'account.account',
+            'res.partner',
+            'product.product',
+            'sale.order',
+            'purchase.order'
+          ];
+          console.log('✅ Loaded fallback Odoo models for AI context');
+        }
       } else {
         console.log('⚠️ No Odoo configuration available for metadata loading');
       }
@@ -113,6 +122,94 @@ export class OdooAiAgent {
       console.log(`📊 Loaded ${this.availableModels.length} Odoo models for AI context`);
     } catch (error) {
       console.error('⚠️ Failed to load Odoo metadata:', error);
+    }
+  }
+
+  /**
+   * Fetch available models from Odoo
+   */
+  async fetchOdooModels() {
+    try {
+      // First authenticate to get UID
+      const xmlrpcUrl = `${this.odooConfig.url}/xmlrpc/2/object`;
+      const authUrl = xmlrpcUrl.replace('/xmlrpc/2/object', '/xmlrpc/2/common');
+      
+      const authResponse = await fetch(authUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/xml',
+          'User-Agent': 'Netlify-Function/1.0'
+        },
+        body: `<?xml version="1.0"?>
+<methodCall>
+  <methodName>authenticate</methodName>
+  <params>
+    <param><value><string>${this.odooConfig.db}</string></value></param>
+    <param><value><string>${this.odooConfig.username}</string></value></param>
+    <param><value><string>${this.odooConfig.apiKey}</string></value></param>
+    <param><value><struct></struct></value></param>
+  </params>
+</methodCall>`,
+        signal: AbortSignal.timeout(3000)
+      });
+
+      if (!authResponse.ok) {
+        throw new Error(`Auth HTTP ${authResponse.status}: ${authResponse.statusText}`);
+      }
+
+      const authXml = await authResponse.text();
+      const uidMatch = authXml.match(/<value><(?:i4|int)>(\d+)<\/(?:i4|int)><\/value>/);
+      if (!uidMatch) {
+        throw new Error('Failed to parse UID from auth response');
+      }
+
+      const uid = parseInt(uidMatch[1]);
+
+      // Now fetch models using ir.model
+      const modelsResponse = await fetch(xmlrpcUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/xml',
+          'User-Agent': 'Netlify-Function/1.0'
+        },
+        body: `<?xml version="1.0"?>
+<methodCall>
+  <methodName>execute_kw</methodName>
+  <params>
+    <param><value><string>${this.odooConfig.db}</string></value></param>
+    <param><value><i4>${uid}</i4></value></param>
+    <param><value><string>${this.odooConfig.apiKey}</string></value></param>
+    <param><value><string>ir.model</string></value></param>
+    <param><value><string>search_read</string></value></param>
+    <param><value><array><data></data></array></value></param>
+    <param><value><struct><member><name>fields</name><value><array><data><value><string>model</string></value><value><string>name</string></value></data></array></value></member><member><name>limit</name><value><i4>100</i4></value></member></struct></value></param>
+  </params>
+</methodCall>`,
+        signal: AbortSignal.timeout(5000)
+      });
+
+      if (!modelsResponse.ok) {
+        throw new Error(`Models HTTP ${modelsResponse.status}: ${modelsResponse.statusText}`);
+      }
+
+      const modelsXml = await modelsResponse.text();
+      
+      // Parse models from XML response
+      const modelMatches = modelsXml.match(/<member><name>model<\/name><value><string>([^<]+)<\/string><\/value><\/member>/g);
+      if (modelMatches) {
+        const models = modelMatches.map(match => {
+          const modelMatch = match.match(/<string>([^<]+)<\/string>/);
+          return modelMatch ? modelMatch[1] : null;
+        }).filter(model => model !== null && model.startsWith('account.'));
+        
+        console.log(`🔍 Found ${models.length} accounting models from Odoo`);
+        return models;
+      }
+
+      return [];
+    } catch (error) {
+      console.error('❌ Failed to fetch Odoo models:', error);
+      throw error;
     }
   }
 
