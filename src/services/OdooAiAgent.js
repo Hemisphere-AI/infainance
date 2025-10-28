@@ -310,6 +310,47 @@ Return ONLY the JSON object, no other text.`;
 
     const userMessage = `Generate an Odoo query based on this check description: ${description}`;
 
+    // LLM input diagnostics: capture prompt excerpts, parameters, models context, and hash
+    try {
+      const paramsPreview = {
+        model: "gpt-4o",
+        temperature: 0,
+        top_p: 1,
+        max_tokens: 1000,
+      };
+      const systemExcerpt = systemPrompt.slice(0, 300);
+      const userExcerpt = userMessage.slice(0, 300);
+      const modelsSnapshot = Array.isArray(this.availableModels)
+        ? { length: this.availableModels.length, head: this.availableModels.slice(0, 10) }
+        : { length: 0, head: [] };
+
+      // Simple stable hash for payload comparison
+      const hashString = (s) => {
+        let h = 5381;
+        for (let i = 0; i < s.length; i++) h = ((h << 5) + h) ^ s.charCodeAt(i);
+        return (h >>> 0).toString(16);
+      };
+      const payloadToHash = JSON.stringify({
+        systemPrompt,
+        userMessage,
+        paramsPreview,
+        modelsSnapshot,
+        odooDb: this.odooConfig?.db || null,
+        odooUrl: this.odooConfig?.url || null,
+      });
+      const payloadHash = hashString(payloadToHash);
+
+      console.log('🧪 LLM INPUT DIAGNOSTICS:');
+      console.log('   Model params:', paramsPreview);
+      console.log('   System prompt excerpt:', systemExcerpt);
+      console.log('   User message excerpt:', userExcerpt);
+      console.log('   Available models snapshot:', modelsSnapshot);
+      console.log('   Odoo target:', { url: this.odooConfig?.url, db: this.odooConfig?.db });
+      console.log('   LLM input hash:', payloadHash);
+    } catch (diagErr) {
+      console.warn('⚠️ Failed to emit LLM diagnostics:', diagErr?.message || diagErr);
+    }
+
     const response = await this.openai.chat.completions.create({
       model: "gpt-4o",
       messages: [

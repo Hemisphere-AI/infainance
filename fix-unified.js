@@ -71,9 +71,9 @@ async function fixOdooConfig() {
       console.log('⚠️  Separate fields missing, using default values');
       console.log('   You may need to update these values manually');
       odooConfig = {
-        url: 'https://hemisphere1.odoo.com',
-        db: 'hemisphere1',
-        username: 'admin' // Update this to your actual username
+        url: 'https://your-odoo-url.com',
+        db: 'your-database',
+        username: 'your-username' // Update this to your actual username
       };
     }
 
