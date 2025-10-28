@@ -341,11 +341,9 @@ Return ONLY the JSON object, no other text.`;
       const payloadHash = hashString(payloadToHash);
 
       console.log('🧪 LLM INPUT DIAGNOSTICS:');
-      console.log('   Model params:', paramsPreview);
-      console.log('   System prompt excerpt:', systemExcerpt);
-      console.log('   User message excerpt:', userExcerpt);
-      console.log('   Available models snapshot:', modelsSnapshot);
-      console.log('   Odoo target:', { url: this.odooConfig?.url, db: this.odooConfig?.db });
+      console.log('   Models count:', modelsSnapshot.length);
+      console.log('   Models head:', modelsSnapshot.head.slice(0, 3).join(', '));
+      console.log('   Odoo target:', `${this.odooConfig?.url} / ${this.odooConfig?.db}`);
       console.log('   LLM input hash:', payloadHash);
     } catch (diagErr) {
       console.warn('⚠️ Failed to emit LLM diagnostics:', diagErr?.message || diagErr);
