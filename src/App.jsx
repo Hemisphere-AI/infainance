@@ -406,7 +406,7 @@ function MainSpreadsheetApp({ user }) {
       setChecks(prev => prev.filter(check => check.id !== checkId))
       if (currentCheckId === checkId) {
         setCurrentCheckId(null)
-        navigate('/app')
+        navigate('/workspace')
       }
     } catch (err) {
       console.error('Failed to delete check:', err)

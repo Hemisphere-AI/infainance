@@ -1,5 +1,4 @@
 import { createClient } from '@supabase/supabase-js';
-import OpenAI from 'openai';
 
 // Initialize Supabase client
 const supabase = createClient(
@@ -7,10 +6,7 @@ const supabase = createClient(
   process.env.VITE_SUPABASE_ANON_KEY
 );
 
-// Initialize OpenAI
-const openai = new OpenAI({
-  apiKey: process.env.VITE_OPENAI_KEY
-});
+// OpenAI is initialized in OdooAiAgent class
 
 // Import core Odoo AI Agent
 import { OdooAiAgent as CoreOdooAiAgent } from '../../src/services/OdooAiAgent.js';

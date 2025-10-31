@@ -36,7 +36,7 @@ export const handler = async (event, context) => {
     const organizationId = pathParts[pathParts.length - 2] // Second to last part
 
     switch (httpMethod) {
-      case 'GET':
+      case 'GET': {
         if (!userId || !organizationId) {
           return {
             statusCode: 400,
@@ -81,8 +81,9 @@ export const handler = async (event, context) => {
             integrations: data || []
           })
         }
+      }
 
-      case 'POST':
+      case 'POST': {
         const { integrationName, apiKey, config, odooUrl, odooDb, odooUsername } = JSON.parse(body || '{}')
         
         if (!userId || !organizationId || !integrationName || !apiKey) {
@@ -124,8 +125,9 @@ export const handler = async (event, context) => {
             integration: integrationData
           })
         }
+      }
 
-      case 'DELETE':
+      case 'DELETE': {
         const integrationId = pathParts[pathParts.length - 1] // Last part
         
         if (!userId || !integrationId) {
@@ -155,6 +157,7 @@ export const handler = async (event, context) => {
             message: 'Integration deleted successfully'
           })
         }
+      }
 
       default:
         return {

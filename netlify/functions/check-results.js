@@ -43,7 +43,7 @@ export const handler = async (event, context) => {
     }
 
     switch (httpMethod) {
-      case 'GET':
+      case 'GET': {
         if (!checkId) {
           return {
             statusCode: 400,
@@ -88,8 +88,9 @@ export const handler = async (event, context) => {
             results: data || []
           })
         }
+      }
 
-      case 'DELETE':
+      case 'DELETE': {
         if (!checkId) {
           return {
             statusCode: 400,
@@ -117,6 +118,7 @@ export const handler = async (event, context) => {
             message: 'Check results cleared successfully'
           })
         }
+      }
 
       default:
         return {

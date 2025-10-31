@@ -318,8 +318,6 @@ Return ONLY the JSON object, no other text.`;
         top_p: 1,
         max_tokens: 1000,
       };
-      const systemExcerpt = systemPrompt.slice(0, 300);
-      const userExcerpt = userMessage.slice(0, 300);
       const modelsSnapshot = Array.isArray(this.availableModels)
         ? { length: this.availableModels.length, head: this.availableModels.slice(0, 10) }
         : { length: 0, head: [] };
@@ -349,20 +347,23 @@ Return ONLY the JSON object, no other text.`;
       console.warn('⚠️ Failed to emit LLM diagnostics:', diagErr?.message || diagErr);
     }
 
-    const response = await this.openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userMessage }
-      ],
-      temperature: 0,
-      top_p: 1,
-      max_tokens: 1000,
-      response_format: { type: "json_object" }
-    });
+    const makeRequest = async (sysPrompt, usrMsg) => {
+      const response = await this.openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          { role: "system", content: sysPrompt },
+          { role: "user", content: usrMsg }
+        ],
+        temperature: 0,
+        top_p: 1,
+        max_tokens: 1000,
+        response_format: { type: "json_object" }
+      });
+      return response.choices[0].message.content.trim();
+    };
 
-    const content = response.choices[0].message.content.trim();
-    
+    let content = await makeRequest(systemPrompt, userMessage);
+
     try {
       // Remove markdown code blocks if present
       let jsonContent = content;
@@ -372,13 +373,30 @@ Return ONLY the JSON object, no other text.`;
         jsonContent = content.replace(/^```\s*/, '').replace(/\s*```$/, '');
       }
       
-      const queryPlan = JSON.parse(jsonContent);
+      let queryPlan = JSON.parse(jsonContent);
       console.log('🤖 AI Query Plan:', queryPlan);
       
       // Validate query plan against consistency playbook
-      const validation = this.validateQueryPlan(queryPlan);
+      let validation = this.validateQueryPlan(queryPlan);
       if (!validation.isValid) {
-        throw new Error(`Invalid query plan: ${validation.errors.join(', ')}`);
+        // If invalid because of account.move + line_ids.*, request a corrected plan without hardcoding
+        const needsModelFix = validation.errors.some(e => e.includes('line_ids') || e.includes('Use account.move.line'));
+        if (needsModelFix) {
+          const correctiveSystemPrompt = systemPrompt + `\n\n## Additional Guidance:\n- Do NOT filter account.move by line_ids.* fields.\n- When filtering by account codes, use "account.move.line" with ["account_id.code", "in", [...]] and (if needed) ["move_id.state", "=", "posted"].`;
+          const correctiveUserMessage = userMessage + `\n\nThe previous attempt used account.move with line_ids.*, which is invalid. Please output a corrected plan.`;
+          content = await makeRequest(correctiveSystemPrompt, correctiveUserMessage);
+          let fixedContent = content;
+          if (fixedContent.startsWith('```json')) fixedContent = fixedContent.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+          if (fixedContent.startsWith('```')) fixedContent = fixedContent.replace(/^```\s*/, '').replace(/\s*```$/, '');
+          queryPlan = JSON.parse(fixedContent);
+          console.log('🤖 AI Query Plan (corrected):', queryPlan);
+          validation = this.validateQueryPlan(queryPlan);
+          if (!validation.isValid) {
+            throw new Error(`Invalid query plan after correction: ${validation.errors.join(', ')}`);
+          }
+        } else {
+          throw new Error(`Invalid query plan: ${validation.errors.join(', ')}`);
+        }
       }
       
       return queryPlan;
@@ -393,6 +411,15 @@ Return ONLY the JSON object, no other text.`;
    * Execute Odoo query using organization-specific configuration
    */
   async executeOdooQuery(queryPlan) {
+    // Log the raw plan received
+    try {
+      console.log('🧩 ODOO EXECUTE - Query Plan:', JSON.stringify(queryPlan));
+    } catch (e) {
+      console.log('🧩 ODOO EXECUTE - Query Plan (non-JSON)', queryPlan);
+    }
+
+    const appliedPlan = queryPlan;
+
     try {
       if (!this.odooConfig) {
         throw new Error('No Odoo configuration available');
@@ -401,10 +428,10 @@ Return ONLY the JSON object, no other text.`;
       console.log('🔧 Executing query with Odoo config:', {
         url: this.odooConfig.url,
         db: this.odooConfig.db,
-        model: queryPlan.model
+        model: appliedPlan.model
       });
 
-      // Use fetch-based approach for Odoo API calls (better for serverless)
+      // Use fetch-based Odoo API calls to match production test
       const odooUrl = this.odooConfig.url.replace(/\/$/, '');
       const xmlrpcUrl = `${odooUrl}/xmlrpc/2/object`;
       
@@ -419,7 +446,7 @@ Return ONLY the JSON object, no other text.`;
       console.log('✅ Authenticated with Odoo, UID:', uid);
 
       // Execute search and read using fetch
-      const searchResult = await this.searchOdooRecordsWithFetch(xmlrpcUrl, uid, queryPlan);
+      const searchResult = await this.searchOdooRecordsWithFetch(xmlrpcUrl, uid, appliedPlan);
       console.log('📊 Search result:', searchResult?.length || 0, 'records');
 
       return {
@@ -527,19 +554,29 @@ Return ONLY the JSON object, no other text.`;
     return this.authenticateOdooWithTimeout(client);
   }
 
-  /**
-   * Search and read records from Odoo using fetch (serverless-friendly)
-   */
   async searchOdooRecordsWithFetch(xmlrpcUrl, uid, queryPlan) {
+      // Extra logging of model/domain before sending
+      try {
+        console.log('🔧 Odoo SEARCH - Model:', queryPlan.model);
+        console.log('🔧 Odoo SEARCH - Domain:', JSON.stringify(queryPlan.domain));
+        console.log('🔧 Odoo SEARCH - Limit:', queryPlan.limit);
+      } catch (e) {
+        // Logging failed, continue
+      }
+
     try {
-      // First, search for record IDs
-      const searchResponse = await fetch(xmlrpcUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/xml',
-          'User-Agent': 'Netlify-Function/1.0'
-        },
-        body: `<?xml version="1.0"?>
+      // Build domain XML exactly as test-production-flow.js does
+      const domainXml = this.buildDomainXML(queryPlan.domain || []);
+      const limitValue = 50; // Match test-production-flow.js exactly
+      
+      // Log domain details for comparison with test
+      console.log('🔍 DOMAIN COMPARISON:');
+      console.log('   Domain array:', JSON.stringify(queryPlan.domain || []));
+      console.log('   Domain XML length:', domainXml.length);
+      console.log('   Domain XML (first 200 chars):', domainXml.substring(0, 200));
+      
+      // Build search XML exactly matching test-production-flow.js structure
+      const searchBody = `<?xml version="1.0"?>
 <methodCall>
   <methodName>execute_kw</methodName>
   <params>
@@ -548,10 +585,24 @@ Return ONLY the JSON object, no other text.`;
     <param><value><string>${this.odooConfig.apiKey}</string></value></param>
     <param><value><string>${queryPlan.model}</string></value></param>
     <param><value><string>search</string></value></param>
-    <param><value><array><data><value><array><data>${this.buildDomainXML(queryPlan.domain || [])}</data></array></value></data></array></value></param>
-    <param><value><struct><member><name>limit</name><value><i4>${Math.min(queryPlan.limit || 50, 50)}</i4></value></member></struct></value></param>
+    <param><value><array><data><value><array><data>${domainXml}</data></array></value></data></array></value></param>
+    <param><value><struct><member><name>limit</name><value><i4>${limitValue}</i4></value></member></struct></value></param>
   </params>
-</methodCall>`,
+</methodCall>`;
+      
+      // Log generated XML for debugging
+      console.log('📤 Search XML length:', searchBody.length);
+      console.log('📤 Search XML (first 600 chars):', searchBody.substring(0, 600));
+      console.log('📤 Search XML (domain section):', searchBody.substring(searchBody.indexOf('<array><data><value><array><data>'), searchBody.indexOf('</data></array></value></data></array></value></param>') + 50));
+      
+      // First, search for record IDs
+      const searchResponse = await fetch(xmlrpcUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/xml',
+          'User-Agent': 'Netlify-Function/1.0'
+        },
+        body: searchBody,
         signal: AbortSignal.timeout(5000) // 5 second timeout
       });
 
@@ -563,17 +614,85 @@ Return ONLY the JSON object, no other text.`;
       console.log('🔍 Search response received');
       console.log('🔍 Search response length:', searchXml.length);
       console.log('🔍 Search response preview:', searchXml.substring(0, 300) + '...');
+      console.log('🔍 Search response full:', searchXml); // Full response for comparison
       
       // Parse search results to get record IDs
       const recordIds = this.parseSearchResults(searchXml);
       console.log('🔍 Found record IDs:', recordIds?.length || 0);
       console.log('🔍 Record IDs:', recordIds);
+      console.log('🔍 COMPARISON: Test found [63, 59], Agent found:', recordIds);
 
       if (!recordIds || recordIds.length === 0) {
         console.log('📭 No records found');
         return [];
       }
 
+      // Then, read the records - Odoo read(ids, fields) takes both as positional args
+      // execute_kw format: execute_kw(db, uid, password, model, method, args, kwargs)
+      // For read: args = [ids_array, fields_array], kwargs = {}
+      const idsArrayXml = `<value><array><data>${recordIds.map(id => `<value><i4>${id}</i4></value>`).join('')}</data></array></value>`;
+      const fieldsArrayXml = `<value><array><data>${this.buildFieldsXML(queryPlan.fields || [])}</data></array></value>`;
+      
+      const readBody = `<?xml version="1.0"?>
+<methodCall>
+  <methodName>execute_kw</methodName>
+  <params>
+    <param><value><string>${this.odooConfig.db}</string></value></param>
+    <param><value><i4>${uid}</i4></value></param>
+    <param><value><string>${this.odooConfig.apiKey}</string></value></param>
+    <param><value><string>${queryPlan.model}</string></value></param>
+    <param><value><string>read</string></value></param>
+    <param><value><array><data>${idsArrayXml}${fieldsArrayXml}</data></array></value></param>
+    <param><value><struct></struct></value></param>
+  </params>
+</methodCall>`;
+      
+      console.log('📤 Read XML - IDs being read:', recordIds);
+      console.log('📤 Read XML length:', readBody.length);
+      console.log('📤 Read XML preview:', readBody.substring(0, 400));
+      
+      const readResponse = await fetch(xmlrpcUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/xml',
+          'User-Agent': 'Netlify-Function/1.0'
+        },
+        body: readBody,
+        signal: AbortSignal.timeout(3000) // 3 second timeout
+      });
+
+      if (!readResponse.ok) {
+        throw new Error(`Read HTTP ${readResponse.status}: ${readResponse.statusText}`);
+      }
+
+      const readXml = await readResponse.text();
+      console.log('📋 Read response received');
+      console.log('📋 Read response length:', readXml.length);
+      console.log('📋 Read response preview:', readXml.substring(0, 500));
+      console.log('📋 Read response full:', readXml); // Full response for debugging
+      
+      // Parse read results
+      const records = this.parseReadResults(readXml);
+      console.log('📋 Read records parsed:', records?.length || 0);
+      console.log('📋 Read records detail:', JSON.stringify(records, null, 2));
+      
+      return records || [];
+    } catch (error) {
+      console.error('❌ Odoo search/read failed:', error);
+      throw error;
+    }
+  }
+
+  async readOdooRecordsWithFetch(xmlrpcUrl, uid, queryPlan, ids) {
+      try {
+        console.log('🔧 Odoo READ - Model:', queryPlan.model);
+        console.log('🔧 Odoo READ - Fields:', JSON.stringify(queryPlan.fields));
+        console.log('🔧 Odoo READ - IDs len:', Array.isArray(ids) ? ids.length : 0);
+      } catch (e) {
+        // Logging failed, continue
+      }
+
+    try {
       // Then, read the records
       const readResponse = await fetch(xmlrpcUrl, {
         method: 'POST',
@@ -590,7 +709,7 @@ Return ONLY the JSON object, no other text.`;
     <param><value><string>${this.odooConfig.apiKey}</string></value></param>
     <param><value><string>${queryPlan.model}</string></value></param>
     <param><value><string>read</string></value></param>
-    <param><value><array><data>${recordIds.map(id => `<value><i4>${id}</i4></value>`).join('')}</data></array></value></param>
+    <param><value><array><data>${ids.map(id => `<value><i4>${id}</i4></value>`).join('')}</data></array></value></param>
     <param><value><struct><member><name>fields</name><value><array><data>${this.buildFieldsXML(queryPlan.fields || [])}</data></array></value></member></struct></value></param>
   </params>
 </methodCall>`,
@@ -610,7 +729,7 @@ Return ONLY the JSON object, no other text.`;
       
       return records || [];
     } catch (error) {
-      console.error('❌ Odoo search/read failed:', error);
+      console.error('❌ Odoo read failed:', error);
       throw error;
     }
   }
@@ -622,18 +741,47 @@ Return ONLY the JSON object, no other text.`;
     if (!domain || domain.length === 0) {
       return '';
     }
-    
+
+    const serializeValue = (v) => {
+      if (Array.isArray(v)) {
+        // Array of values
+        return `<array><data>${v.map(item => `<value><string>${String(item)}</string></value>`).join('')}</data></array>`;
+      }
+      if (typeof v === 'number' && Number.isFinite(v)) {
+        return `<i4>${v}</i4>`;
+      }
+      if (typeof v === 'boolean') {
+        return `<boolean>${v ? 1 : 0}</boolean>`;
+      }
+      if (v === null || v === undefined) {
+        return `<nil/>`;
+      }
+      // Default to string
+      return `<string>${String(v)}</string>`;
+    };
+
     return domain.map(condition => {
       if (Array.isArray(condition) && condition.length === 3) {
         const [field, operator, value] = condition;
+        // Special-case 'in' with array of values
+        if (operator === 'in' && Array.isArray(value)) {
+          const valueXml = `<array><data>${value.map(item => `<value><string>${String(item)}</string></value>`).join('')}</data></array>`;
+          return `<value><array><data>
+          <value><string>${field}</string></value>
+          <value><string>${operator}</string></value>
+          <value>${valueXml}</value>
+        </data></array></value>`;
+        }
+        // Generic triplet
         return `<value><array><data>
           <value><string>${field}</string></value>
           <value><string>${operator}</string></value>
-          <value><string>${value}</string></value>
+          <value>${serializeValue(value)}</value>
         </data></array></value>`;
       }
+      // Fallback for invalid condition
       return '';
-    }).filter(xml => xml).join('');
+    }).join('');
   }
 
   /**
@@ -669,30 +817,133 @@ Return ONLY the JSON object, no other text.`;
 
   /**
    * Parse read results XML to extract records
+   * Handles strings, integers, doubles, arrays (many2one), and booleans
    */
   parseReadResults(xml) {
     try {
-      // This is a simplified parser - in production you might want a more robust XML parser
+      // Match each record struct - be more careful with nested structures
       const recordMatches = xml.match(/<value><struct>[\s\S]*?<\/struct><\/value>/g);
-      if (recordMatches) {
-        return recordMatches.map(recordXml => {
-          const record = {};
-          const fieldMatches = recordXml.match(/<member><name>([^<]+)<\/name><value><string>([^<]*)<\/string><\/value><\/member>/g);
-          if (fieldMatches) {
-            fieldMatches.forEach(fieldMatch => {
-              const fieldNameMatch = fieldMatch.match(/<name>([^<]+)<\/name>/);
-              const fieldValueMatch = fieldMatch.match(/<string>([^<]*)<\/string>/);
-              if (fieldNameMatch && fieldValueMatch) {
-                record[fieldNameMatch[1]] = fieldValueMatch[1];
-              }
-            });
-          }
-          return record;
-        });
+      if (!recordMatches) {
+        console.log('⚠️ No record structs found in XML');
+        return [];
       }
-      return [];
+
+      console.log(`📋 Found ${recordMatches.length} record structs to parse`);
+
+      return recordMatches.map((recordXml, recordIndex) => {
+        const record = {};
+        
+        // Extract all field members - handle nested values more carefully
+        // Pattern: <member><name>fieldName</name><value>...value content...</value></member>
+        // Need to match value content even if it contains nested tags
+        
+        // First, find all member tags with their positions
+        const memberStartPattern = /<member>/g;
+        const members = [];
+        let memberMatch;
+        
+        while ((memberMatch = memberStartPattern.exec(recordXml)) !== null) {
+          const startPos = memberMatch.index;
+          // Find the matching closing </member> tag
+          let depth = 1;
+          let pos = startPos + memberMatch[0].length;
+          
+          while (depth > 0 && pos < recordXml.length) {
+            if (recordXml.substring(pos, pos + 8) === '<member>') {
+              depth++;
+              pos += 8;
+            } else if (recordXml.substring(pos, pos + 9) === '</member>') {
+              depth--;
+              if (depth > 0) pos += 9;
+            } else {
+              pos++;
+            }
+          }
+          
+          if (depth === 0) {
+            members.push({ start: startPos, end: pos + 9 });
+          }
+        }
+        
+        // Extract each member
+        members.forEach(memberRange => {
+          const memberXml = recordXml.substring(memberRange.start, memberRange.end);
+          
+          // Extract field name
+          const nameMatch = memberXml.match(/<name>([^<]+)<\/name>/);
+          if (!nameMatch) return;
+          
+          const fieldName = nameMatch[1];
+          
+          // Extract value - find content between <value> and </value>
+          const valueStart = memberXml.indexOf('<value>') + 7;
+          const valueEnd = memberXml.lastIndexOf('</value>');
+          
+          if (valueStart >= 7 && valueEnd > valueStart) {
+            const valueXml = memberXml.substring(valueStart, valueEnd);
+          
+            // Handle many2one as array: <array><data><value><i4>123</i4></value><value><string>Name</string></value></data></array>
+            if (valueXml.includes('<array><data>')) {
+              const arrayMatch = valueXml.match(/<array><data>(.*?)<\/data><\/array>/s);
+              if (arrayMatch) {
+                const idMatch = arrayMatch[1].match(/<value><(?:i4|int)>(\d+)<\/(?:i4|int)><\/value>/);
+                const nameMatch = arrayMatch[1].match(/<value><string>([^<]*)<\/string><\/value>/);
+                record[fieldName] = idMatch ? parseInt(idMatch[1]) : null;
+                record[fieldName + '_name'] = nameMatch ? nameMatch[1] : null;
+              } else {
+                record[fieldName] = null;
+              }
+            }
+            // Handle integer: <i4>123</i4> or <int>123</int>
+            else if (valueXml.match(/<(?:i4|int)>/)) {
+              const intMatch = valueXml.match(/<(?:i4|int)>(\d+)<\/(?:i4|int)>/);
+              if (intMatch) {
+                record[fieldName] = parseInt(intMatch[1]);
+              }
+            }
+            // Handle double: <double>123.45</double>
+            else if (valueXml.includes('<double>')) {
+              const doubleMatch = valueXml.match(/<double>([\d.]+)<\/double>/);
+              if (doubleMatch) {
+                record[fieldName] = parseFloat(doubleMatch[1]);
+              }
+            }
+            // Handle boolean: <boolean>1</boolean> or <boolean>0</boolean>
+            else if (valueXml.includes('<boolean>')) {
+              const boolMatch = valueXml.match(/<boolean>([01])<\/boolean>/);
+              if (boolMatch) {
+                record[fieldName] = boolMatch[1] === '1';
+              }
+            }
+            // Handle null: <nil/>
+            else if (valueXml.includes('<nil/>') || valueXml.trim() === '') {
+              record[fieldName] = null;
+            }
+            // Handle string: <string>value</string>
+            else if (valueXml.includes('<string>')) {
+              const stringMatch = valueXml.match(/<string>([^<]*)<\/string>/);
+              if (stringMatch) {
+                record[fieldName] = stringMatch[1];
+              } else {
+                // Fallback: try to extract any text content
+                record[fieldName] = valueXml.replace(/<[^>]+>/g, '').trim() || null;
+              }
+            }
+            // Fallback: try to extract any text content
+            else {
+              record[fieldName] = valueXml.replace(/<[^>]+>/g, '').trim() || null;
+            }
+          }
+        });
+        
+        console.log(`📋 Record ${recordIndex + 1} parsed:`, Object.keys(record).length, 'fields');
+        console.log(`📋 Record ${recordIndex + 1} fields:`, Object.keys(record));
+        
+        return record;
+      });
     } catch (error) {
       console.error('❌ Failed to parse read results:', error);
+      console.error('❌ XML snippet:', xml.substring(0, 500));
       return [];
     }
   }
@@ -724,6 +975,12 @@ Return ONLY the JSON object, no other text.`;
           errors.push(`Domain filter ${index} must be [field, operator, value]`);
         }
       });
+
+      // Disallow invalid account.move nested line filters
+      const usesLineIds = queryPlan.model === 'account.move' && queryPlan.domain.some(f => Array.isArray(f) && typeof f[0] === 'string' && f[0].startsWith('line_ids.'));
+      if (usesLineIds) {
+        errors.push('Use account.move.line when filtering by line/account fields; account.move with line_ids.* is invalid');
+      }
     }
 
     if (!Array.isArray(queryPlan.fields)) {
@@ -737,9 +994,6 @@ Return ONLY the JSON object, no other text.`;
     if (queryPlan.order && typeof queryPlan.order !== 'string') {
       errors.push('Order must be a string');
     }
-
-    // Additional validation can be added here for specific business rules
-    // This keeps the core service generic and flexible
 
     return {
       isValid: errors.length === 0,
@@ -904,3 +1158,4 @@ Please analyze these results and use the 'conclude' tool to determine the status
     }
   }
 }
+

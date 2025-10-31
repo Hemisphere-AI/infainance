@@ -48,7 +48,7 @@ export const handler = async (event, context) => {
     
 
     switch (httpMethod) {
-      case 'GET':
+      case 'GET': {
         if (!userId) {
           return {
             statusCode: 400,
@@ -84,8 +84,9 @@ export const handler = async (event, context) => {
             organizations: data?.map(item => item.organizations) || []
           })
         }
+      }
 
-      case 'POST':
+      case 'POST': {
         const { name } = requestBody
         
         if (!userId || !name) {
@@ -127,9 +128,10 @@ export const handler = async (event, context) => {
             organization: orgData
           })
         }
+      }
 
-      case 'PUT':
-        const { organizationId: putOrgId } = requestBody
+      case 'PUT': {
+        const { organizationId: putOrgId, name } = requestBody
         const putOrganizationId = organizationId || putOrgId
         
         if (!userId || !putOrganizationId || !name) {
@@ -180,8 +182,9 @@ export const handler = async (event, context) => {
             organization: updateData
           })
         }
+      }
 
-      case 'DELETE':
+      case 'DELETE': {
         const { organizationId: deleteOrgId } = requestBody
         const deleteOrganizationId = organizationId || deleteOrgId
         
@@ -243,6 +246,7 @@ export const handler = async (event, context) => {
             message: 'Organization deleted successfully'
           })
         }
+      }
 
       default:
         return {
