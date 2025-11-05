@@ -14,6 +14,8 @@ export class OdooAiAgent {
     this.availableModels = [];
     this.availableFields = {};
     this.customConfig = customConfig;
+    this.mcpTools = [];
+    this.mcpServerUrl = null;
   }
 
   async initialize(customConfig = null) {
@@ -55,8 +57,26 @@ export class OdooAiAgent {
 
   async initializeMCPServices() {
     try {
-      // For Netlify Functions, we'll use direct Odoo API calls instead of MCP services
-      // since the backend services were removed in the simplified architecture
+      // Determine MCP server URL - try Docker internal network first, then localhost
+      // Check if we're in Docker or if MCP server is accessible
+      // In Docker, use service name; in localhost, use mapped port
+      const isInDocker = process.env.DOCKER_CONTAINER || 
+                        process.env.NODE_ENV === 'production' ||
+                        (typeof process !== 'undefined' && process.env.HOSTNAME && process.env.HOSTNAME.includes('zenith-backend'));
+      
+      // Try to detect environment - if we can reach Docker internal network, use that
+      // Otherwise, use localhost with mapped port
+      this.mcpServerUrl = isInDocker 
+        ? 'http://mcp-odoo-server:3001'  // Docker internal network (container name)
+        : 'http://localhost:3003';        // Local development (mapped port from docker-compose)
+      
+      console.log('🔧 MCP Server URL:', this.mcpServerUrl);
+      console.log('🔧 Environment detection:', { 
+        isInDocker, 
+        DOCKER_CONTAINER: process.env.DOCKER_CONTAINER,
+        NODE_ENV: process.env.NODE_ENV,
+        HOSTNAME: process.env.HOSTNAME 
+      });
       
       if (this.customConfig) {
         console.log('🔧 Using organization-specific Odoo configuration:', {
@@ -69,7 +89,6 @@ export class OdooAiAgent {
         // Initialize direct Odoo connection
         this.odooConfig = this.customConfig;
         console.log('✅ Initialized with organization-specific Odoo config');
-        return;
       } else {
         console.log('⚠️ No custom config provided, using environment variables as fallback');
         // Fallback to environment variables if no custom config
@@ -81,9 +100,571 @@ export class OdooAiAgent {
         };
         console.log('✅ Initialized with environment variables');
       }
+      
+      // Try to fetch MCP tools (will fallback to defaults if MCP server unavailable)
+      await this.fetchMCPTools();
+      
+      // Log MCP connection status
+      console.log(`📋 MCP Integration Status: ${this.mcpTools.length} tools available`);
     } catch (error) {
       console.error('❌ Odoo configuration initialization failed:', error);
       throw error;
+    }
+  }
+  
+  /**
+   * Fetch available tools from MCP server
+   */
+  async fetchMCPTools() {
+    try {
+      // MCP servers typically expose tools via JSON-RPC, but if wrapped in HTTP, try that first
+      // Try to connect via HTTP POST with JSON-RPC format
+      const mcpRequest = {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/list',
+        params: {}
+      };
+      
+      console.log('🔍 Fetching MCP tools from:', this.mcpServerUrl);
+      
+      try {
+        const response = await fetch(`${this.mcpServerUrl}/jsonrpc`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(mcpRequest),
+          signal: AbortSignal.timeout(3000)
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data.result && data.result.tools) {
+            this.mcpTools = this.convertMCPToolsToOpenAI(data.result.tools);
+            console.log(`✅ Fetched ${this.mcpTools.length} MCP tools:`, this.mcpTools.map(t => t.function.name));
+            return;
+          }
+        }
+      } catch (httpError) {
+        console.log('⚠️ HTTP JSON-RPC connection failed, trying direct HTTP endpoints:', httpError.message);
+      }
+      
+      // Fallback: Use hardcoded MCP tools from the mcp-odoo package
+      // Based on https://github.com/tuanle96/mcp-odoo/
+      this.mcpTools = this.getDefaultMCPTools();
+      console.log(`✅ Using default MCP tools: ${this.mcpTools.length} tools`);
+      
+    } catch (error) {
+      console.warn('⚠️ Failed to fetch MCP tools, using defaults:', error.message);
+      this.mcpTools = this.getDefaultMCPTools();
+    }
+  }
+  
+  /**
+   * Get default MCP tools based on mcp-odoo package
+   * These match the tools from https://github.com/tuanle96/mcp-odoo/
+   */
+  getDefaultMCPTools() {
+    return [
+      {
+        type: "function",
+        function: {
+          name: "execute_method",
+          description: "Execute any Odoo model method. Use this to: (1) Discover models - call ir.model.search_read([], {'fields':['model','name'], 'limit':100}) to list all models; (2) Discover fields - call model.fields_get() to get field definitions with 'help' text explaining each field's purpose; (3) Search records - call model.search_read([['field','operator',value]], {'fields':['field1','field2'], 'limit':100}) where domain is array like [['account_id.code','in',['700100']]]; (4) Read records - call model.read([1,2,3], {'fields':['field1','field2']}). Domain operators: '=', '!=', '>', '<', '>=', '<=', 'in', 'like', 'ilike'. MCP resources: odoo://models lists all models, odoo://model/{model_name} returns model info with fields including help text.",
+          parameters: {
+            type: "object",
+            properties: {
+              model: {
+                type: "string",
+                description: "Odoo model name (e.g., 'res.partner', 'account.move.line', 'ir.model')"
+              },
+              method: {
+                type: "string",
+                description: "Method name: 'fields_get' (returns field metadata including help text), 'search_read' (search and read records), 'read' (read by IDs), 'search' (search IDs only)"
+              },
+              args: {
+                type: "array",
+                description: "Positional arguments. For fields_get: []. For search_read: [[domain]] where domain is array like [['field','operator',value]]. For read: [[id1,id2]] array of integers.",
+                items: {}
+              },
+              kwargs: {
+                type: "object",
+                description: "Keyword arguments. Common: {'fields':['field1','field2']} for fields to fetch, {'limit':100} for result limit, {'offset':0} for pagination.",
+                additionalProperties: true
+              }
+            },
+            required: ["model", "method"]
+          }
+        }
+      },
+      {
+        type: "function",
+        function: {
+          name: "search_employee",
+          description: "Search for employees by name. Use execute_method with model 'hr.employee' and method 'search_read' for more flexible searches.",
+          parameters: {
+            type: "object",
+            properties: {
+              name: {
+                type: "string",
+                description: "Name or part of name to search"
+              },
+              limit: {
+                type: "number",
+                description: "Maximum results (default: 20)",
+                default: 20
+              }
+            },
+            required: ["name"]
+          }
+        }
+      },
+      {
+        type: "function",
+        function: {
+          name: "search_holidays",
+          description: "Search for holidays by date range. Use execute_method with model 'hr.leave' and method 'search_read' for more flexible searches.",
+          parameters: {
+            type: "object",
+            properties: {
+              start_date: {
+                type: "string",
+                description: "Start date (YYYY-MM-DD)"
+              },
+              end_date: {
+                type: "string",
+                description: "End date (YYYY-MM-DD)"
+              },
+              employee_id: {
+                type: "number",
+                description: "Optional employee ID filter"
+              }
+            },
+            required: ["start_date", "end_date"]
+          }
+        }
+      }
+    ];
+  }
+  
+  /**
+   * Convert MCP tools format to OpenAI tools format
+   */
+  convertMCPToolsToOpenAI(mcpTools) {
+    return mcpTools.map(tool => ({
+      type: "function",
+      function: {
+        name: tool.name,
+        description: tool.description || `Execute ${tool.name}`,
+        parameters: tool.inputSchema || tool.parameters || {
+          type: "object",
+          properties: {},
+          required: []
+        }
+      }
+    }));
+  }
+  
+  /**
+   * Execute an MCP tool call
+   */
+  async executeMCPTool(toolName, args) {
+    try {
+      console.log(`🔧 Executing MCP tool: ${toolName}`, args);
+      
+      // For execute_method, we can use direct Odoo XML-RPC
+      if (toolName === 'execute_method' && this.odooConfig) {
+        // Parse args and kwargs - handle JSON strings if LLM passed them as strings
+        let parsedArgs = args.args || [];
+        let parsedKwargs = args.kwargs || {};
+        
+        // Special handling: if args contains an object at the end, it might be kwargs
+        // This handles cases where LLM passes: args: [[], { fields: [...] }]
+        if (Array.isArray(parsedArgs) && parsedArgs.length > 0) {
+          const lastArg = parsedArgs[parsedArgs.length - 1];
+          if (lastArg && typeof lastArg === 'object' && !Array.isArray(lastArg) && 
+              (lastArg.fields || lastArg.limit || lastArg.offset || lastArg.order)) {
+            // Last arg looks like kwargs, move it to kwargs
+            console.log('⚠️ Detected kwargs in args, moving to kwargs:', lastArg);
+            parsedKwargs = { ...parsedKwargs, ...lastArg };
+            parsedArgs = parsedArgs.slice(0, -1);
+          }
+        }
+        
+        // If args is a string, parse it
+        if (typeof parsedArgs === 'string') {
+          try {
+            parsedArgs = JSON.parse(parsedArgs);
+          } catch (e) {
+            console.warn('⚠️ Failed to parse args as JSON, using as-is:', e.message);
+          }
+        }
+        
+        // If kwargs is a string, parse it
+        if (typeof parsedKwargs === 'string') {
+          try {
+            parsedKwargs = JSON.parse(parsedKwargs);
+          } catch (e) {
+            console.warn('⚠️ Failed to parse kwargs as JSON, using as-is:', e.message);
+          }
+        }
+        
+        // Ensure args is an array
+        if (!Array.isArray(parsedArgs)) {
+          parsedArgs = [];
+        }
+        
+        // Ensure kwargs is an object
+        if (typeof parsedKwargs !== 'object' || parsedKwargs === null || Array.isArray(parsedKwargs)) {
+          parsedKwargs = {};
+        }
+        
+        // Special handling for search_read: ensure fields is an array if present
+        if (args.method === 'search_read' && parsedKwargs.fields) {
+          if (typeof parsedKwargs.fields === 'string') {
+            try {
+              parsedKwargs.fields = JSON.parse(parsedKwargs.fields);
+            } catch (e) {
+              // If it's a string like "field1,field2", split it
+              parsedKwargs.fields = parsedKwargs.fields.split(',').map(f => f.trim()).filter(f => f);
+            }
+          }
+          if (!Array.isArray(parsedKwargs.fields)) {
+            parsedKwargs.fields = [];
+          }
+        }
+        
+        console.log(`🔧 Parsed args:`, parsedArgs);
+        console.log(`🔧 Parsed kwargs:`, parsedKwargs);
+        
+        return await this.executeOdooMethod(args.model, args.method, parsedArgs, parsedKwargs);
+      }
+      
+      // For other tools, try MCP server JSON-RPC
+      const mcpRequest = {
+        jsonrpc: '2.0',
+        id: Date.now(),
+        method: `tools/call`,
+        params: {
+          name: toolName,
+          arguments: args
+        }
+      };
+      
+      const response = await fetch(`${this.mcpServerUrl}/jsonrpc`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(mcpRequest),
+        signal: AbortSignal.timeout(5000)
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        return data.result || data;
+      } else {
+        throw new Error(`MCP tool execution failed: ${response.statusText}`);
+      }
+    } catch (error) {
+      console.error(`❌ Failed to execute MCP tool ${toolName}:`, error);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+  
+  /**
+   * Execute an Odoo method directly via XML-RPC
+   * This is used by the execute_method MCP tool
+   */
+  async executeOdooMethod(model, method, args = [], kwargs = {}) {
+    try {
+      console.log(`🔧 Executing Odoo method: ${model}.${method}`, { args, kwargs });
+      
+      // Authenticate
+      const xmlrpcUrl = `${this.odooConfig.url}/xmlrpc/2/object`;
+      const authUrl = xmlrpcUrl.replace('/xmlrpc/2/object', '/xmlrpc/2/common');
+      
+      const authResponse = await fetch(authUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/xml' },
+        body: `<?xml version="1.0"?>
+<methodCall>
+  <methodName>authenticate</methodName>
+  <params>
+    <param><value><string>${this.odooConfig.db}</string></value></param>
+    <param><value><string>${this.odooConfig.username}</string></value></param>
+    <param><value><string>${this.odooConfig.apiKey}</string></value></param>
+    <param><value><struct></struct></value></param>
+  </params>
+</methodCall>`,
+        signal: AbortSignal.timeout(3000)
+      });
+      
+      if (!authResponse.ok) {
+        throw new Error(`Auth HTTP ${authResponse.status}: ${authResponse.statusText}`);
+      }
+      
+      const authXml = await authResponse.text();
+      const uidMatch = authXml.match(/<value><(?:i4|int)>(\d+)<\/(?:i4|int)><\/value>/);
+      if (!uidMatch) {
+        throw new Error('Failed to authenticate');
+      }
+      
+      const uid = parseInt(uidMatch[1]);
+      console.log(`✅ Authenticated with Odoo, UID: ${uid}`);
+      
+      // Build execute_kw XML request
+      // Format: execute_kw(db, uid, password, model, method, args, kwargs)
+      const argsXml = this.buildArgsXML(args);
+      const kwargsXml = this.buildKwargsXML(kwargs);
+      
+      const executeBody = `<?xml version="1.0"?>
+<methodCall>
+  <methodName>execute_kw</methodName>
+  <params>
+    <param><value><string>${this.odooConfig.db}</string></value></param>
+    <param><value><i4>${uid}</i4></value></param>
+    <param><value><string>${this.odooConfig.apiKey}</string></value></param>
+    <param><value><string>${model}</string></value></param>
+    <param><value><string>${method}</string></value></param>
+    <param><value><array><data>${argsXml}</data></array></value></param>
+    <param><value><struct>${kwargsXml}</struct></value></param>
+  </params>
+</methodCall>`;
+      
+      // Log XML for debugging
+      console.log(`📤 ${model}.${method} XML request length:`, executeBody.length);
+      if (method === 'search_read') {
+        console.log(`📤 ${model}.${method} args:`, JSON.stringify(args));
+        console.log(`📤 ${model}.${method} kwargs:`, JSON.stringify(kwargs));
+        console.log(`📤 ${model}.${method} kwargs XML:`, kwargsXml.substring(0, 500));
+      }
+      
+      const executeResponse = await fetch(xmlrpcUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/xml' },
+        body: executeBody,
+        signal: AbortSignal.timeout(5000)
+      });
+      
+      if (!executeResponse.ok) {
+        throw new Error(`Execute HTTP ${executeResponse.status}: ${executeResponse.statusText}`);
+      }
+      
+      const executeXml = await executeResponse.text();
+      
+      // Check for XML-RPC fault
+      if (executeXml.includes('<fault>')) {
+        // Log raw XML for debugging
+        console.error(`❌ Odoo XML-RPC fault response (first 1000 chars):`, executeXml.substring(0, 1000));
+        
+        // Try multiple patterns to extract fault string
+        let faultString = 'Unknown error';
+        
+        // Pattern 1: <faultString><string>...</string></faultString> (most common)
+        const faultMatch1 = executeXml.match(/<faultString>[\s\S]*?<string>([\s\S]*?)<\/string>[\s\S]*?<\/faultString>/);
+        if (faultMatch1 && faultMatch1[1]) {
+          faultString = faultMatch1[1].trim();
+          // Unescape XML entities
+          faultString = faultString.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/&quot;/g, '"');
+        } else {
+          // Pattern 2: Try to extract from <fault><value><struct><member><name>faultString</name>...
+          const faultMatch2 = executeXml.match(/<name>faultString<\/name>[\s\S]*?<value>[\s\S]*?<string>([\s\S]*?)<\/string>/);
+          if (faultMatch2 && faultMatch2[1]) {
+            faultString = faultMatch2[1].trim();
+            faultString = faultString.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/&quot;/g, '"');
+          } else {
+            // Pattern 3: Try to extract any text between fault tags
+            const faultMatch3 = executeXml.match(/<fault>[\s\S]*?<value>[\s\S]*?<string>([\s\S]*?)<\/string>[\s\S]*?<\/value>[\s\S]*?<\/fault>/);
+            if (faultMatch3 && faultMatch3[1]) {
+              faultString = faultMatch3[1].trim();
+              faultString = faultString.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/&quot;/g, '"');
+            }
+          }
+        }
+        
+        // Extract first few lines of error for readability
+        const faultLines = faultString.split('\n');
+        const shortFault = faultLines.length > 10 
+          ? faultLines.slice(0, 10).join('\n') + '\n... (truncated)'
+          : faultString;
+        
+        console.error(`❌ Odoo XML-RPC fault:`, shortFault);
+        console.error(`❌ Request was:`, { model, method, args, kwargs });
+        throw new Error(`Odoo error: ${shortFault}`);
+      }
+      
+      const result = this.parseXMLResponse(executeXml);
+      
+      console.log(`✅ Method ${model}.${method} executed successfully`);
+      
+      return {
+        success: true,
+        result: result,
+        model: model,
+        method: method
+      };
+    } catch (error) {
+      console.error('❌ Failed to execute Odoo method:', error);
+      return {
+        success: false,
+        error: error.message,
+        model: model,
+        method: method
+      };
+    }
+  }
+  
+  /**
+   * Build XML for positional arguments
+   */
+  buildArgsXML(args) {
+    if (!Array.isArray(args) || args.length === 0) {
+      return '';
+    }
+    
+    const serializeValue = (v) => {
+      if (Array.isArray(v)) {
+        return `<array><data>${v.map(item => `<value>${serializeValue(item)}</value>`).join('')}</data></array>`;
+      }
+      if (typeof v === 'number' && Number.isFinite(v)) {
+        return `<i4>${v}</i4>`;
+      }
+      if (typeof v === 'boolean') {
+        return `<boolean>${v ? 1 : 0}</boolean>`;
+      }
+      if (v === null || v === undefined) {
+        return `<nil/>`;
+      }
+      return `<string>${String(v)}</string>`;
+    };
+    
+    return args.map(arg => `<value>${serializeValue(arg)}</value>`).join('');
+  }
+  
+  /**
+   * Build XML for keyword arguments
+   */
+  buildKwargsXML(kwargs) {
+    if (!kwargs || typeof kwargs !== 'object' || Object.keys(kwargs).length === 0) {
+      return '';
+    }
+    
+    const serializeValue = (v) => {
+      if (Array.isArray(v)) {
+        // Handle arrays - each element should be serialized
+        const arrayItems = v.map(item => {
+          if (Array.isArray(item)) {
+            // Nested array (e.g., domain triplets)
+            return `<value><array><data>${item.map(subItem => `<value>${serializeValue(subItem)}</value>`).join('')}</data></array></value>`;
+          }
+          return `<value>${serializeValue(item)}</value>`;
+        });
+        return `<array><data>${arrayItems.join('')}</data></array>`;
+      }
+      if (typeof v === 'number' && Number.isFinite(v)) {
+        return `<i4>${v}</i4>`;
+      }
+      if (typeof v === 'boolean') {
+        return `<boolean>${v ? 1 : 0}</boolean>`;
+      }
+      if (v === null || v === undefined) {
+        return `<nil/>`;
+      }
+      if (typeof v === 'string') {
+        // Escape XML special characters
+        return `<string>${v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</string>`;
+      }
+      return `<string>${String(v)}</string>`;
+    };
+    
+    return Object.entries(kwargs).map(([key, value]) => {
+      return `<member>
+        <name>${key}</name>
+        <value>${serializeValue(value)}</value>
+      </member>`;
+    }).join('');
+  }
+  
+  /**
+   * Parse XML response to extract result
+   */
+  parseXMLResponse(xml) {
+    try {
+      // Simple parsing - extract value between <param> tags
+      const paramMatch = xml.match(/<param>[\s\S]*?<value>([\s\S]*?)<\/value>[\s\S]*?<\/param>/);
+      if (paramMatch) {
+        // For now, return raw XML - full parsing would handle all data types
+        return { raw: paramMatch[1] };
+      }
+      return { raw: xml };
+    } catch (error) {
+      console.warn('⚠️ Failed to parse XML response:', error);
+      return { raw: xml };
+    }
+  }
+  
+  /**
+   * Fetch MCP resources (models list, model info, etc.)
+   * Resources are accessed via URI: odoo://models, odoo://model/{name}, odoo://record/{model}/{id}, odoo://search/{model}/{domain}
+   */
+  async fetchMCPResource(uri) {
+    try {
+      console.log(`🔍 Fetching MCP resource: ${uri}`);
+      
+      // Try JSON-RPC method first
+      const mcpRequest = {
+        jsonrpc: '2.0',
+        id: Date.now(),
+        method: 'resources/read',
+        params: {
+          uri: uri
+        }
+      };
+      
+      try {
+        const response = await fetch(`${this.mcpServerUrl}/jsonrpc`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(mcpRequest),
+          signal: AbortSignal.timeout(3000)
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data.result) {
+            console.log(`✅ Fetched MCP resource: ${uri}`);
+            return data.result;
+          }
+        }
+      } catch (httpError) {
+        console.log(`⚠️ HTTP fetch failed for ${uri}, trying direct Odoo access as fallback:`, httpError.message);
+      }
+      
+      // Fallback: If URI is odoo://models, try to use execute_method to fetch from ir.model
+      if (uri === 'odoo://models' && this.odooConfig) {
+        console.log('📋 Fetching models via Odoo XML-RPC as fallback');
+        try {
+          const modelsResult = await this.executeOdooMethod('ir.model', 'search_read', [
+            [['model', 'like', 'account.']]  // Start with accounting models
+          ], {
+            fields: ['model', 'name'],
+            limit: 100
+          });
+          
+          if (modelsResult.success && modelsResult.result) {
+            // Return in MCP format
+            return modelsResult.result;
+          }
+        } catch (fallbackError) {
+          console.warn('⚠️ Fallback model fetch failed:', fallbackError.message);
+        }
+      }
+      
+      return null;
+    } catch (error) {
+      console.warn(`⚠️ Failed to fetch MCP resource ${uri}:`, error.message);
+      return null;
     }
   }
 
@@ -252,6 +833,9 @@ export class OdooAiAgent {
         data: queryResult.records || [],
         records: queryResult.records || [], // Use records from consistent service
         llmAnalysis: analysisResult.analysis,
+        status: analysisResult.status || 'unknown', // Include LLM-determined status
+        summary: analysisResult.summary || '', // Include LLM summary if available
+        recordEvaluations: analysisResult.recordEvaluations || [], // Per-record evaluations
         tokensUsed: analysisResult.tokensUsed || 0,
         duration: totalDuration, // Use actual measured duration
         timestamp: new Date()
@@ -302,11 +886,9 @@ export class OdooAiAgent {
   "order": "id asc"
 }
 
-## Critical Rules:
-- Domain must be array of triplets ONLY: [field, operator, value]
-- NO OR operators ("|") - use simple AND filters only
-
-Return ONLY the JSON object, no other text.`;
+## Rules:
+- Domain must be array of triplets: [field, operator, value]
+- Return ONLY the JSON object, no other text.`;
 
     const userMessage = `Generate an Odoo query based on this check description: ${description}`;
 
@@ -333,6 +915,7 @@ Return ONLY the JSON object, no other text.`;
         userMessage,
         paramsPreview,
         modelsSnapshot,
+        mcpToolsCount: this.mcpTools.length,
         odooDb: this.odooConfig?.db || null,
         odooUrl: this.odooConfig?.url || null,
       });
@@ -341,28 +924,120 @@ Return ONLY the JSON object, no other text.`;
       console.log('🧪 LLM INPUT DIAGNOSTICS:');
       console.log('   Models count:', modelsSnapshot.length);
       console.log('   Models head:', modelsSnapshot.head.slice(0, 3).join(', '));
+      console.log('   MCP tools available:', this.mcpTools.length);
+      console.log('   MCP tools:', this.mcpTools.map(t => t.function.name).join(', '));
       console.log('   Odoo target:', `${this.odooConfig?.url} / ${this.odooConfig?.db}`);
       console.log('   LLM input hash:', payloadHash);
     } catch (diagErr) {
       console.warn('⚠️ Failed to emit LLM diagnostics:', diagErr?.message || diagErr);
     }
 
-    const makeRequest = async (sysPrompt, usrMsg) => {
-      const response = await this.openai.chat.completions.create({
+    const makeRequest = async (sysPrompt, usrMsg, tools = [], conversation = []) => {
+      const messages = [
+        { role: "system", content: sysPrompt },
+        ...conversation,
+        { role: "user", content: usrMsg }
+      ];
+      
+      const requestConfig = {
         model: "gpt-4o",
-        messages: [
-          { role: "system", content: sysPrompt },
-          { role: "user", content: usrMsg }
-        ],
+        messages: messages,
         temperature: 0,
         top_p: 1,
-        max_tokens: 1000,
-        response_format: { type: "json_object" }
-      });
-      return response.choices[0].message.content.trim();
+        max_tokens: 2000  // Increased for tool calls
+      };
+      
+      // Add tools if available
+      if (tools.length > 0) {
+        requestConfig.tools = tools;
+        requestConfig.tool_choice = "auto"; // Let LLM choose to use tools or not
+        console.log(`🔧 Passing ${tools.length} MCP tools to LLM:`, tools.map(t => t.function.name));
+      } else {
+        // If no tools, force JSON format
+        requestConfig.response_format = { type: "json_object" };
+      }
+      
+      const response = await this.openai.chat.completions.create(requestConfig);
+      const message = response.choices[0].message;
+      
+      // Handle tool calls if LLM used them
+      if (message.tool_calls && message.tool_calls.length > 0) {
+        console.log(`🔧 LLM used ${message.tool_calls.length} MCP tools:`, message.tool_calls.map(tc => tc.function.name));
+        
+        // Execute tool calls and add results to conversation
+        const toolResults = [];
+        for (const toolCall of message.tool_calls) {
+          try {
+            const args = JSON.parse(toolCall.function.arguments);
+            const result = await this.executeMCPTool(toolCall.function.name, args);
+            
+            toolResults.push({
+              role: "tool",
+              tool_call_id: toolCall.id,
+              name: toolCall.function.name,
+              content: JSON.stringify(result)
+            });
+            
+            console.log(`✅ Tool ${toolCall.function.name} result:`, result);
+          } catch (toolError) {
+            console.error(`❌ Tool ${toolCall.function.name} failed:`, toolError);
+            toolResults.push({
+              role: "tool",
+              tool_call_id: toolCall.id,
+              name: toolCall.function.name,
+              content: JSON.stringify({ success: false, error: toolError.message })
+            });
+          }
+        }
+        
+        // Make another request with tool results
+        const followUpMessages = [
+          ...messages,
+          { ...message, content: null }, // Clear content, keep tool_calls
+          ...toolResults
+        ];
+        
+        // Second request to get final query after tool results
+        // IMPORTANT: Don't spread requestConfig - it contains tools which conflicts with response_format
+        const followUpConfig = {
+          model: "gpt-4o",
+          messages: followUpMessages,
+          temperature: 0,
+          top_p: 1,
+          max_tokens: 2000,
+          response_format: { type: "json_object" } // Force JSON for final query - this requires tools to be absent
+          // Explicitly NOT including tools or tool_choice - they conflict with response_format
+        };
+        
+        console.log(`🔧 Making follow-up request with ${followUpMessages.length} messages`);
+        console.log(`🔧 Tool results count: ${toolResults.length}`);
+        
+        const followUpResponse = await this.openai.chat.completions.create(followUpConfig);
+        const followUpMessage = followUpResponse.choices[0].message;
+        const followUpContent = followUpMessage.content;
+        
+        if (!followUpContent) {
+          console.error(`❌ Follow-up response:`, {
+            hasContent: !!followUpContent,
+            hasToolCalls: !!followUpMessage.tool_calls,
+            message: followUpMessage
+          });
+          throw new Error('LLM returned null content after tool calls');
+        }
+        
+        console.log(`✅ Follow-up response received, length: ${followUpContent.length}`);
+        return followUpContent.trim();
+      }
+      
+      // No tools used, return direct content
+      if (!message.content) {
+        throw new Error('LLM returned null content');
+      }
+      return message.content.trim();
     };
 
-    let content = await makeRequest(systemPrompt, userMessage);
+    // Make request with MCP tools
+    let content = await makeRequest(systemPrompt, userMessage, this.mcpTools, []);
 
     try {
       // Remove markdown code blocks if present
@@ -567,7 +1242,8 @@ Return ONLY the JSON object, no other text.`;
     try {
       // Build domain XML exactly as test-production-flow.js does
       const domainXml = this.buildDomainXML(queryPlan.domain || []);
-      const limitValue = 50; // Match test-production-flow.js exactly
+      // Use limit from query plan, or default to 50, but respect the plan's limit (up to 1000)
+      const limitValue = Math.min(queryPlan.limit || 50, 1000); // Use query plan limit, cap at 1000
       
       // Log domain details for comparison with test
       console.log('🔍 DOMAIN COMPARISON:');
@@ -1029,52 +1705,78 @@ Return ONLY the JSON object, no other text.`;
       const count = Number(queryResult?.count || 0);
       const records = queryResult?.records || [];
       
-      // Create a detailed analysis of the results
-      const analysisData = {
-        checkTitle: title,
-        checkDescription: description,
-        queryModel: queryResult.model,
-        recordCount: count,
-        records: records.slice(0, 5), // Show first 5 records for context
-        acceptanceCriteria: acceptanceCriteria || 'No acceptance criteria defined'
-      };
+      // Extract record IDs explicitly for LLM to reference
+      const recordIds = records.map(r => r.id).filter(id => id != null);
+      console.log('📋 Record IDs to evaluate:', recordIds);
 
-      const systemPrompt = `You are an expert bookkeeping analyst. Your task is to analyze check results and determine the status based on the acceptance criteria.
+      const systemPrompt = `You are an expert bookkeeping analyst.
 
-## Your Task:
-1. Analyze the check results and acceptance criteria
-2. Compare the analysis with the acceptance criteria
-3. Use the 'conclude' tool to provide your final assessment
+Task:
+1) Read ONLY the acceptance criteria and the results (records found)
+2) Evaluate EACH record individually: Does this specific record meet the acceptance criteria?
+3) Determine overall status based on record evaluations:
+   - If ALL records meet criteria → status: "passed"
+   - If ANY record fails criteria → status: "failed"
+   - If cannot determine → status: "unknown"
+4) Write a brief, direct analysis (2-5 sentences) stating your conclusion clearly
+5) Call the 'conclude' tool with:
+   - Overall status (passed/failed/unknown/warning/open)
+   - recordEvaluations: MUST include exactly one evaluation for EACH record ID listed below
 
-## Status Determination Rules:
-- **passed**: The analysis confirms the acceptance criteria (e.g., "9 records found" matches "There are 9 records found")
-- **failed**: The analysis contradicts the acceptance criteria (e.g., found 5 but expected 9)
-- **unknown**: The analysis is inconclusive or insufficient data
-- **warning**: The analysis partially meets criteria but has concerns
+CRITICAL LOGIC:
+- Records are provided for you to EVALUATE, not to determine if they should exist
+- Finding records does NOT mean failure - you must evaluate if those records meet the criteria
+- If acceptance criteria says "no invoices should deviate >40%" and all invoices are within 40% → status: "passed"
+- If acceptance criteria says "0 records" and 0 records found → status: "passed"
+- If acceptance criteria says "0 records" and records found → status: "failed"
+- Evaluate EACH record: Does this record satisfy the acceptance criteria?
+- Do NOT add "however" statements, contradictions, or hedge when the analysis is clear
+- Be direct: If all records meet criteria, state "passed" confidently
 
-## Important:
-- You MUST use the 'conclude' tool to provide your final answer
-- Compare the actual results with the acceptance criteria
-- Be precise in your status determination
+CRITICAL REQUIREMENTS:
+- You MUST provide a recordEvaluation for EVERY record ID listed
+- The recordId in each evaluation MUST match one of the record IDs from the records array
+- If overall status is "passed", ALL individual record statuses should be "passed"
+- If overall status is "failed", at least one record status should be "failed"
+- Evaluate ONLY based on the acceptance criteria - ignore any check description implications
 
-## Conclude Tool Usage:
-When using the conclude tool, you MUST determine the status based on the analysis:
-- **passed**: The check meets all acceptance criteria
-- **failed**: The check does not meet the acceptance criteria or critical issues were found
-- **unknown**: The analysis is inconclusive or insufficient data was available
-- **warning**: The check partially meets criteria but has concerns or minor issues
+Statuses:
+- passed: The acceptance criteria IS met by the data/record
+- failed: The acceptance criteria is NOT met by the data/record
+- unknown: Cannot determine if criteria is met
+- warning: Criteria is partially met with concerns
+- open: Error occurred
+`;
 
-The status will automatically update the check's visual indicator:
-- passed = blue checkmark
-- failed = red cross  
-- unknown = yellow question mark (orange)
-- warning = orange warning icon
-- open = blue open box (unchecked default)`;
+      const userMessage = `Acceptance criteria: ${acceptanceCriteria || 'No acceptance criteria defined'}
 
-      const userMessage = `Check Analysis Data:
-${JSON.stringify(analysisData, null, 2)}
+Results: ${count} records found
+${JSON.stringify(records, null, 2)}
 
-Please analyze these results and use the 'conclude' tool to determine the status based on the acceptance criteria.`;
+Record IDs that MUST be evaluated: ${recordIds.length > 0 ? JSON.stringify(recordIds) : 'No records found'}
+
+EVALUATION PROCESS:
+1. For EACH record above, determine: Does this specific record meet the acceptance criteria?
+2. If all records meet criteria → overall status: "passed"
+3. If any record fails criteria → overall status: "failed"
+
+IMPORTANT:
+- The records above are provided for evaluation - they exist and should be checked
+- Do NOT treat the presence of records as a failure - evaluate if each record meets the criteria
+- Do NOT add contradictions or "however" statements - be direct and clear
+- Example: If criteria says "deviations >40% are not allowed" and all records are within 40% → status: "passed"
+
+CRITICAL: You MUST evaluate EVERY record and include a recordEvaluation for EACH record ID listed above.
+
+Example recordEvaluations format:
+[
+  {"recordId": ${recordIds[0] || 'ID1'}, "status": "passed", "reason": "Record meets criteria because..."},
+  {"recordId": ${recordIds[1] || 'ID2'}, "status": "passed", "reason": "Record meets criteria because..."}
+]
+
+After evaluating each record, determine overall status based on the record evaluations:
+- Overall status: "passed" if ALL records meet criteria, "failed" if ANY record fails
+- recordEvaluations array with EXACTLY ${recordIds.length} entries (one for each record ID: ${recordIds.join(', ')})`;
 
       // Define tools inline for analysis
       const tools = [
@@ -1082,25 +1784,48 @@ Please analyze these results and use the 'conclude' tool to determine the status
           type: "function",
           function: {
             name: "conclude",
-            description: "Conclude the analysis with a final status determination",
+            description: "Classify the analysis outcome.",
             parameters: {
               type: "object",
               properties: {
                 status: {
                   type: "string",
-                  enum: ["passed", "failed", "unknown", "warning"],
-                  description: "The final status of the check"
+                  enum: ["passed", "failed", "unknown", "warning", "open"],
+                  description: "Final status: passed (supports acceptance criteria), failed (contradicts), unknown (insufficient), warning (partial/concerns), open (error)."
                 },
                 reasoning: {
                   type: "string",
-                  description: "Detailed reasoning for the status determination"
+                  description: "Short reasoning (2-5 sentences) explaining the decision."
                 },
                 summary: {
-                  type: "string", 
-                  description: "Brief summary of the analysis"
+                  type: "string",
+                  description: "One-line summary."
+                },
+                recordEvaluations: {
+                  type: "array",
+                  description: "REQUIRED: Evaluation for EVERY record found. Must include exactly one entry per record ID from the results. Array of objects with: {recordId: number, status: string, reason: string}. Status: passed/failed/warning/unknown. Each recordId MUST match an ID from the records array.",
+                  items: {
+                    type: "object",
+                    properties: {
+                      recordId: {
+                        type: "number",
+                        description: "REQUIRED: The exact ID of the record being evaluated (must match an ID from the records array)"
+                      },
+                      status: {
+                        type: "string",
+                        enum: ["passed", "failed", "warning", "unknown"],
+                        description: "REQUIRED: Does this specific record meet the acceptance criteria? Use 'passed' if it meets criteria, 'failed' if it doesn't."
+                      },
+                      reason: {
+                        type: "string",
+                        description: "REQUIRED: Brief reason (1-2 sentences) why this specific record passes/fails the acceptance criteria"
+                      }
+                    },
+                    required: ["recordId", "status", "reason"]
+                  }
                 }
               },
-              required: ["status", "reasoning", "summary"]
+              required: ["status", "reasoning", "summary", "recordEvaluations"]
             }
           }
         }
@@ -1127,11 +1852,48 @@ Please analyze these results and use the 'conclude' tool to determine the status
           const args = JSON.parse(toolCall.function.arguments);
           console.log('🎯 Agent conclude tool result:', args);
           
+          // Validate and log recordEvaluations
+          const providedEvaluations = args.recordEvaluations || [];
+          console.log('📋 LLM provided recordEvaluations:', providedEvaluations.length, 'entries');
+          console.log('📋 Expected record IDs:', recordIds);
+          console.log('📋 LLM provided record IDs:', providedEvaluations.map(e => e.recordId));
+          
+          // Check if all record IDs have evaluations
+          const evaluatedIds = providedEvaluations.map(e => Number(e.recordId));
+          const missingIds = recordIds.filter(id => !evaluatedIds.includes(Number(id)));
+          
+          if (missingIds.length > 0) {
+            console.log('⚠️ Missing recordEvaluations for IDs:', missingIds);
+            console.log('⚠️ Adding default evaluations for missing records');
+            
+            // Add default evaluations for missing records
+            // If overall status is "passed", default missing records to "passed"
+            // If overall status is "failed", default to match overall status logic
+            const defaultStatus = args.status === 'passed' ? 'passed' : 'unknown';
+            missingIds.forEach(missingId => {
+              providedEvaluations.push({
+                recordId: Number(missingId),
+                status: defaultStatus,
+                reason: `No evaluation provided by LLM. Overall status: ${args.status}.`
+              });
+            });
+          }
+          
+          // Normalize all recordIds to numbers for consistency
+          const normalizedEvaluations = providedEvaluations.map(e => ({
+            ...e,
+            recordId: Number(e.recordId)
+          }));
+          
+          console.log('✅ Final recordEvaluations:', normalizedEvaluations.length, 'entries');
+          console.log('✅ Final recordEvaluations:', JSON.stringify(normalizedEvaluations, null, 2));
+          
           return {
             success: true,
             analysis: args.reasoning,
             status: args.status,
             summary: args.summary,
+            recordEvaluations: normalizedEvaluations, // Normalized per-record status evaluations
             tokensUsed: response.usage?.total_tokens || 0
           };
         }

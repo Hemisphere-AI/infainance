@@ -45,7 +45,6 @@ const CheckResult = ({
   const [odooConfig, setOdooConfig] = useState(null);
   const [checkResultsHistory, setCheckResultsHistory] = useState({});
   const [selectedResultVersion, setSelectedResultVersion] = useState({});
-  const [showAllRecords, setShowAllRecords] = useState({});
 
   // Auto-expand the current check when it changes
   useEffect(() => {
@@ -346,8 +345,9 @@ const CheckResult = ({
           duration: data.duration || 0,
           tokensUsed: data.tokensUsed || 0,
           llmAnalysis: data.llmAnalysis || `Found ${data.count || 0} records matching the check criteria.`,
-          records: data.data || [],
+          records: data.records || data.data || [], // Use records field, fallback to data
           queryPlan: data.query,
+          recordEvaluations: data.recordEvaluations || [], // Per-record status evaluations
           steps: [
             { step: 'connect', status: 'completed' },
             { step: 'query', status: 'completed' },
@@ -359,8 +359,10 @@ const CheckResult = ({
       }));
       
 
-      // Update check status based on results (map to expected values)
-      const checkStatus = data.count > 0 ? 'failed' : 'passed';
+      // Update check status using LLM-determined status (not hardcoded count-based logic)
+      // The LLM analyzes acceptance criteria and determines if it's met
+      const checkStatus = data.status || 'unknown'; // Use LLM status, fallback to 'unknown'
+      console.log('🎯 Frontend: Using LLM-determined status:', checkStatus, 'from data.status:', data.status, 'recordEvaluations:', data.recordEvaluations?.length || 0);
       try {
         const { createClient } = await import('@supabase/supabase-js');
         const supabase = createClient(
@@ -473,12 +475,6 @@ const CheckResult = ({
     });
   };
 
-  const toggleShowAllRecords = (checkId) => {
-    setShowAllRecords(prev => ({
-      ...prev,
-      [checkId]: !prev[checkId]
-    }));
-  };
 
   // Convert milliseconds to hh:mm:ss format
   const formatDuration = (ms) => {
@@ -546,6 +542,12 @@ const CheckResult = ({
     if (selectedVersionId && history.length > 0) {
       const selectedResult = history.find(r => r.id === selectedVersionId);
       if (selectedResult) {
+        // Extract recordEvaluations from result_data if stored there
+        const recordEvaluations = selectedResult.record_evaluations || 
+                                  (selectedResult.result_data?.recordEvaluations) ||
+                                  (typeof selectedResult.llm_analysis === 'object' && selectedResult.llm_analysis?.recordEvaluations) ||
+                                  [];
+        
         return {
           success: selectedResult.success,
           count: selectedResult.record_count,
@@ -554,6 +556,7 @@ const CheckResult = ({
           llmAnalysis: selectedResult.llm_analysis,
           records: selectedResult.records || [],
           queryPlan: selectedResult.query_plan,
+          recordEvaluations: recordEvaluations, // Include per-record evaluations
           steps: selectedResult.execution_steps,
           executedAt: new Date(selectedResult.executed_at)
         };
@@ -563,6 +566,12 @@ const CheckResult = ({
     // Fallback: latest from history if available
     if (history.length > 0) {
       const latest = history[0];
+      // Extract recordEvaluations from result_data if stored there
+      const recordEvaluations = latest.record_evaluations || 
+                                (latest.result_data?.recordEvaluations) ||
+                                (typeof latest.llm_analysis === 'object' && latest.llm_analysis?.recordEvaluations) ||
+                                [];
+      
       return {
         success: latest.success,
         count: latest.record_count,
@@ -571,6 +580,7 @@ const CheckResult = ({
         llmAnalysis: latest.llm_analysis,
         records: latest.records || [],
         queryPlan: latest.query_plan,
+        recordEvaluations: recordEvaluations, // Include per-record evaluations
         steps: latest.execution_steps,
         executedAt: new Date(latest.executed_at)
       };
@@ -827,27 +837,33 @@ const CheckResult = ({
               </div>
             )}
 
-            {/* Records */}
+            {/* Records - Always show when result exists, show ALL records by default */}
             {result && (
               <div className="p-4">
                 <h4 className="font-medium text-gray-900 mb-3 flex items-center space-x-2">
                   <Database className="w-4 h-4" />
-                  <span>Records ({result.records?.length || 0})</span>
+                  <span>Records Found ({result.records?.length || 0})</span>
                 </h4>
                 {result.records && result.records.length > 0 ? (
                 <div className="space-y-2">
                   {(() => {
-                    const showAll = showAllRecords[currentCheck.id];
-                    const recordsToShow = showAll ? result.records : result.records.slice(0, 5);
+                    // Always show ALL records found by AI Query Plan - no limit
+                    const recordsToShow = result.records;
+                    console.log('📋 Displaying records:', recordsToShow.length, 'total records');
                     return recordsToShow.map((record, index) => {
                     const recordId = `${currentCheck.id}-${record.id || index}`;
                     const isRecordExpanded = expandedRecords.has(recordId);
+                    
+                    // Find evaluation for this record
+                    const evaluation = (result.recordEvaluations || []).find(e => e.recordId === record.id);
+                    const recordStatus = evaluation?.status || 'unknown';
+                    const recordStatusReason = evaluation?.reason || 'No evaluation available';
 
                     return (
-                      <div key={recordId} className="border rounded-lg">
+                      <div key={recordId} className={`border rounded-lg ${recordStatus === 'failed' ? 'border-red-200 bg-red-50' : recordStatus === 'passed' ? 'border-green-200 bg-green-50' : recordStatus === 'warning' ? 'border-orange-200 bg-orange-50' : ''}`}>
                         <div className="p-3">
                           <div className="flex items-center justify-between">
-                            <div className="flex items-center space-x-3">
+                            <div className="flex items-center space-x-3 flex-1">
                               <button
                                 onClick={() => toggleRecordExpansion(recordId)}
                                 className="p-1 hover:bg-gray-200 rounded"
@@ -858,13 +874,18 @@ const CheckResult = ({
                                   <ChevronRight className="w-4 h-4" />
                                 )}
                               </button>
-                            <div>
-                              <div className="font-medium text-sm">
-                                {record.name || 
-                                 (record.ref && record.ref !== false ? record.ref : 
-                                  record.partner_id && Array.isArray(record.partner_id) ? record.partner_id[1] :
-                                  `Record ${index + 1}`)}
+                              {/* Record Status Icon */}
+                              <div className="flex-shrink-0" title={recordStatusReason}>
+                                {getStatusIcon(recordStatus, 'w-5 h-5')}
                               </div>
+                            <div className="flex-1">
+                            <div className="font-medium text-sm">
+                              {record.move_id_name || 
+                               record.name || 
+                               (record.ref && record.ref !== false ? record.ref : 
+                                record.partner_id && Array.isArray(record.partner_id) ? record.partner_id[1] :
+                                `Record ${index + 1}`)}
+                            </div>
                               <div className="text-xs text-gray-500">
                                 ID: {record.id}
                                 {(() => {
@@ -907,6 +928,21 @@ const CheckResult = ({
                           {/* Record Details */}
                           {isRecordExpanded && (
                             <div className="mt-3 pt-3 border-t">
+                              {/* Evaluation Status and Reason */}
+                              {evaluation && (
+                                <div className="mb-3 p-2 bg-gray-50 rounded">
+                                  <div className="flex items-center space-x-2 mb-1">
+                                    {getStatusIcon(recordStatus, 'w-4 h-4')}
+                                    <span className="text-sm font-medium">
+                                      Status: {recordStatus}
+                                    </span>
+                                  </div>
+                                  <div className="text-xs text-gray-600">
+                                    {recordStatusReason}
+                                  </div>
+                                </div>
+                              )}
+                              {/* Record Fields */}
                               <div className="grid grid-cols-2 gap-2 text-sm">
                                 {Object.entries(record).map(([key, value]) => (
                                   <div key={key} className="flex">
@@ -925,26 +961,6 @@ const CheckResult = ({
                       </div>
                     );
                   })})()}
-                  {result.records.length > 5 && !showAllRecords[currentCheck.id] && (
-                    <div className="text-center py-2">
-                      <button
-                        onClick={() => toggleShowAllRecords(currentCheck.id)}
-                        className="text-blue-600 hover:text-blue-800 text-sm font-medium underline"
-                      >
-                        ... and {result.records.length - 5} more records (click to show all)
-                      </button>
-                    </div>
-                  )}
-                  {result.records.length > 5 && showAllRecords[currentCheck.id] && (
-                    <div className="text-center py-2">
-                      <button
-                        onClick={() => toggleShowAllRecords(currentCheck.id)}
-                        className="text-blue-600 hover:text-blue-800 text-sm font-medium underline"
-                      >
-                        Show less (first 5 records)
-                      </button>
-                    </div>
-                  )}
                 </div>
                 ) : (
                   <div className="text-center text-gray-500 py-4">
