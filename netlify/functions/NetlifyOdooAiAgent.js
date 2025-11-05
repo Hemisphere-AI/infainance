@@ -8,18 +8,20 @@ const supabase = createClient(
 
 // OpenAI is initialized in OdooAiAgent class
 
-// Import core Odoo AI Agent
+/**
+ * Netlify Function Handler for Odoo AI Agent
+ * 
+ * This file only contains Netlify-specific code:
+ * - HTTP handler (CORS, request/response)
+ * - Supabase integration fetching
+ * - Database saving
+ * 
+ * All business logic is in src/services/OdooAiAgent.js (works for both local and Netlify)
+ * When you add fields to OdooAiAgent.executeCheck(), they're automatically saved to result_data
+ */
 import { OdooAiAgent as CoreOdooAiAgent } from '../../src/services/OdooAiAgent.js';
 
-// Netlify Odoo AI Agent Wrapper - Uses core implementation
-class NetlifyOdooAiAgent extends CoreOdooAiAgent {
-  constructor() {
-    super();
-  }
-
-  // All methods are inherited from CoreOdooAiAgent
-  // This class serves as a Netlify-specific wrapper
-}
+// No wrapper needed - use core class directly
 
 export const handler = async (event, context) => {
   const headers = {
@@ -135,8 +137,8 @@ export const handler = async (event, context) => {
       }
     }
 
-    // Initialize Netlify Odoo AI Agent with core implementation
-    const agent = new NetlifyOdooAiAgent();
+    // Initialize Odoo AI Agent (core implementation works for both local and Netlify)
+    const agent = new CoreOdooAiAgent();
     const initialized = await agent.initialize(odooConfig);
 
     if (!initialized) {
@@ -154,12 +156,13 @@ export const handler = async (event, context) => {
     const result = await agent.executeCheck(checkDescription, checkTitle, acceptanceCriteria);
 
     // Save results to database if checkId is provided
+    // Uses resultData prepared by OdooAiAgent (works for both local and Netlify)
     if (checkId && result.success) {
       try {
         const resultData = {
           check_id: checkId,
-          status: result.status || 'unknown',
           executed_at: new Date().toISOString(),
+          status: result.status || 'unknown',
           duration: result.duration || 0,
           success: result.success,
           query_plan: result.queryPlan || null,
@@ -168,7 +171,9 @@ export const handler = async (event, context) => {
           llm_analysis: result.llmAnalysis || null,
           tokens_used: result.tokensUsed || null,
           execution_steps: result.steps || null,
-          error_message: result.error || null
+          error_message: result.error || null,
+          // Use resultData prepared by OdooAiAgent (automatically includes all new fields)
+          result_data: result.resultData || null
         };
 
         const { error: insertError } = await supabase

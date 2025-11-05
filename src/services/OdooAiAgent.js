@@ -825,6 +825,7 @@ export class OdooAiAgent {
       const totalDuration = Date.now() - startTime;
 
       // Return result with proper LLM analysis
+      // Fields are organized for both local and production use
       const result = {
         success: true,
         query: queryPlan,
@@ -840,6 +841,9 @@ export class OdooAiAgent {
         duration: totalDuration, // Use actual measured duration
         timestamp: new Date()
       };
+      
+      // Prepare result data for database storage (used by both local and Netlify)
+      result.resultData = this.prepareResultData(result);
       
       console.log('✅ ODOO STEP 5: Final result:', {
         success: result.success,
@@ -1629,6 +1633,28 @@ export class OdooAiAgent {
    */
   async searchOdooRecords(client, uid, queryPlan) {
     return this.searchOdooRecordsWithTimeout(client, uid, queryPlan);
+  }
+
+  /**
+   * Prepare result data for database storage
+   * Extracts fields that should be saved in result_data JSONB field
+   * Used by both local backend and Netlify functions
+   */
+  prepareResultData(result) {
+    // Fields saved as separate database columns (excluded from result_data)
+    const excludedFields = new Set([
+      'success', 'status', 'duration', 'queryPlan', 'query', 'count', 
+      'records', 'data', 'llmAnalysis', 'tokensUsed', 'steps', 'error', 'timestamp', 'resultData'
+    ]);
+    
+    const resultData = {};
+    for (const [key, value] of Object.entries(result)) {
+      if (!excludedFields.has(key) && value !== null && value !== undefined) {
+        resultData[key] = value;
+      }
+    }
+    
+    return Object.keys(resultData).length > 0 ? resultData : null;
   }
 
   /**
